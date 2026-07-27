@@ -1,12 +1,11 @@
 # Hailuo Telegram Bot
 
 Bot Telegram (Telegraf) được add làm admin của 1 group cố định
-(`GROUP_CHAT_ID`). Admin nhắn riêng (DM) cho bot, gõ `/start` để hiện menu
-với nút **📝 Prompt**. Bấm nút → bot hỏi nội dung prompt → gõ prompt → bot tự
-động điền vào hailuoai.video, bấm generate, chờ video tạo xong, tải về và
-đăng vào group. Nếu có lỗi ở bất kỳ bước nào, bot gửi `404` vào group. Toàn
-bộ tương tác (menu, nhập prompt) chỉ diễn ra qua DM — bot **không đọc/xử lý
-tin nhắn trong group**.
+(`GROUP_CHAT_ID`). Trong group, gõ `/start` để hiện menu với nút
+**📝 Prompt**. Bấm nút → bot hỏi nội dung prompt ngay trong group → gõ
+prompt → bot tự động điền vào hailuoai.video, bấm generate, chờ video tạo
+xong, tải về và đăng vào group. Nếu có lỗi ở bất kỳ bước nào, bot gửi `404`
+vào group.
 
 ## Kiến trúc
 
@@ -44,9 +43,12 @@ cp .env.example .env
    nhất quyền **Send Messages**. Việc gửi video/kết quả vào group không bắt
    buộc phải là admin, nhưng theo yêu cầu ban đầu, thêm làm admin để có thể
    mở rộng quyền (pin, xoá tin...) sau này.
-3. Không cần tắt Privacy Mode — bot không đọc tin nhắn trong group, chỉ gửi
-   video/`404` vào đó. Toàn bộ menu và nội dung prompt xử lý qua DM riêng
-   với bot.
+3. **Tắt Privacy Mode của bot** qua BotFather (`/setprivacy` → chọn bot →
+   Disable). Bắt buộc, vì nội dung prompt được gõ trực tiếp trong group —
+   nếu không tắt, Telegram sẽ giấu các tin nhắn thường (không phải lệnh
+   `/...`) khỏi bot, prompt sẽ không nhận được. Đổi Privacy Mode chỉ có
+   hiệu lực với những group thêm bot vào SAU khi đổi — nếu bot đã ở trong
+   group từ trước, hãy kick rồi add lại bot.
 
 ## Đăng nhập hailuoai.video (1 lần)
 
@@ -81,9 +83,9 @@ npm run dev     # chạy trực tiếp bằng tsx, tự reload khi sửa code
 npm run build && npm run start
 ```
 
-Nhắn riêng (DM) cho bot, gõ `/start` để hiện menu với nút **📝 Prompt**. Bấm
-nút → bot hỏi nội dung prompt → gõ prompt. Video (hoặc `404` nếu lỗi) sẽ
-được đăng vào group đã cấu hình ở `GROUP_CHAT_ID`.
+Trong group đã cấu hình ở `GROUP_CHAT_ID`, gõ `/start` để hiện menu với nút
+**📝 Prompt**. Bấm nút → bot hỏi nội dung prompt → gõ prompt ngay trong
+group. Video (hoặc `404` nếu lỗi) sẽ được đăng lại vào group đó.
 
 ## Khi automation lỗi / cần chỉnh selector
 
