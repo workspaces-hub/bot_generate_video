@@ -61,12 +61,7 @@ export function registerHandlers(bot: Telegraf): void {
       resolution,
       model,
     } = parsePromptMessage(ctx.message.text);
-    console.log(
-      "🚀 ~ registerHandlers ~ prompt, resolution, model:",
-      prompt,
-      resolution,
-      model,
-    );
+    
     if (!prompt) {
       await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
       return;
@@ -75,15 +70,15 @@ export function registerHandlers(bot: Telegraf): void {
     const groupChatId = ctx.chat.id;
     const promptMessageId = ctx.message.message_id;
 
-    const optionLines = [
-      resolution ? `Resolution: ${resolution}` : null,
-      model ? `Model: ${model}` : null,
-    ].filter(Boolean);
-    const optionsSuffix =
-      optionLines.length > 0 ? `\n${optionLines.join("\n")}` : "";
+    // const optionLines = [
+    //   resolution ? `Resolution: ${resolution}` : null,
+    //   model ? `Model: ${model}` : null,
+    // ].filter(Boolean);
+    // const optionsSuffix =
+    //   optionLines.length > 0 ? `\n${optionLines.join("\n")}` : "";
 
     const statusMessage = await ctx.reply(
-      `⏳ Đang tạo video cho prompt:\n"${prompt}"${optionsSuffix}`,
+      `⏳ Đang tạo video cho prompt:\n"${prompt}"`,
       {
         reply_parameters: { message_id: promptMessageId },
       },

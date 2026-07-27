@@ -48,7 +48,7 @@ export async function generateVideo(
     //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
     // }
 
-    await captureSnapshot(page, jobId, "before-generate-click");
+    // await captureSnapshot(page, jobId, "before-generate-click");
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác video
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).

@@ -8,7 +8,8 @@
       "Bash(grep -n \"danh sách \\\\`\\\\*Candidates\\\\`\" /Users/linhnt/workspaces/bot/generate_video/README.md)",
       "Bash(grep -n \"Định dạng: \\\\`http\" /Users/linhnt/workspaces/bot/generate_video/README.md)",
       "Bash(timeout 30 npx tsx scripts/check-proxy.ts)",
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "Bash(npm run *)"
     ]
   }
 }
