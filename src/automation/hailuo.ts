@@ -50,16 +50,14 @@ export async function generateVideo(
     //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
     // }
 
-    await captureSnapshot(page, jobId, "before-generate-click");
+    // await captureSnapshot(page, jobId, "before-generate-click");
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác video
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).
     const baseline = await captureVideoBaseline(page);
-    console.log("🚀 ~ generateVideo ~ baseline:", baseline)
 
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    console.log(`[hailuo] Job ${jobId}: đã bấm nút Generate`);
     await captureSnapshot(page, jobId, "after-generate-click");
 
     const newVideo = await waitForNewVideo(page, baseline, config.generationTimeoutMs);
@@ -90,7 +88,7 @@ async function selectChipOption(
     await clickDismissingModals(page, chip);
 
     const option = await firstVisible(dropdownOptionCandidates(page, targetText), 3000);
-    await option.click();
+    await clickWithForceFallback(option);
   } catch (err) {
     console.warn(`[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`, err);
   }
@@ -155,6 +153,21 @@ async function clickDismissingModals(page: Page, locator: Locator, timeoutMs = 1
     const dismissed = await dismissAntModalIfPresent(page);
     if (!dismissed) throw err;
     await locator.click({ timeout: timeoutMs });
+  }
+}
+
+/**
+ * Một số banner/ảnh quảng cáo động (vd "activity banner") nằm đè lên danh
+ * sách option trong popover và liên tục thay đổi vị trí — khiến Playwright
+ * coi phần tử đích là "not stable"/bị che, click thường không bao giờ qua
+ * được. Fallback: bấm thẳng vào toạ độ phần tử (force), bỏ qua các kiểm tra
+ * ổn định/che khuất của Playwright.
+ */
+async function clickWithForceFallback(locator: Locator, timeoutMs = 10_000): Promise<void> {
+  try {
+    await locator.click({ timeout: timeoutMs });
+  } catch {
+    await locator.click({ timeout: timeoutMs, force: true });
   }
 }
 

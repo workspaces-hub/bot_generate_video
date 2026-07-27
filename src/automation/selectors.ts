@@ -96,6 +96,9 @@ export const errorIndicatorCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/something went wrong/i),
   () => page.getByText(/tạo video thất bại/i),
   () => page.getByText(/đã xảy ra lỗi/i),
+  // Toast "Please select a picture" (toast_please_select_pic) — chế độ
+  // Start/End Frame đang bật nhưng bot chỉ điền text, không upload ảnh nào.
+  () => page.getByText(/please select a picture/i),
 ];
 
 /**
