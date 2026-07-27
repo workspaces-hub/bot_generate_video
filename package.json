@@ -8,6 +8,8 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "login": "tsx scripts/login.ts",
+    "check-proxy": "tsx scripts/check-proxy.ts",
+    "import-session": "tsx scripts/import-session.ts",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {

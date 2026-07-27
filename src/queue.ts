@@ -5,6 +5,8 @@ import { generateVideo } from "./automation/hailuo";
 export interface VideoJob {
   chatId: number;
   prompt: string;
+  resolution?: string;
+  model?: string;
   onSuccess: (filePath: string) => Promise<void>;
   onError: (err: unknown) => Promise<void>;
 }
@@ -30,7 +32,11 @@ async function processQueue(): Promise<void> {
       if (!job) continue;
       const jobId = randomUUID();
       try {
-        const filePath = await generateVideo(job.prompt, jobId);
+        const filePath = await generateVideo(
+          job.prompt,
+          { resolution: job.resolution, model: job.model },
+          jobId,
+        );
         await job.onSuccess(filePath);
         await fs.unlink(filePath).catch(() => {});
       } catch (err) {

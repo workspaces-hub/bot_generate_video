@@ -2,5 +2,7 @@ node_modules/
 dist/
 .env
 storage/session.json
+storage/manual-cookies.json
+storage/manual-localstorage.json
 storage/downloads/
 storage/debug/

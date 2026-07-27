@@ -1,5 +1,6 @@
 import type { Context, Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
+import { parsePromptMessage } from "../automation/promptParser";
 import { config } from "../config";
 import { enqueueJob } from "../queue";
 import { PROMPT_BUTTON_LABEL, promptMenu } from "./keyboard";
@@ -55,7 +56,8 @@ export function registerHandlers(bot: Telegraf): void {
       return next();
 
     waitingForPrompt.delete(ctx.from.id);
-    const prompt = ctx.message.text.trim();
+    const { text: prompt, resolution, model } = parsePromptMessage(ctx.message.text);
+    console.log("🚀 ~ registerHandlers ~ prompt, resolution, model:", prompt, resolution, model)
     if (!prompt) {
       await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
       return;
@@ -64,8 +66,14 @@ export function registerHandlers(bot: Telegraf): void {
     const groupChatId = ctx.chat.id;
     const promptMessageId = ctx.message.message_id;
 
+    const optionLines = [
+      resolution ? `Resolution: ${resolution}` : null,
+      model ? `Model: ${model}` : null,
+    ].filter(Boolean);
+    const optionsSuffix = optionLines.length > 0 ? `\n${optionLines.join("\n")}` : "";
+
     const statusMessage = await ctx.reply(
-      `⏳ Đang tạo video cho prompt:\n"${prompt}"`,
+      `⏳ Đang tạo video cho prompt:\n"${prompt}"${optionsSuffix}`,
       {
         reply_parameters: { message_id: promptMessageId },
       },
@@ -74,6 +82,8 @@ export function registerHandlers(bot: Telegraf): void {
     enqueueJob({
       chatId: groupChatId,
       prompt,
+      resolution,
+      model,
       onSuccess: async (filePath) => {
         await ctx.telegram
           .sendVideo(

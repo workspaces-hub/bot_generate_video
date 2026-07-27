@@ -9,6 +9,14 @@ import { config } from "../config";
  * gỡ các cờ/flag tố cáo automation để đăng nhập Google hoạt động bình thường.
  */
 export async function launchRealChrome(): Promise<Browser> {
+  if (!config.headless && process.platform === "linux" && !process.env.DISPLAY) {
+    console.warn(
+      "[launch] Đang chạy headless:false trên Linux nhưng không có $DISPLAY (không có X server) — " +
+        "Chrome sẽ không khởi động được. Đặt HEADLESS=true trong .env (VPS thường không có màn hình), " +
+        "hoặc chạy qua xvfb-run nếu cần headed thật sự.",
+    );
+  }
+
   const args = ["--disable-blink-features=AutomationControlled"];
   if (config.chromeNoSandbox) {
     args.push("--no-sandbox", "--disable-setuid-sandbox");
@@ -21,5 +29,12 @@ export async function launchRealChrome(): Promise<Browser> {
     headless: config.headless,
     args,
     ignoreDefaultArgs: ["--enable-automation"],
+    proxy: config.proxyServer
+      ? {
+          server: config.proxyServer,
+          username: config.proxyUsername,
+          password: config.proxyPassword,
+        }
+      : undefined,
   });
 }

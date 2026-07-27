@@ -4,17 +4,30 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { getBrowserContext } from "./browser";
 import {
+  creditPaywallModalCandidates,
+  dropdownOptionCandidates,
   errorIndicatorCandidates,
   firstVisible,
   generateButtonCandidates,
   historyVideoLocator,
+  modelChipCandidates,
   promptInputCandidates,
+  resolutionChipCandidates,
   signInIndicatorCandidates,
 } from "./selectors";
 
 export class GenerationError extends Error {}
 
-export async function generateVideo(prompt: string, jobId: string): Promise<string> {
+export interface GenerateVideoOptions {
+  resolution?: string;
+  model?: string;
+}
+
+export async function generateVideo(
+  prompt: string,
+  { resolution, model }: GenerateVideoOptions,
+  jobId: string,
+): Promise<string> {
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
@@ -22,10 +35,18 @@ export async function generateVideo(prompt: string, jobId: string): Promise<stri
     await page.goto(url, { waitUntil: "domcontentloaded" });
 
     await ensureLoggedIn(page);
+    await dismissPaywallIfBlocking(page);
 
     const promptInput = await firstVisible(promptInputCandidates(page));
     await promptInput.click();
     await promptInput.fill(prompt);
+
+    if (model) {
+      await selectChipOption(page, modelChipCandidates(page), model, "model");
+    }
+    // if (resolution) {
+    //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
+    // }
 
     await captureSnapshot(page, jobId, "before-generate-click");
 
@@ -47,6 +68,29 @@ export async function generateVideo(prompt: string, jobId: string): Promise<stri
   }
 }
 
+/**
+ * Bấm 1 chip (model/resolution) để mở dropdown, rồi chọn option có text
+ * khớp với giá trị mong muốn. Không throw nếu không tìm thấy — chỉ log
+ * cảnh báo và giữ nguyên lựa chọn mặc định của site, để 1 chip lỗi không
+ * làm hỏng cả job (video vẫn tạo được, chỉ sai model/resolution).
+ */
+async function selectChipOption(
+  page: Page,
+  chipCandidates: Array<() => Locator>,
+  targetText: string,
+  label: string,
+): Promise<void> {
+  try {
+    const chip = await firstVisible(chipCandidates, 3000);
+    await chip.click();
+
+    const option = await firstVisible(dropdownOptionCandidates(page, targetText), 3000);
+    await option.click();
+  } catch (err) {
+    console.warn(`[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`, err);
+  }
+}
+
 async function ensureLoggedIn(page: Page): Promise<void> {
   const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
     .then(() => true)
@@ -54,6 +98,33 @@ async function ensureLoggedIn(page: Page): Promise<void> {
   if (signedOut) {
     throw new GenerationError(
       "Chưa đăng nhập hailuoai.video hoặc session đã hết hạn. Chạy lại: npm run login",
+    );
+  }
+}
+
+/**
+ * Popup quảng cáo/nâng cấp gói (vd "Seedance 2.0 Full Lineup... Choose Your
+ * Plan, Subscribe, Redeem a Code") có thể tự hiện che kín trang tạo video
+ * ngay khi vừa vào trang — không hẳn lúc nào cũng do hết credit. Thử đóng
+ * bằng phím Escape (đa số modal/dialog đều lắng nghe phím này); nếu vẫn còn
+ * mới coi là bị chặn thật và báo lỗi rõ ràng.
+ */
+async function dismissPaywallIfBlocking(page: Page): Promise<void> {
+  const visible = await firstVisible(creditPaywallModalCandidates(page), 2000)
+    .then(() => true)
+    .catch(() => false);
+  if (!visible) return;
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(500);
+
+  const stillVisible = await firstVisible(creditPaywallModalCandidates(page), 2000)
+    .then(() => true)
+    .catch(() => false);
+  if (stillVisible) {
+    throw new GenerationError(
+      "Popup quảng cáo/nâng cấp gói đang che khung tạo video và không tự đóng được — " +
+        "thử lại sau; nếu lặp lại nhiều lần, kiểm tra credit tài khoản trên hailuoai.video",
     );
   }
 }
@@ -92,6 +163,15 @@ async function waitForNewVideo(page: Page, baseline: VideoBaseline, timeoutMs: n
         return videos.first();
       }
       return videos.last();
+    }
+
+    const paywall = await firstVisible(creditPaywallModalCandidates(page), 1000)
+      .then(() => true)
+      .catch(() => false);
+    if (paywall) {
+      throw new GenerationError(
+        "Tài khoản hết credit hoặc bị popup nâng cấp gói chặn — cần nạp thêm credit/nâng cấp gói trên hailuoai.video",
+      );
     }
 
     const failed = await firstVisible(errorIndicatorCandidates(page), 1000)

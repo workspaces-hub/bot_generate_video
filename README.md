@@ -69,11 +69,57 @@ kèm gỡ cờ `--enable-automation` — cách này khắc phục được phầ
 hợp. Nếu vẫn bị chặn:
 - Thử đăng nhập hailuoai.video bằng **email/password** thay vì Google, nếu
   trang hỗ trợ.
-- Hoặc đăng nhập Google vào hailuoai.video bằng trình duyệt Chrome bình
-  thường (không qua script), sau đó dùng extension như "Cookie-Editor" để
-  export cookie của domain hailuoai.video (không cần cookie của
-  accounts.google.com) và ghép thủ công vào `storage/session.json` theo
-  đúng format `storageState` của Playwright.
+- Hoặc export session thủ công — xem mục ngay dưới đây.
+
+## Export session thủ công (không qua script Playwright)
+
+Dùng khi `npm run login` gặp vấn đề (proxy chặn Google OAuth, bị "This
+browser or app may not be secure"...). Đăng nhập bằng **Chrome bình thường**
+của bạn (không proxy, không automation) rồi export session sang đúng format
+Playwright cần — không cần chạy bất kỳ script Playwright nào.
+
+1. Đăng nhập hailuoai.video (kể cả bằng Google) trong Chrome bình thường.
+2. Cài extension [Cookie-Editor](https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm),
+   mở nó trên tab hailuoai.video → **Export** → **Export as JSON** (đã copy
+   vào clipboard) → dán vào `storage/manual-cookies.json`.
+3. Mở DevTools (F12) → tab **Console**, vẫn trên tab hailuoai.video, chạy:
+   ```js
+   copy(JSON.stringify(Object.entries(localStorage).map(([name, value]) => ({name, value}))))
+   ```
+   → đã copy vào clipboard → dán vào `storage/manual-localstorage.json`.
+4. Chạy:
+   ```bash
+   npm run import-session
+   ```
+   Script sẽ ghép 2 file trên thành đúng format `storageState` của
+   Playwright, ghi vào `storage/session.json` — bot dùng file này y hệt như
+   khi chạy `npm run login`.
+
+## Dùng proxy (tuỳ chọn)
+
+Điền `PROXY_SERVER` (+ `PROXY_USERNAME`/`PROXY_PASSWORD` nếu proxy có auth)
+trong `.env`. Proxy áp dụng cho **cả** `npm run login` lẫn lúc bot chạy
+generate, vì dùng chung 1 helper (`launchRealChrome`).
+
+**Quan trọng:** nên chạy `npm run login` và chạy bot qua **cùng một proxy**
+(cùng IP/vùng địa lý). Nếu đăng nhập từ IP này nhưng sau đó bot generate từ
+IP khác (đặc biệt khác quốc gia), hailuoai.video/Google có thể coi đây là
+dấu hiệu đáng ngờ (session bị đánh cắp/dùng sai chỗ) và buộc đăng nhập lại
+hoặc khoá tạm thời.
+
+**Nếu `npm run login` bị trắng trang ở bước "Continue with Google"** (kẹt ở
+URL dạng `hailuo-ai.firebaseapp.com/__/auth/handler?...`): nhiều proxy
+(nhất là proxy datacenter) bị Google/Firebase Auth chặn khi truy cập các
+domain xác thực. Cách xử lý:
+1. **Tạm để trống `PROXY_SERVER`** chỉ trong lúc chạy `npm run login`, đăng
+   nhập Google bình thường (không qua proxy).
+2. Sau khi đăng nhập xong (đã lưu `storage/session.json`), **điền lại
+   `PROXY_SERVER`** rồi chạy bot như bình thường.
+
+Việc này an toàn vì bước xác thực Google chỉ xảy ra lúc `npm run login` —
+sau đó hailuoai.video quản lý phiên bằng cookie riêng của họ (`_token`),
+không cần Google xác thực lại mỗi lần bot generate. Khi session hết hạn và
+cần đăng nhập lại, lặp lại bước tạm tắt proxy này.
 
 ## Chạy bot
 
@@ -84,8 +130,28 @@ npm run build && npm run start
 ```
 
 Trong group đã cấu hình ở `GROUP_CHAT_ID`, gõ `/start` để hiện menu với nút
-**📝 Prompt**. Bấm nút → bot hỏi nội dung prompt → gõ prompt ngay trong
+**Prompt**. Bấm nút → bot hỏi nội dung prompt → gõ prompt ngay trong
 group. Video (hoặc `404` nếu lỗi) sẽ được đăng lại vào group đó.
+
+Có thể chỉ định thêm **Model**/**Resolution** bằng cách thêm 2 dòng sau nội
+dung prompt:
+
+```
+video xe thể thao đi
+Resolution: 1080
+Model: Hailuo 2.0
+```
+
+- `Resolution`: nhập số (vd `1080`, `768`) — bot tự thêm hậu tố `p`.
+- `Model`: nhập đúng tên hiển thị trên hailuoai.video (vd `Hailuo 2.3`,
+  `Hailuo 2.0`, `Hailuo 2.3 Fast`).
+- Bỏ qua 2 dòng này nếu muốn dùng model/resolution mặc định đang chọn sẵn
+  trên site.
+- Nếu bot không bấm chọn được đúng chip (site đổi giao diện), job **vẫn
+  chạy tiếp với lựa chọn mặc định của site** thay vì báo lỗi toàn bộ — xem
+  log `[hailuo] Không chọn được model/resolution ...` và debug snapshot để
+  chỉnh `modelChipCandidates`/`resolutionChipCandidates` trong
+  `src/automation/selectors.ts` nếu cần.
 
 ## Khi automation lỗi / cần chỉnh selector
 

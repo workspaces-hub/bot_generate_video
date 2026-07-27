@@ -37,11 +37,19 @@ export const config = {
 
   // Danh sách Telegram user id được phép dùng bot, cách nhau bởi dấu phẩy.
   // Để trống = không ai dùng được (an toàn mặc định) — xem cảnh báo dưới đây.
-  admins: (process.env.ADMINS ?? "")
+  admins: (process.env.ADMINS ?? ""),
+
+  // Proxy cho Playwright (áp dụng cả lúc `npm run login` và lúc bot chạy
+  // generate) — nên dùng CÙNG 1 proxy cho cả 2 để tránh đăng nhập từ IP
+  // này nhưng generate từ IP khác, dễ bị hailuoai.video/Google đánh dấu
+  // đáng ngờ. Để trống PROXY_SERVER nếu không dùng proxy.
+  proxyServer: process.env.PROXY_SERVER || undefined,
+  proxyUsername: process.env.PROXY_USERNAME || undefined,
+  proxyPassword: process.env.PROXY_PASSWORD || undefined,
 };
 
-if (config.admins.length === 0) {
-  console.warn(
-    "[config] ADMINS trống — không ai có quyền dùng bot. Thêm Telegram user id vào ADMINS trong .env (cách nhau bởi dấu phẩy).",
-  );
-}
+// if (config.admins.length === 0) {
+//   console.warn(
+//     "[config] ADMINS trống — không ai có quyền dùng bot. Thêm Telegram user id vào ADMINS trong .env (cách nhau bởi dấu phẩy).",
+//   );
+// }
