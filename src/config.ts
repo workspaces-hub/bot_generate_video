@@ -11,7 +11,8 @@ function required(name: string): string {
 
 export const config = {
   botToken: required("BOT_TOKEN"),
-  groupChatId: process.env.GROUP_CHAT_ID ? Number(process.env.GROUP_CHAT_ID) : undefined,
+  // Video kết quả (hoặc "404" khi lỗi) luôn đăng vào group cố định này.
+  groupChatId: Number(required("GROUP_CHAT_ID")),
 
   hailuoBaseUrl: process.env.HAILUO_BASE_URL ?? "https://hailuoai.video",
   hailuoCreatePath: process.env.HAILUO_CREATE_PATH ?? "/create/video",
@@ -33,4 +34,17 @@ export const config = {
   // Bật khi chạy trong container/VPS không hỗ trợ Chrome sandbox namespace.
   // Chỉ bật khi thực sự cần — giảm cô lập bảo mật của Chrome.
   chromeNoSandbox: (process.env.CHROME_NO_SANDBOX ?? "false").toLowerCase() === "true",
+
+  // Danh sách Telegram user id được phép dùng bot, cách nhau bởi dấu phẩy.
+  // Để trống = không ai dùng được (an toàn mặc định) — xem cảnh báo dưới đây.
+  admins: (process.env.ADMINS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
 };
+
+if (config.admins.length === 0) {
+  console.warn(
+    "[config] ADMINS trống — không ai có quyền dùng bot. Thêm Telegram user id vào ADMINS trong .env (cách nhau bởi dấu phẩy).",
+  );
+}

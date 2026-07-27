@@ -1,9 +1,12 @@
 # Hailuo Telegram Bot
 
-Bot Telegram (Telegraf) chạy trong group: nhấn nút **📝 Prompt**, gửi nội dung
-prompt, bot tự động điền vào hailuoai.video, bấm generate, chờ video tạo
-xong, tải về và gửi lại vào group. Nếu có lỗi ở bất kỳ bước nào, bot gửi
-`404` vào group.
+Bot Telegram (Telegraf) được add làm admin của 1 group cố định
+(`GROUP_CHAT_ID`). Admin nhắn riêng (DM) cho bot, gõ `/start` để hiện menu
+với nút **📝 Prompt**. Bấm nút → bot hỏi nội dung prompt → gõ prompt → bot tự
+động điền vào hailuoai.video, bấm generate, chờ video tạo xong, tải về và
+đăng vào group. Nếu có lỗi ở bất kỳ bước nào, bot gửi `404` vào group. Toàn
+bộ tương tác (menu, nhập prompt) chỉ diễn ra qua DM — bot **không đọc/xử lý
+tin nhắn trong group**.
 
 ## Kiến trúc
 
@@ -30,19 +33,20 @@ cp .env.example .env
 
 Điền vào `.env`:
 - `BOT_TOKEN`: lấy từ [@BotFather](https://t.me/BotFather) (`/newbot`).
-- `GROUP_CHAT_ID` (tuỳ chọn): giới hạn bot chỉ hoạt động trong 1 group.
+- `GROUP_CHAT_ID` (**bắt buộc**): group cố định để đăng video/`404` kết quả.
+- `ADMINS` (**bắt buộc**): danh sách Telegram user id được phép dùng bot.
 
 ## Thêm bot vào group
 
-1. Thêm bot vào group Telegram.
+1. Thêm bot vào group Telegram, lấy `GROUP_CHAT_ID` bằng cách thêm bot
+   @userinfobot vào group (chat id group thường là số âm).
 2. Vào **Group settings → Administrators → Add Admin**, chọn bot, cấp ít
-   nhất quyền **Send Messages**. Với các thao tác trong code hiện tại
-   (gửi tin nhắn, gửi video, xoá tin trạng thái của chính bot) không bắt
+   nhất quyền **Send Messages**. Việc gửi video/kết quả vào group không bắt
    buộc phải là admin, nhưng theo yêu cầu ban đầu, thêm làm admin để có thể
-   mở rộng quyền (pin, xoá tin của người khác...) sau này.
-3. Tắt Privacy Mode của bot qua BotFather (`/setprivacy` → Disable) nếu bạn
-   muốn bot đọc được mọi tin nhắn trong group, không chỉ tin nhắn bắt đầu
-   bằng `/`.
+   mở rộng quyền (pin, xoá tin...) sau này.
+3. Không cần tắt Privacy Mode — bot không đọc tin nhắn trong group, chỉ gửi
+   video/`404` vào đó. Toàn bộ menu và nội dung prompt xử lý qua DM riêng
+   với bot.
 
 ## Đăng nhập hailuoai.video (1 lần)
 
@@ -77,8 +81,9 @@ npm run dev     # chạy trực tiếp bằng tsx, tự reload khi sửa code
 npm run build && npm run start
 ```
 
-Trong group, gõ `/start` để hiện nút **📝 Prompt**, bấm nút, gửi nội dung
-prompt ở tin nhắn kế tiếp.
+Nhắn riêng (DM) cho bot, gõ `/start` để hiện menu với nút **📝 Prompt**. Bấm
+nút → bot hỏi nội dung prompt → gõ prompt. Video (hoặc `404` nếu lỗi) sẽ
+được đăng vào group đã cấu hình ở `GROUP_CHAT_ID`.
 
 ## Khi automation lỗi / cần chỉnh selector
 

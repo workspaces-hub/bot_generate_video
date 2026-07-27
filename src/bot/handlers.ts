@@ -1,87 +1,75 @@
-import type { Telegraf } from "telegraf";
+import type { Context, Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
 import { config } from "../config";
 import { enqueueJob } from "../queue";
-import { PROMPT_ACTION, promptKeyboard } from "./keyboard";
+import { PROMPT_BUTTON_LABEL, promptMenu } from "./keyboard";
 
-const waitingForPrompt = new Set<string>();
+// userId đang chờ nhập prompt (đã bấm nút 📝 Prompt trong DM).
+const waitingForPrompt = new Set<number>();
 
-function stateKey(chatId: number, userId: number): string {
-  return `${chatId}:${userId}`;
+function isAdmin(userId: number): boolean {
+  return config.admins.includes(userId.toString());
 }
 
-function isAllowedChat(chatId: number): boolean {
-  return !config.groupChatId || config.groupChatId === chatId;
+/** Chặn mọi tương tác từ user không có trong ADMINS (xem .env). */
+async function checkAdmin(ctx: Context, next: () => Promise<void>): Promise<void> {
+  const userId = ctx.from?.id;
+  if (userId && isAdmin(userId)) {
+    return next();
+  }
 }
 
 export function registerHandlers(bot: Telegraf): void {
+  bot.use(checkAdmin);
+
+  // Menu chỉ hiện trong DM: reply keyboard gửi tin nhắn vào đúng chat đang
+  // mở, nên nếu hiện trong group thì bấm nút sẽ gửi tin vào group thật —
+  // phải tránh vì bot không xử lý tin nhắn trong group.
   bot.command(["start", "menu"], async (ctx) => {
-    if (!ctx.chat || !isAllowedChat(ctx.chat.id)) return;
-    await ctx.reply(
-      "Bấm nút bên dưới rồi gửi nội dung prompt để tạo video từ hailuoai.video:",
-      promptKeyboard,
-    );
+    if (ctx.chat?.type !== "private") return;
+    await ctx.reply("Menu:", promptMenu);
   });
 
-  bot.action(PROMPT_ACTION, async (ctx) => {
-    await ctx.answerCbQuery();
-    if (!ctx.chat || !ctx.from || !isAllowedChat(ctx.chat.id)) return;
-
-    waitingForPrompt.add(stateKey(ctx.chat.id, ctx.from.id));
-    await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, hãy gửi nội dung prompt ở tin nhắn tiếp theo.`,
-      { reply_parameters: ctx.callbackQuery.message ? { message_id: ctx.callbackQuery.message.message_id } : undefined },
-    );
+  bot.hears(PROMPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || ctx.chat.type !== "private") return;
+    waitingForPrompt.add(ctx.from.id);
+    await ctx.reply("Gửi nội dung prompt bạn muốn tạo video:");
   });
 
   bot.on(message("text"), async (ctx, next) => {
-    if (!ctx.chat || !ctx.from || !isAllowedChat(ctx.chat.id)) return next();
+    if (!ctx.from || ctx.chat.type !== "private") return next();
 
-    const key = stateKey(ctx.chat.id, ctx.from.id);
-    if (!waitingForPrompt.has(key)) return next();
+    if (!waitingForPrompt.has(ctx.from.id)) return next();
     if (ctx.message.text.startsWith("/")) return next();
 
-    waitingForPrompt.delete(key);
+    waitingForPrompt.delete(ctx.from.id);
     const prompt = ctx.message.text.trim();
     if (!prompt) {
-      await ctx.reply("Prompt trống, đã huỷ.", { reply_parameters: { message_id: ctx.message.message_id } });
+      await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
       return;
     }
 
-    const chatId = ctx.chat.id;
-    const promptMessageId = ctx.message.message_id;
+    const dmChatId = ctx.chat.id;
+    const groupChatId = config.groupChatId;
 
-    const statusMessage = await ctx.reply(`⏳ Đang tạo video cho prompt:\n"${prompt}"`, {
-      reply_parameters: { message_id: promptMessageId },
-    });
+    await ctx.reply(`⏳ Đang tạo video cho prompt:\n"${prompt}"\nKết quả sẽ được đăng vào group.`, promptMenu);
 
     enqueueJob({
-      chatId,
+      chatId: groupChatId,
       prompt,
       onSuccess: async (filePath) => {
         await ctx.telegram
-          .sendVideo(
-            chatId,
-            { source: filePath },
-            {
-              caption: `✅ Video cho prompt: "${prompt}"`,
-              reply_parameters: { message_id: promptMessageId },
-            },
-          )
+          .sendVideo(groupChatId, { source: filePath }, { caption: `✅ Video cho prompt: "${prompt}"` })
           .catch(async (err) => {
             console.error("[bot] Gửi video thất bại:", err);
-            await ctx.telegram.sendMessage(chatId, "404", {
-              reply_parameters: { message_id: promptMessageId },
-            });
+            await ctx.telegram.sendMessage(groupChatId, "404");
           });
-        await ctx.telegram.deleteMessage(chatId, statusMessage.message_id).catch(() => {});
+        await ctx.telegram.sendMessage(dmChatId, "✅ Xong! Video đã được đăng vào group.").catch(() => {});
       },
       onError: async (err) => {
         console.error("[bot] Tạo video thất bại:", err);
-        await ctx.telegram.sendMessage(chatId, "404", {
-          reply_parameters: { message_id: promptMessageId },
-        });
-        await ctx.telegram.deleteMessage(chatId, statusMessage.message_id).catch(() => {});
+        await ctx.telegram.sendMessage(groupChatId, "404");
+        await ctx.telegram.sendMessage(dmChatId, "❌ Tạo video thất bại, đã báo lỗi vào group.").catch(() => {});
       },
     });
   });

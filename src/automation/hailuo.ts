@@ -27,7 +27,7 @@ export async function generateVideo(prompt: string, jobId: string): Promise<stri
     await promptInput.click();
     await promptInput.fill(prompt);
 
-    await captureDebug(page, jobId, "before-generate-click");
+    await captureSnapshot(page, jobId, "before-generate-click");
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác video
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).
@@ -40,7 +40,7 @@ export async function generateVideo(prompt: string, jobId: string): Promise<stri
 
     return await downloadVideo(page, newVideo, jobId);
   } catch (err) {
-    await captureDebug(page, jobId, err);
+    await captureErrorSnapshot(page, jobId, err);
     throw err instanceof GenerationError ? err : new GenerationError(err instanceof Error ? err.message : String(err));
   } finally {
     await page.close();
@@ -125,15 +125,30 @@ async function downloadVideo(page: Page, video: Locator, jobId: string): Promise
   return filePath;
 }
 
-async function captureDebug(page: Page, jobId: string, err: unknown): Promise<void> {
+async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
+  await fs.promises.mkdir(config.debugDir, { recursive: true });
+  await page.screenshot({ path: path.join(config.debugDir, `${jobId}.png`), fullPage: true });
+  await fs.promises.writeFile(
+    path.join(config.debugDir, `${jobId}.html`),
+    await page.content(),
+    "utf-8",
+  );
+}
+
+/** Chụp trạng thái trang giữa luồng để debug — KHÔNG có nghĩa là job lỗi. */
+async function captureSnapshot(page: Page, jobId: string, label: string): Promise<void> {
   try {
-    await fs.promises.mkdir(config.debugDir, { recursive: true });
-    await page.screenshot({ path: path.join(config.debugDir, `${jobId}.png`), fullPage: true });
-    await fs.promises.writeFile(
-      path.join(config.debugDir, `${jobId}.html`),
-      await page.content(),
-      "utf-8",
-    );
+    await writeSnapshotFiles(page, jobId);
+    console.log(`[hailuo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`);
+  } catch (debugErr) {
+    console.error("[hailuo] Không thể lưu debug snapshot:", debugErr);
+  }
+}
+
+/** Chụp trạng thái trang khi job THỰC SỰ lỗi (gọi trong catch). */
+async function captureErrorSnapshot(page: Page, jobId: string, err: unknown): Promise<void> {
+  try {
+    await writeSnapshotFiles(page, jobId);
   } catch (debugErr) {
     console.error("[hailuo] Không thể lưu debug snapshot:", debugErr);
   }
