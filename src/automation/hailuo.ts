@@ -32,7 +32,7 @@ export async function generateVideo(
   const page = await context.newPage();
   try {
     const url = new URL(config.hailuoCreatePath, config.hailuoBaseUrl).toString();
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await gotoWithRetry(page, url);
 
     await ensureLoggedIn(page);
     await dismissPaywallIfBlocking(page);
@@ -89,6 +89,28 @@ async function selectChipOption(
   } catch (err) {
     console.warn(`[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`, err);
   }
+}
+
+/**
+ * Rớt kết nối tạm thời qua proxy (net::ERR_TIMED_OUT, ERR_CONNECTION_*) khá
+ * phổ biến khi chạy qua proxy — thử lại vài lần trước khi báo lỗi hẳn, thay
+ * vì fail job ngay ở lần đầu.
+ */
+async function gotoWithRetry(page: Page, url: string, attempts = 3): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[hailuo] page.goto lỗi (lần ${attempt}/${attempts}):`, err instanceof Error ? err.message : err);
+      if (attempt < attempts) {
+        await page.waitForTimeout(3000);
+      }
+    }
+  }
+  throw lastErr;
 }
 
 async function ensureLoggedIn(page: Page): Promise<void> {
