@@ -27,7 +27,7 @@ async function checkAdmin(
 }
 
 export function registerHandlers(bot: Telegraf): void {
-  bot.use(checkAdmin);
+  // bot.use(checkAdmin);
 
   // bot.telegram.getMe().then(console.log);
 
