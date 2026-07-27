@@ -1,6 +1,6 @@
 import type { Context, Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
-import { parsePromptMessage } from "../automation/promptParser";
+import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import { config } from "../config";
 import { enqueueJob } from "../queue";
 import { PROMPT_BUTTON_LABEL, promptMenu } from "./keyboard";
@@ -56,8 +56,17 @@ export function registerHandlers(bot: Telegraf): void {
       return next();
 
     waitingForPrompt.delete(ctx.from.id);
-    const { text: prompt, resolution, model } = parsePromptMessage(ctx.message.text);
-    console.log("🚀 ~ registerHandlers ~ prompt, resolution, model:", prompt, resolution, model)
+    const {
+      text: prompt,
+      resolution,
+      model,
+    } = parsePromptMessage(ctx.message.text);
+    console.log(
+      "🚀 ~ registerHandlers ~ prompt, resolution, model:",
+      prompt,
+      resolution,
+      model,
+    );
     if (!prompt) {
       await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
       return;
@@ -70,7 +79,8 @@ export function registerHandlers(bot: Telegraf): void {
       resolution ? `Resolution: ${resolution}` : null,
       model ? `Model: ${model}` : null,
     ].filter(Boolean);
-    const optionsSuffix = optionLines.length > 0 ? `\n${optionLines.join("\n")}` : "";
+    const optionsSuffix =
+      optionLines.length > 0 ? `\n${optionLines.join("\n")}` : "";
 
     const statusMessage = await ctx.reply(
       `⏳ Đang tạo video cho prompt:\n"${prompt}"${optionsSuffix}`,
@@ -83,7 +93,9 @@ export function registerHandlers(bot: Telegraf): void {
       chatId: groupChatId,
       prompt,
       resolution,
-      model,
+      model: config.admins.includes(ctx.from.id.toString())
+        ? model
+        : DEFAULT_MODEL,
       onSuccess: async (filePath) => {
         await ctx.telegram
           .sendVideo(
@@ -100,7 +112,7 @@ export function registerHandlers(bot: Telegraf): void {
               reply_parameters: { message_id: promptMessageId },
             });
             try {
-              await ctx.telegram.sendMessage(config.admins, err.message);
+              await ctx.telegram.sendMessage(config.adminsNotify, err.message);
             } catch {}
           });
         await ctx.telegram
@@ -110,7 +122,7 @@ export function registerHandlers(bot: Telegraf): void {
       onError: async (err: any) => {
         console.error("[bot] Tạo video thất bại:", err);
         try {
-          await ctx.telegram.sendMessage(config.admins, err.message);
+          await ctx.telegram.sendMessage(config.adminsNotify, err.message);
         } catch {}
         await ctx.telegram.sendMessage(groupChatId, "404", {
           reply_parameters: { message_id: promptMessageId },

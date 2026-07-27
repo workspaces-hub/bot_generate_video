@@ -4,7 +4,9 @@ import path from "node:path";
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`Thiếu biến môi trường bắt buộc: ${name} (xem .env.example)`);
+    throw new Error(
+      `Thiếu biến môi trường bắt buộc: ${name} (xem .env.example)`,
+    );
   }
   return value;
 }
@@ -17,7 +19,9 @@ export const config = {
   hailuoBaseUrl: process.env.HAILUO_BASE_URL ?? "https://hailuoai.video",
   hailuoCreatePath: process.env.HAILUO_CREATE_PATH ?? "/create/video",
 
-  storageStatePath: path.resolve(process.env.STORAGE_STATE_PATH ?? "./storage/session.json"),
+  storageStatePath: path.resolve(
+    process.env.STORAGE_STATE_PATH ?? "./storage/session.json",
+  ),
   downloadDir: path.resolve(process.env.DOWNLOAD_DIR ?? "./storage/downloads"),
   debugDir: path.resolve("./storage/debug"),
 
@@ -33,11 +37,16 @@ export const config = {
 
   // Bật khi chạy trong container/VPS không hỗ trợ Chrome sandbox namespace.
   // Chỉ bật khi thực sự cần — giảm cô lập bảo mật của Chrome.
-  chromeNoSandbox: (process.env.CHROME_NO_SANDBOX ?? "false").toLowerCase() === "true",
+  chromeNoSandbox:
+    (process.env.CHROME_NO_SANDBOX ?? "false").toLowerCase() === "true",
 
   // Danh sách Telegram user id được phép dùng bot, cách nhau bởi dấu phẩy.
   // Để trống = không ai dùng được (an toàn mặc định) — xem cảnh báo dưới đây.
-  admins: (process.env.ADMINS ?? ""),
+  admins: (process.env.ADMINS ?? "")
+    .split(",")
+    .map((i) => i.trim())
+    .filter(Boolean),
+  adminsNotify: process.env.ADMINS_NOTIFY ?? "",
 
   // Proxy cho Playwright (áp dụng cả lúc `npm run login` và lúc bot chạy
   // generate) — nên dùng CÙNG 1 proxy cho cả 2 để tránh đăng nhập từ IP
