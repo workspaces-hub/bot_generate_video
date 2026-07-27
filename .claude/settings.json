@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(python3 -c ' *)",
+      "Bash(grep -o 'contenteditable=\"[^\"]*\"[^>]{0,80}' /Users/linhnt/workspaces/bot/generate_video/storage/debug/adaf0d3b-14c9-412c-96b0-c0538fa2eedd.html)"
+    ]
+  }
+}
