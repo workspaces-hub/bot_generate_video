@@ -66,10 +66,12 @@ export function registerHandlers(bot: Telegraf): void {
           });
         await ctx.telegram.sendMessage(dmChatId, "✅ Xong! Video đã được đăng vào group.").catch(() => {});
       },
-      onError: async (err) => {
+      onError: async (err: any) => {
         console.error("[bot] Tạo video thất bại:", err);
-        await ctx.telegram.sendMessage(groupChatId, "404");
-        await ctx.telegram.sendMessage(dmChatId, "❌ Tạo video thất bại, đã báo lỗi vào group.").catch(() => {});
+        await ctx.telegram.sendMessage(groupChatId, `
+${prompt}:
+404`);
+        await ctx.telegram.sendMessage(dmChatId, "❌ Tạo video thất bại: " + err.message).catch(() => {});
       },
     });
   });
