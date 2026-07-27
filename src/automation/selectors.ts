@@ -109,6 +109,17 @@ export const creditPaywallModalCandidates = (page: Page): Array<() => Locator> =
   () => page.getByText(/choose your plan/i),
 ];
 
+/**
+ * hailuoai.video hay bật popup quảng cáo/sự kiện (Ant Design Modal) bất chợt
+ * ở nhiều thời điểm khác nhau trong lúc dùng, không chỉ lúc mới vào trang —
+ * mỗi loại có nội dung khác nhau (giảm giá, sự kiện, hết credit...) nên
+ * không thể liệt kê hết theo text. ".ant-modal-wrap"/".ant-modal-close" là
+ * class CHUẨN của thư viện Ant Design, áp dụng cho MỌI modal loại này bất
+ * kể nội dung — đáng tin cậy hơn dò text cụ thể.
+ */
+export const antModalWrapperLocator = (page: Page): Locator => page.locator(".ant-modal-wrap");
+export const antModalCloseButtonLocator = (page: Page): Locator => page.locator(".ant-modal-close");
+
 export const downloadTriggerCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /download/i }),
   () => page.getByRole("link", { name: /download/i }),

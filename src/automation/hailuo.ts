@@ -4,6 +4,8 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { getBrowserContext } from "./browser";
 import {
+  antModalCloseButtonLocator,
+  antModalWrapperLocator,
   creditPaywallModalCandidates,
   dropdownOptionCandidates,
   errorIndicatorCandidates,
@@ -38,7 +40,7 @@ export async function generateVideo(
     await dismissPaywallIfBlocking(page);
 
     const promptInput = await firstVisible(promptInputCandidates(page));
-    await promptInput.click();
+    await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
 
     if (model) {
@@ -48,14 +50,17 @@ export async function generateVideo(
     //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
     // }
 
-    // await captureSnapshot(page, jobId, "before-generate-click");
+    await captureSnapshot(page, jobId, "before-generate-click");
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác video
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).
     const baseline = await captureVideoBaseline(page);
+    console.log("🚀 ~ generateVideo ~ baseline:", baseline)
 
     const generateButton = await firstVisible(generateButtonCandidates(page));
-    await generateButton.click();
+    await clickDismissingModals(page, generateButton);
+    console.log(`[hailuo] Job ${jobId}: đã bấm nút Generate`);
+    await captureSnapshot(page, jobId, "after-generate-click");
 
     const newVideo = await waitForNewVideo(page, baseline, config.generationTimeoutMs);
 
@@ -82,7 +87,7 @@ async function selectChipOption(
 ): Promise<void> {
   try {
     const chip = await firstVisible(chipCandidates, 3000);
-    await chip.click();
+    await clickDismissingModals(page, chip);
 
     const option = await firstVisible(dropdownOptionCandidates(page, targetText), 3000);
     await option.click();
@@ -111,6 +116,46 @@ async function gotoWithRetry(page: Page, url: string, attempts = 3): Promise<voi
     }
   }
   throw lastErr;
+}
+
+/**
+ * Đóng modal Ant Design đang che trang (nếu có) — bấm nút X chuẩn của thư
+ * viện (.ant-modal-close), fallback về phím Escape nếu không thấy nút X.
+ * Trả về true nếu có modal và đã thử đóng, false nếu không có modal nào.
+ */
+async function dismissAntModalIfPresent(page: Page): Promise<boolean> {
+  const visible = await antModalWrapperLocator(page)
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (!visible) return false;
+
+  const hasCloseButton = await antModalCloseButtonLocator(page)
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (hasCloseButton) {
+    await antModalCloseButtonLocator(page).first().click().catch(() => {});
+  } else {
+    await page.keyboard.press("Escape").catch(() => {});
+  }
+  await page.waitForTimeout(500);
+  return true;
+}
+
+/**
+ * Bấm 1 locator, nếu bị chặn bởi modal quảng cáo/sự kiện (site hay bật bất
+ * chợt ở nhiều thời điểm) thì tự đóng modal rồi thử lại 1 lần trước khi báo
+ * lỗi hẳn.
+ */
+async function clickDismissingModals(page: Page, locator: Locator, timeoutMs = 15_000): Promise<void> {
+  try {
+    await locator.click({ timeout: timeoutMs });
+  } catch (err) {
+    const dismissed = await dismissAntModalIfPresent(page);
+    if (!dismissed) throw err;
+    await locator.click({ timeout: timeoutMs });
+  }
 }
 
 async function ensureLoggedIn(page: Page): Promise<void> {
