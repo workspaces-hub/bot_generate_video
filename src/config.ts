@@ -38,9 +38,6 @@ export const config = {
   // Danh sách Telegram user id được phép dùng bot, cách nhau bởi dấu phẩy.
   // Để trống = không ai dùng được (an toàn mặc định) — xem cảnh báo dưới đây.
   admins: (process.env.ADMINS ?? "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean),
 };
 
 if (config.admins.length === 0) {
