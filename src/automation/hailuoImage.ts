@@ -274,14 +274,16 @@ async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeout
  * trước khi downloadImagesInEntry mới báo lỗi "không có ảnh nào".
  *
  * SỬA LỖI: "data-batch-disabled" KHÔNG có nghĩa là lỗi — card đang xử lý
- * bình thường (spinner, "Optimizing prompt...") cũng mang thuộc tính này
- * (xác nhận qua debug HTML thực tế của video), nên cần loại trừ card còn
- * spinner (".animate-spin") mới đúng là card đã NGÃ NGŨ thành lỗi thật, nếu
- * không sẽ coi "đang xử lý" là "đã xong" ngay từ đầu → trả kết quả quá sớm.
+ * bình thường (spinner tròn HOẶC progress ring dạng %, "Optimizing
+ * prompt..."/"11% Generating...") cũng mang thuộc tính này (xác nhận qua
+ * debug HTML thực tế của video, gặp CẢ 2 kiểu UI xử lý khác nhau). Loại trừ
+ * card còn nút "Cancel" (job còn huỷ được = đang xử lý, bất kể hiện kiểu
+ * spinner nào) mới đúng là card đã NGÃ NGŨ thành lỗi thật — nếu không sẽ coi
+ * "đang xử lý" là "đã xong" ngay từ đầu → trả kết quả quá sớm.
  */
 async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs = 600_000): Promise<void> {
   const resolvedCards = entry.locator(
-    "div[data-feed-id]:has(img[src]), div[data-feed-id][data-batch-disabled]:not(:has(.animate-spin))",
+    'div[data-feed-id]:has(img[src]), div[data-feed-id][data-batch-disabled]:not(:has(button:has-text("Cancel")))',
   );
   const start = Date.now();
   const pollIntervalMs = 15000;

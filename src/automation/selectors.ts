@@ -179,19 +179,24 @@ export const historyVideoLocator = (page: Page): Locator =>
  * Card lịch sử bị lỗi (generate thất bại) mang data-batch-disabled +
  * aria-disabled="true", KHÔNG có nội dung thật (<video>/<img>) bên trong.
  *
- * SỬA LỖI: lúc đầu tưởng data-batch-disabled = "lỗi", nhưng thực tế xác
- * nhận qua debug HTML là SAI — card đang generate BÌNH THƯỜNG ("Optimizing
- * prompt...", có spinner .animate-spin, nút Recreate/Cancel) CŨNG mang
- * data-batch-disabled (ý nghĩa thật: "chưa phải asset hoàn chỉnh/có thể
- * chọn", áp dụng cho CẢ đang xử lý LẪN lỗi thật) — khiến bot báo lỗi ngay
- * khi entry mới vừa xuất hiện, dù đang generate bình thường (false
- * positive). Card ĐANG xử lý luôn có spinner ".animate-spin" (xác nhận qua
- * class "animate-spin" trên icon xoay); card LỖI THẬT thì không còn spinner
- * (icon tĩnh, không animate) — dùng ":not(:has(.animate-spin))" để chỉ khớp
- * card đã NGÃ NGŨ thành lỗi, không phải đang xử lý dở dang.
+ * SỬA LỖI (lần 1): lúc đầu tưởng data-batch-disabled = "lỗi", nhưng thực tế
+ * xác nhận qua debug HTML là SAI — card đang generate bình thường ("Optimizing
+ * prompt...", có spinner .animate-spin) CŨNG mang data-batch-disabled (ý
+ * nghĩa thật: "chưa phải asset hoàn chỉnh/có thể chọn", áp dụng cho CẢ đang
+ * xử lý LẪN lỗi thật).
+ *
+ * SỬA LỖI (lần 2): loại trừ ".animate-spin" vẫn CHƯA ĐỦ — site còn 1 kiểu
+ * "đang xử lý" khác dùng progress ring dạng % (Ant Design ".ant-progress-
+ * circle", vd "11% Generating...") KHÔNG có class "animate-spin", vẫn lọt
+ * qua và gây false positive y hệt. Thay vì liệt kê thêm từng kiểu spinner
+ * (dễ tiếp tục thiếu kiểu mới), dùng tín hiệu TỔNG QUÁT hơn: card đang xử lý
+ * (bất kể hiện spinner tròn hay progress ring %) LUÔN có nút "Cancel" (job
+ * còn huỷ được); card lỗi thật thì không còn nút này (chỉ còn icon tĩnh +
+ * nút info, xác nhận qua DOM ảnh lỗi thật trước đó) — dùng
+ * ":not(:has(button:has-text(\"Cancel\")))" để chỉ khớp card đã NGÃ NGŨ.
  */
 export const failedGenerationCardLocator = (page: Page): Locator =>
-  page.locator("#create-new-scroll-container [data-batch-disabled]:not(:has(.animate-spin))");
+  page.locator('#create-new-scroll-container [data-batch-disabled]:not(:has(button:has-text("Cancel")))');
 
 /**
  * CHƯA CÓ DOM THẬT — đây là phỏng đoán ban đầu cho tính năng tạo ẢNH (mới
