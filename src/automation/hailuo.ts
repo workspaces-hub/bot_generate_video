@@ -14,10 +14,8 @@ import {
   historyVideoLocator,
   modelChipCandidates,
   promptInputCandidates,
-  removeWatermarkOptionCandidates,
   resolutionChipCandidates,
   signInIndicatorCandidates,
-  videoDownloadDropdownTriggerCandidates,
 } from "./selectors";
 
 export class GenerationError extends Error {}
@@ -275,7 +273,8 @@ async function waitForNewVideo(page: Page, baseline: VideoBaseline, timeoutMs: n
  * "Remove watermark" → bắt sự kiện download của Playwright để lưu file.
  * (Trước đây fetch thẳng attribute src của thẻ <video> — bản đó có watermark.)
  */
-async function downloadVideo(page: Page, video: Locator, jobId: string): Promise<string> {
+/** Xuất ra để scripts/download-last-video.ts dùng lại đúng logic tải video không watermark. */
+export async function downloadVideo(page: Page, video: Locator, jobId: string): Promise<string> {
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
   const filePath = path.join(config.downloadDir, `${jobId}.mp4`);
 
@@ -294,16 +293,23 @@ async function downloadVideo(page: Page, video: Locator, jobId: string): Promise
   detailUrl.searchParams.set("source-page", "create");
   await gotoWithRetry(page, detailUrl.toString());
 
-  const downloadTrigger = await firstVisible(videoDownloadDropdownTriggerCandidates(page), 10_000);
-  await downloadTrigger.hover();
+  // Trang chi tiết nhúng sẵn URL không watermark ngay trong dữ liệu Next.js
+  // flight data (self.__next_f.push(...)) của chính trang, dạng
+  // downloadURLWithoutWatermark — đáng tin cậy hơn nhiều so với hover/click
+  // dropdown (site có thể đổi UI dropdown, nhưng field data này ổn định
+  // hơn vì là dữ liệu thô, không phải giao diện).
+  const html = await page.content();
+  const match = html.match(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/);
+  if (!match) {
+    throw new GenerationError("Không tìm thấy downloadURLWithoutWatermark trên trang chi tiết video");
+  }
+  const noWatermarkUrl = match[1];
 
-  const removeWatermarkOption = await firstVisible(removeWatermarkOptionCandidates(page), 5000);
-
-  const [download] = await Promise.all([
-    page.waitForEvent("download", { timeout: 30_000 }),
-    removeWatermarkOption.click(),
-  ]);
-  await download.saveAs(filePath);
+  const response = await page.context().request.get(noWatermarkUrl);
+  if (!response.ok()) {
+    throw new GenerationError(`Tải video (không watermark) thất bại: HTTP ${response.status()}`);
+  }
+  await fs.promises.writeFile(filePath, await response.body());
   return filePath;
 }
 

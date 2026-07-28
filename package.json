@@ -10,6 +10,7 @@
     "login": "tsx scripts/login.ts",
     "check-proxy": "tsx scripts/check-proxy.ts",
     "import-session": "tsx scripts/import-session.ts",
+    "download-last-video": "tsx scripts/download-last-video.ts",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {

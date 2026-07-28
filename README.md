@@ -108,18 +108,29 @@ dấu hiệu đáng ngờ (session bị đánh cắp/dùng sai chỗ) và buộc
 hoặc khoá tạm thời.
 
 **Nếu `npm run login` bị trắng trang ở bước "Continue with Google"** (kẹt ở
-URL dạng `hailuo-ai.firebaseapp.com/__/auth/handler?...`): nhiều proxy
-(nhất là proxy datacenter) bị Google/Firebase Auth chặn khi truy cập các
-domain xác thực. Cách xử lý:
-1. **Tạm để trống `PROXY_SERVER`** chỉ trong lúc chạy `npm run login`, đăng
-   nhập Google bình thường (không qua proxy).
-2. Sau khi đăng nhập xong (đã lưu `storage/session.json`), **điền lại
-   `PROXY_SERVER`** rồi chạy bot như bình thường.
+URL dạng `hailuo-ai.firebaseapp.com/__/auth/handler?...`), hoặc bị
+`net::ERR_TIMED_OUT`/`ERR_FAILED` khi vào các domain của Google: nhiều proxy
+(nhất là proxy datacenter) bị Google/Firebase Auth chặn hoặc không định
+tuyến được tới các domain xác thực. Cách xử lý — dùng cờ `--no-proxy` để bỏ
+qua proxy chỉ cho lần chạy đó, không cần sửa `.env`:
+```bash
+npm run login -- --no-proxy
+```
+Sau khi đăng nhập xong (đã lưu `storage/session.json`), chạy bot như bình
+thường (`npm run dev`/`npm run start`) — bot vẫn dùng đúng `PROXY_SERVER`
+trong `.env` vì `--no-proxy` chỉ áp dụng cho lần chạy `login` đó.
 
 Việc này an toàn vì bước xác thực Google chỉ xảy ra lúc `npm run login` —
 sau đó hailuoai.video quản lý phiên bằng cookie riêng của họ (`_token`),
 không cần Google xác thực lại mỗi lần bot generate. Khi session hết hạn và
-cần đăng nhập lại, lặp lại bước tạm tắt proxy này.
+cần đăng nhập lại, chạy lại `npm run login -- --no-proxy`.
+
+Muốn kiểm tra proxy có đang hoạt động không (có/không `--no-proxy` để so
+sánh):
+```bash
+npm run check-proxy
+npm run check-proxy -- --no-proxy
+```
 
 ## Chạy bot
 
@@ -218,5 +229,9 @@ cài lại gì khác).
   vụ của họ — hãy kiểm tra Điều khoản sử dụng của hailuoai.video trước khi
   chạy bot với tần suất cao.
 - Xử lý tuần tự (1 video/lần) theo thiết kế, để tránh 2 tab cùng lúc gây
-  xung đột trên cùng tài khoản. Nếu cần xử lý song song, cần nhiều tài
-  khoản/session riêng.
+  xung đột trên cùng tài khoản (cơ chế phát hiện "video mới" dựa vào đếm
+  số lượng trong lịch sử — chạy song song trên cùng 1 tài khoản dễ nhận
+  nhầm video của người khác). Nếu nhiều người gửi prompt cùng lúc, mỗi
+  người vẫn được nhận job ngay và thấy số video đang xếp trước mình
+  ("📋 Đang có N video xếp trước..."), nhưng phải đợi lần lượt. Nếu cần xử
+  lý thật sự song song, cần nhiều tài khoản/session hailuoai.video riêng.

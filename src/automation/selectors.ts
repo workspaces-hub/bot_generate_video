@@ -149,19 +149,3 @@ export const videoElementCandidates = (page: Page): Array<() => Locator> => [
  */
 export const historyVideoLocator = (page: Page): Locator =>
   page.locator("#create-new-scroll-container video[src]:visible");
-
-/**
- * Trang chi tiết video (sau khi bấm vào video trong lịch sử) có nút dropdown
- * (icon download) — HOVER vào (không phải click) để mở popup chọn
- * "Remove watermark". Class "ant-dropdown-trigger" khá chung chung nên kèm
- * theo class riêng của site để thu hẹp, kèm fallback rộng hơn.
- */
-export const videoDownloadDropdownTriggerCandidates = (page: Page): Array<() => Locator> => [
-  () => page.locator("button.ant-dropdown-trigger.bg-hl_bg_10_legacy"),
-  () => page.locator("button.ant-dropdown-trigger"),
-];
-
-/** Option "Remove watermark" trong popup mở ra sau khi hover nút download. */
-export const removeWatermarkOptionCandidates = (page: Page): Array<() => Locator> => [
-  () => page.getByText(/remove watermark/i),
-];
