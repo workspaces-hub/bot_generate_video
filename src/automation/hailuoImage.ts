@@ -263,19 +263,26 @@ async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeout
  * site có thể thêm khối entry trước rồi lấp dần từng ảnh vào sau (giống
  * cách reference-image thumbnail vẫn "aria-busy" một lúc sau khi đã upload
  * xong). Vì vậy chờ số lượng card đã NGÃ NGŨ (thành công có <img> HOẶC lỗi
- * có data-batch-disabled) ỔN ĐỊNH (không đổi thêm trong 1 lúc) trước khi coi
- * là "đã xong", thay vì đọc số lượng ngay lúc entry vừa xuất hiện — tránh
- * chỉ tải được 1-2/4 ảnh.
+ * thật) ỔN ĐỊNH (không đổi thêm trong 1 lúc) trước khi coi là "đã xong",
+ * thay vì đọc số lượng ngay lúc entry vừa xuất hiện — tránh chỉ tải được
+ * 1-2/4 ảnh.
  *
- * Đếm theo card THÀNH CÔNG hay LỖI đều tính là "đã ngã ngũ" (khác bản trước
- * chỉ đếm ảnh thành công, lastCount>0) — để xử lý đúng cả trường hợp CẢ 4
- * ẢNH ĐỀU LỖI: nếu chỉ đợi ảnh thành công > 0 thì sẽ không bao giờ đúng,
- * khiến hàm này chờ hết nguyên timeoutMs (10 phút) một cách vô ích trước khi
- * downloadImagesInEntry mới báo lỗi "không có ảnh nào". Đếm cả 2 loại giúp
- * phát hiện "đã ngã ngũ" nhanh hơn nhiều, kể cả khi kết quả là toàn bộ lỗi.
+ * Đếm theo card THÀNH CÔNG hay LỖI THẬT đều tính là "đã ngã ngũ" (khác bản
+ * trước chỉ đếm ảnh thành công, lastCount>0) — để xử lý đúng cả trường hợp
+ * CẢ 4 ẢNH ĐỀU LỖI: nếu chỉ đợi ảnh thành công > 0 thì sẽ không bao giờ
+ * đúng, khiến hàm này chờ hết nguyên timeoutMs (10 phút) một cách vô ích
+ * trước khi downloadImagesInEntry mới báo lỗi "không có ảnh nào".
+ *
+ * SỬA LỖI: "data-batch-disabled" KHÔNG có nghĩa là lỗi — card đang xử lý
+ * bình thường (spinner, "Optimizing prompt...") cũng mang thuộc tính này
+ * (xác nhận qua debug HTML thực tế của video), nên cần loại trừ card còn
+ * spinner (".animate-spin") mới đúng là card đã NGÃ NGŨ thành lỗi thật, nếu
+ * không sẽ coi "đang xử lý" là "đã xong" ngay từ đầu → trả kết quả quá sớm.
  */
 async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs = 600_000): Promise<void> {
-  const resolvedCards = entry.locator("div[data-feed-id]:has(img[src]), div[data-feed-id][data-batch-disabled]");
+  const resolvedCards = entry.locator(
+    "div[data-feed-id]:has(img[src]), div[data-feed-id][data-batch-disabled]:not(:has(.animate-spin))",
+  );
   const start = Date.now();
   const pollIntervalMs = 15000;
   const requiredStableMs = 120000;

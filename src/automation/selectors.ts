@@ -177,14 +177,21 @@ export const historyVideoLocator = (page: Page): Locator =>
 
 /**
  * Card lịch sử bị lỗi (generate thất bại) mang data-batch-disabled +
- * aria-disabled="true", KHÔNG có nội dung thật (<video>/<img>) bên trong —
- * đã xác nhận thật qua DOM của tính năng ảnh (1 trong 4 ảnh generate lỗi).
- * Dùng chung marker này để phát hiện video generate lỗi NGAY khi nó xuất
- * hiện trong lịch sử, thay vì chỉ trông chờ toast lỗi hiện trên trang (có
- * thể site chỉ âm thầm đánh dấu card lỗi mà không hiện toast).
+ * aria-disabled="true", KHÔNG có nội dung thật (<video>/<img>) bên trong.
+ *
+ * SỬA LỖI: lúc đầu tưởng data-batch-disabled = "lỗi", nhưng thực tế xác
+ * nhận qua debug HTML là SAI — card đang generate BÌNH THƯỜNG ("Optimizing
+ * prompt...", có spinner .animate-spin, nút Recreate/Cancel) CŨNG mang
+ * data-batch-disabled (ý nghĩa thật: "chưa phải asset hoàn chỉnh/có thể
+ * chọn", áp dụng cho CẢ đang xử lý LẪN lỗi thật) — khiến bot báo lỗi ngay
+ * khi entry mới vừa xuất hiện, dù đang generate bình thường (false
+ * positive). Card ĐANG xử lý luôn có spinner ".animate-spin" (xác nhận qua
+ * class "animate-spin" trên icon xoay); card LỖI THẬT thì không còn spinner
+ * (icon tĩnh, không animate) — dùng ":not(:has(.animate-spin))" để chỉ khớp
+ * card đã NGÃ NGŨ thành lỗi, không phải đang xử lý dở dang.
  */
 export const failedGenerationCardLocator = (page: Page): Locator =>
-  page.locator("#create-new-scroll-container [data-batch-disabled]");
+  page.locator("#create-new-scroll-container [data-batch-disabled]:not(:has(.animate-spin))");
 
 /**
  * CHƯA CÓ DOM THẬT — đây là phỏng đoán ban đầu cho tính năng tạo ẢNH (mới
