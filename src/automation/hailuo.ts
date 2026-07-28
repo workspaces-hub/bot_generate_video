@@ -126,6 +126,32 @@ export async function gotoWithRetry(page: Page, url: string, attempts = 3): Prom
 }
 
 /**
+ * File media (video/ảnh) vừa generate xong đôi khi CDN chưa kịp đồng bộ
+ * object, trả về HTTP 404 dù URL trích xuất từ trang chi tiết là ĐÚNG (đã
+ * xác nhận thực tế: feedId trong URL khớp đúng với ảnh đang tải, không phải
+ * lỗi lấy nhầm URL) — thử lại vài lần trước khi báo lỗi hẳn, thay vì fail
+ * job ngay ở lần đầu.
+ */
+export async function fetchWithRetry(
+  page: Page,
+  url: string,
+  attempts = 4,
+  delayMs = 5000,
+): Promise<import("playwright").APIResponse> {
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const response = await page.context().request.get(url);
+    if (response.ok()) return response;
+    lastStatus = response.status();
+    console.warn(`[hailuo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`);
+    if (attempt < attempts) {
+      await page.waitForTimeout(delayMs);
+    }
+  }
+  throw new GenerationError(`Tải file thất bại sau ${attempts} lần thử: HTTP ${lastStatus}`);
+}
+
+/**
  * Đóng modal Ant Design đang che trang (nếu có) — bấm nút X chuẩn của thư
  * viện (.ant-modal-close), fallback về phím Escape nếu không thấy nút X.
  * Trả về true nếu có modal và đã thử đóng, false nếu không có modal nào.
@@ -324,10 +350,7 @@ export async function downloadVideo(page: Page, video: Locator, jobId: string): 
   }
   const noWatermarkUrl = match[1];
 
-  const response = await page.context().request.get(noWatermarkUrl);
-  if (!response.ok()) {
-    throw new GenerationError(`Tải video (không watermark) thất bại: HTTP ${response.status()}`);
-  }
+  const response = await fetchWithRetry(page, noWatermarkUrl);
   await fs.promises.writeFile(filePath, await response.body());
   return filePath;
 }

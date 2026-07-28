@@ -10,6 +10,7 @@ import {
   clickDismissingModals,
   dismissPaywallIfBlocking,
   ensureLoggedIn,
+  fetchWithRetry,
   gotoWithRetry,
 } from "./hailuo";
 import {
@@ -371,10 +372,7 @@ async function downloadImageByFeedId(
   }
   const noWatermarkUrl = match[1];
 
-  const response = await page.context().request.get(noWatermarkUrl);
-  if (!response.ok()) {
-    throw new GenerationError(`Tải ảnh #${index + 1} (không watermark) thất bại: HTTP ${response.status()}`);
-  }
+  const response = await fetchWithRetry(page, noWatermarkUrl);
 
   // Suy ra đuôi file thật từ URL thay vì hardcode .png — tránh lệch định
   // dạng thật (có thể là .jpg/.webp) khiến Telegram xử lý ảnh lỗi.
