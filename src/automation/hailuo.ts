@@ -279,15 +279,20 @@ async function downloadVideo(page: Page, video: Locator, jobId: string): Promise
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
   const filePath = path.join(config.downloadDir, `${jobId}.mp4`);
 
-  // <video> chỉ để play/pause — phần tử điều hướng sang trang chi tiết là
-  // div cha gần nhất có data-feed-id (xem cấu trúc lịch sử trong README/selectors.ts).
-  const clickableCard = video.locator("xpath=ancestor::div[@data-feed-id][1]");
-  const hasCard = await clickableCard
-    .first()
-    .isVisible()
-    .catch(() => false);
-  await clickDismissingModals(page, hasCard ? clickableCard.first() : video);
-  await page.waitForTimeout(1500);
+  // Click vào video/card để "chuyển trang" không đáng tin cậy (thẻ <video>
+  // chặn click bằng play/pause, card wrapper không phải lúc nào cũng đúng
+  // phần tử điều hướng). Trang chi tiết có URL cố định dạng
+  // /my-work-detail/ai-video/<id>?source-page=create, với <id> chính là
+  // data-feed-id của card — nên điều hướng thẳng bằng goto, bỏ qua click.
+  const card = video.locator("xpath=ancestor::div[@data-feed-id][1]");
+  const feedId = await card.first().getAttribute("data-feed-id").catch(() => null);
+  if (!feedId) {
+    throw new GenerationError("Không lấy được id video (data-feed-id) để mở trang chi tiết tải xuống");
+  }
+
+  const detailUrl = new URL(`/my-work-detail/ai-video/${feedId}`, config.hailuoBaseUrl);
+  detailUrl.searchParams.set("source-page", "create");
+  await gotoWithRetry(page, detailUrl.toString());
 
   const downloadTrigger = await firstVisible(videoDownloadDropdownTriggerCandidates(page), 10_000);
   await downloadTrigger.hover();
