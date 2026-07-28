@@ -14,8 +14,10 @@ import {
   historyVideoLocator,
   modelChipCandidates,
   promptInputCandidates,
+  removeWatermarkOptionCandidates,
   resolutionChipCandidates,
   signInIndicatorCandidates,
+  videoDownloadDropdownTriggerCandidates,
 } from "./selectors";
 
 export class GenerationError extends Error {}
@@ -58,7 +60,7 @@ export async function generateVideo(
 
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    // await captureSnapshot(page, jobId, "after-generate-click");
+    await captureSnapshot(page, jobId + "_" + "after-generate-click", "after-generate-click");
 
     const newVideo = await waitForNewVideo(page, baseline, config.generationTimeoutMs);
 
@@ -267,21 +269,36 @@ async function waitForNewVideo(page: Page, baseline: VideoBaseline, timeoutMs: n
   throw new GenerationError(`Hết thời gian chờ tạo video (timeout ${timeoutMs}ms)`);
 }
 
+/**
+ * Tải video KHÔNG watermark: click vào video trong lịch sử để chuyển sang
+ * trang chi tiết → hover nút dropdown (icon download) để mở popup → chọn
+ * "Remove watermark" → bắt sự kiện download của Playwright để lưu file.
+ * (Trước đây fetch thẳng attribute src của thẻ <video> — bản đó có watermark.)
+ */
 async function downloadVideo(page: Page, video: Locator, jobId: string): Promise<string> {
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
   const filePath = path.join(config.downloadDir, `${jobId}.mp4`);
 
-  const src = await video.getAttribute("src");
-  if (!src) {
-    throw new GenerationError("Video mới không có thuộc tính src để tải xuống");
-  }
+  // <video> chỉ để play/pause — phần tử điều hướng sang trang chi tiết là
+  // div cha gần nhất có data-feed-id (xem cấu trúc lịch sử trong README/selectors.ts).
+  const clickableCard = video.locator("xpath=ancestor::div[@data-feed-id][1]");
+  const hasCard = await clickableCard
+    .first()
+    .isVisible()
+    .catch(() => false);
+  await clickDismissingModals(page, hasCard ? clickableCard.first() : video);
+  await page.waitForTimeout(1500);
 
-  const absoluteUrl = new URL(src, page.url()).toString();
-  const response = await page.context().request.get(absoluteUrl);
-  if (!response.ok()) {
-    throw new GenerationError(`Tải video thất bại: HTTP ${response.status()}`);
-  }
-  await fs.promises.writeFile(filePath, await response.body());
+  const downloadTrigger = await firstVisible(videoDownloadDropdownTriggerCandidates(page), 10_000);
+  await downloadTrigger.hover();
+
+  const removeWatermarkOption = await firstVisible(removeWatermarkOptionCandidates(page), 5000);
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30_000 }),
+    removeWatermarkOption.click(),
+  ]);
+  await download.saveAs(filePath);
   return filePath;
 }
 
