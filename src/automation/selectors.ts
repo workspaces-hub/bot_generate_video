@@ -120,6 +120,10 @@ export const errorIndicatorCandidates = (page: Page): Array<() => Locator> => [
   // Toast "Please select a picture" (toast_please_select_pic) — chế độ
   // Start/End Frame đang bật nhưng bot chỉ điền text, không upload ảnh nào.
   () => page.getByText(/please select a picture/i),
+  // Toast thực tế gặp: bấm Generate khi ảnh start frame vẫn còn aria-busy
+  // (chưa xử lý xong) — đã sửa gốc bằng cách đợi hết busy trước khi bấm,
+  // giữ lại đây làm lớp phòng vệ thứ 2 nếu race lại xảy ra.
+  () => page.getByText(/wait until picture upload completes/i),
 ];
 
 /**

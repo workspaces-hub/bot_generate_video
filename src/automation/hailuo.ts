@@ -6,9 +6,11 @@ import { getBrowserContext } from "./browser";
 import {
   antModalCloseButtonLocator,
   antModalWrapperLocator,
+  busyReferenceImageThumbnailLocator,
   creditPaywallModalCandidates,
   dropdownOptionCandidates,
   errorIndicatorCandidates,
+  failedGenerationCardLocator,
   firstVisible,
   generateButtonCandidates,
   historyVideoLocator,
@@ -100,8 +102,7 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
       clickDismissingModals(page, button),
     ]);
     await fileChooser.setFiles(imagePath);
-    await page.waitForTimeout(2000);
-    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await page.waitForTimeout(1500);
   } catch (err) {
     throw new GenerationError(
       `Không tải được ảnh start frame lên — site có thể đã đổi giao diện upload: ${
@@ -109,6 +110,28 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
       }`,
     );
   }
+
+  // Thực tế xác nhận qua debug HTML: thumbnail start frame mang CÙNG marker
+  // đã dùng cho ảnh tham chiếu (aria-label="Uploaded image, click to
+  // preview" + aria-busy="true"). Bấm Generate khi ảnh còn "aria-busy"
+  // khiến site âm thầm từ chối bằng toast "Wait until picture upload
+  // completes" (không khớp bất kỳ error indicator nào), khiến bot chờ vô
+  // ích hết nguyên generationTimeoutMs (5 phút) rồi mới timeout. Phải đợi
+  // hết busy trước khi coi như upload xong.
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll('[aria-label="Uploaded image, click to preview"][aria-busy="true"]').length === 0,
+      { timeout: 60_000 },
+    );
+  } catch {
+    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
+    if (stillBusy > 0) {
+      throw new GenerationError(
+        "Ảnh start frame vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh bị site từ chối.",
+      );
+    }
+  }
+  await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
 }
 
 /**
@@ -280,6 +303,7 @@ interface VideoBaseline {
   count: number;
   firstSrc: string | null;
   lastSrc: string | null;
+  failedCount: number;
 }
 
 async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
@@ -289,6 +313,7 @@ async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
     count,
     firstSrc: count > 0 ? await videos.first().getAttribute("src") : null,
     lastSrc: count > 0 ? await videos.last().getAttribute("src") : null,
+    failedCount: await failedGenerationCardLocator(page).count(),
   };
 }
 
@@ -326,6 +351,15 @@ async function waitForNewVideo(page: Page, baseline: VideoBaseline, timeoutMs: n
       .catch(() => false);
     if (failed) {
       throw new GenerationError("Website báo lỗi khi tạo video");
+    }
+
+    // Site có thể chỉ âm thầm đánh dấu card lỗi (data-batch-disabled, không
+    // có <video>/<img> thật) trong lịch sử mà không hiện toast lỗi nào —
+    // marker đã xác nhận thật qua tính năng ảnh. Phát hiện ngay để báo lỗi
+    // rõ ràng, thay vì chờ hết timeout rồi mới báo "hết thời gian chờ".
+    const currentFailedCount = await failedGenerationCardLocator(page).count();
+    if (currentFailedCount > baseline.failedCount) {
+      throw new GenerationError("Không tạo được video — site báo lỗi generation này");
     }
 
     await page.waitForTimeout(pollIntervalMs);
