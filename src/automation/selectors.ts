@@ -149,3 +149,41 @@ export const videoElementCandidates = (page: Page): Array<() => Locator> => [
  */
 export const historyVideoLocator = (page: Page): Locator =>
   page.locator("#create-new-scroll-container video[src]:visible");
+
+/**
+ * CHƯA CÓ DOM THẬT — đây là phỏng đoán ban đầu cho tính năng tạo ẢNH (mới
+ * thêm). Khung nhập prompt có tab chuyển "Video"/"Image"/"Audio" (đã thấy
+ * trong screenshot trước đây nhưng chưa lấy được HTML chính xác). Nhiều
+ * khả năng cần chỉnh qua debug snapshot sau lần chạy thử đầu.
+ */
+export const imageModeTabCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^image$/i }),
+  () => page.getByText(/^image$/i),
+];
+
+/**
+ * Nút thêm ảnh tham chiếu ở chế độ tạo ảnh — cùng cơ chế "Upload Start/End
+ * Frame" trước đây (div role="button" mở file picker hệ điều hành). Xác
+ * nhận được DOM thật: aria-label="Upload Image Refs(N/16)" — số đếm N thay
+ * đổi động sau mỗi lần upload, nên chỉ match phần PREFIX cố định, không
+ * match cả cụm (khớp cả số sẽ luôn fail sau lần upload đầu vì số đổi).
+ */
+export const addReferenceImageButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^Upload Image Refs/i }),
+];
+
+/** Đọc số ảnh tham chiếu hiện tại từ aria-label "Upload Image Refs(N/16)". */
+export async function getReferenceImageCount(page: Page): Promise<number | null> {
+  const button = page.getByRole("button", { name: /^Upload Image Refs/i }).first();
+  const label = await button.getAttribute("aria-label").catch(() => null);
+  const match = label?.match(/\((\d+)\/\d+\)/);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Khu vực lịch sử ảnh đã tạo — tương tự historyVideoLocator nhưng cho thẻ
+ * <img>. Scope vào div[data-feed-id] để tránh khớp icon/avatar không liên
+ * quan tới nội dung đã tạo. CHƯA CÓ DOM THẬT, cần xác nhận sau khi test.
+ */
+export const historyImageLocator = (page: Page): Locator =>
+  page.locator("#create-new-scroll-container div[data-feed-id] img[src]:visible");

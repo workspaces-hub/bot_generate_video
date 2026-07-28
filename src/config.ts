@@ -15,14 +15,18 @@ export const config = {
   botToken: required("BOT_TOKEN"),
   // Video kết quả (hoặc "404" khi lỗi) luôn đăng vào group cố định này.
   groupChatId: Number(required("GROUP_CHAT_ID")),
+  groupChatIdTest: Number(required("GROUP_CHAT_ID_TEST")),
 
   hailuoBaseUrl: process.env.HAILUO_BASE_URL ?? "https://hailuoai.video",
-  hailuoCreatePath: process.env.HAILUO_CREATE_PATH ?? "/create/video",
+  hailuoCreateVideoPath: process.env.HAILUO_CREATE_VIDEO_PATH ?? "/create/video",
+  hailuoCreateImagePath: process.env.HAILUO_CREATE_IMAGE_PATH ?? "/create/image-generation",
 
   storageStatePath: path.resolve(
     process.env.STORAGE_STATE_PATH ?? "./storage/session.json",
   ),
   downloadDir: path.resolve(process.env.DOWNLOAD_DIR ?? "./storage/downloads"),
+  // Ảnh tham chiếu tải từ Telegram (tính năng tạo ảnh) lưu tạm ở đây.
+  uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? "./storage/uploads"),
   debugDir: path.resolve("./storage/debug"),
 
   headless: (process.env.HEADLESS ?? "false").toLowerCase() === "true",

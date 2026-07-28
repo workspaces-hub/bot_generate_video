@@ -140,9 +140,10 @@ npm run dev     # chạy trực tiếp bằng tsx, tự reload khi sửa code
 npm run build && npm run start
 ```
 
-Trong group đã cấu hình ở `GROUP_CHAT_ID`, gõ `/start` để hiện menu với nút
-**Prompt**. Bấm nút → bot hỏi nội dung prompt → gõ prompt ngay trong
-group. Video (hoặc `404` nếu lỗi) sẽ được đăng lại vào group đó.
+Trong group đã cấu hình ở `GROUP_CHAT_ID`, gõ `/start` để hiện menu với 2
+nút **Prompt** (tạo video) và **Image** (tạo ảnh). Bấm nút → bot hỏi nội
+dung prompt → gõ prompt ngay trong group. Kết quả (hoặc `404` nếu lỗi) sẽ
+được đăng lại vào group đó.
 
 Có thể chỉ định thêm **Model**/**Resolution** bằng cách thêm 2 dòng sau nội
 dung prompt:
@@ -163,6 +164,33 @@ Model: Hailuo 2.0
   log `[hailuo] Không chọn được model/resolution ...` và debug snapshot để
   chỉnh `modelChipCandidates`/`resolutionChipCandidates` trong
   `src/automation/selectors.ts` nếu cần.
+
+### Tạo ảnh
+
+Bấm nút **Image** trong menu để chuyển sang chế độ tạo ảnh:
+- Gửi **text** → tạo ảnh thuần từ prompt.
+- Gửi **1 hoặc nhiều ảnh tham chiếu** (tối đa 16) kèm caption = prompt —
+  chọn nhiều ảnh trong Telegram rồi gửi cùng lúc, hoặc gửi liên tiếp trong
+  vài giây (bot tự gom theo người gửi + thời gian, xem
+  `PHOTO_BUFFER_DEBOUNCE_MS` trong `src/bot/handlers.ts`). Ảnh không kèm
+  caption sẽ bị từ chối, yêu cầu gửi lại.
+
+**⚠️ Tính năng này CHƯA ĐƯỢC TEST THẬT.** Khác với tạo video (đã tinh chỉnh
+qua nhiều lần debug thực tế với DOM thật của hailuoai.video), phần tự động
+hoá tạo ảnh trong `src/automation/hailuoImage.ts` và các selector liên quan
+trong `src/automation/selectors.ts`
+(`imageModeTabCandidates`, `addReferenceImageButtonCandidates`,
+`historyImageLocator`) đều là **phỏng đoán ban đầu** dựa trên suy luận từ
+giao diện tạo video tương tự — rất nhiều khả năng cần chỉnh sau lần chạy
+thử đầu. Khi gặp lỗi, xem debug snapshot (`storage/debug/<jobId>.png/html`)
+và gửi cho tôi (hoặc tự đọc DOM) để sửa đúng selector, giống cách các tính
+năng khác trong project này đã được hoàn thiện dần qua thực tế.
+
+Cũng chưa rõ ảnh tạo ra có bị watermark hay không (video thì có, và có
+field `downloadURLWithoutWatermark` riêng để tải bản sạch — xem
+`downloadVideo()` trong `hailuo.ts`). `downloadImage()` hiện đang fetch
+thẳng `src` của ảnh; nếu ảnh tải về có watermark, cần áp dụng lại kỹ thuật
+đọc dữ liệu từ trang chi tiết tương tự video.
 
 ## Khi automation lỗi / cần chỉnh selector
 
@@ -232,6 +260,9 @@ cài lại gì khác).
   xung đột trên cùng tài khoản (cơ chế phát hiện "video mới" dựa vào đếm
   số lượng trong lịch sử — chạy song song trên cùng 1 tài khoản dễ nhận
   nhầm video của người khác). Nếu nhiều người gửi prompt cùng lúc, mỗi
-  người vẫn được nhận job ngay và thấy số video đang xếp trước mình
-  ("📋 Đang có N video xếp trước..."), nhưng phải đợi lần lượt. Nếu cần xử
-  lý thật sự song song, cần nhiều tài khoản/session hailuoai.video riêng.
+  người vẫn được nhận job ngay nhưng phải đợi lần lượt. Nếu cần xử lý thật
+  sự song song, cần nhiều tài khoản/session hailuoai.video riêng.
+- Hàng đợi được ghi ra `storage/queue.json` sau mỗi thay đổi — nếu bot bị
+  restart/crash giữa chừng (deploy, pm2 restart, mất điện...), job đang chờ
+  hoặc đang generate dở sẽ **không bị mất**: lúc khởi động lại, bot tự đọc
+  file này và tiếp tục xử lý. Không cần chỉnh gì thêm, cơ chế này tự động.

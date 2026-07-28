@@ -5,4 +5,6 @@ storage/session.json
 storage/manual-cookies.json
 storage/manual-localstorage.json
 storage/downloads/
+storage/uploads/
 storage/debug/
+storage/queue.json

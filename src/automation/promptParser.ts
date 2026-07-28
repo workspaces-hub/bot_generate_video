@@ -36,7 +36,7 @@ export function parsePromptMessage(raw: string): ParsedPrompt {
   return {
     text: promptLines.join("\n").trim(),
     resolution,
-    model: model || DEFAULT_MODEL,
+    model: model || '',
   };
 }
 

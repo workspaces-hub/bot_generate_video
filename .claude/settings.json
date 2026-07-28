@@ -9,7 +9,8 @@
       "Bash(grep -n \"Định dạng: \\\\`http\" /Users/linhnt/workspaces/bot/generate_video/README.md)",
       "Bash(timeout 30 npx tsx scripts/check-proxy.ts)",
       "Bash(npx tsx *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(grep -n \"Tạm để trống \\\\`PROXY_SERVER\\\\`\" /Users/linhnt/workspaces/bot/generate_video/README.md)"
     ]
   }
 }

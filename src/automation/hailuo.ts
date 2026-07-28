@@ -33,7 +33,7 @@ export async function generateVideo(
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
-    const url = new URL(config.hailuoCreatePath, config.hailuoBaseUrl).toString();
+    const url = new URL(config.hailuoCreateVideoPath, config.hailuoBaseUrl).toString();
     await gotoWithRetry(page, url);
 
     await ensureLoggedIn(page);
@@ -99,7 +99,8 @@ async function selectChipOption(
  * phổ biến khi chạy qua proxy — thử lại vài lần trước khi báo lỗi hẳn, thay
  * vì fail job ngay ở lần đầu.
  */
-async function gotoWithRetry(page: Page, url: string, attempts = 3): Promise<void> {
+/** Xuất ra để hailuoImage.ts (tạo ảnh) dùng lại — cùng site, cùng vấn đề mạng/proxy. */
+export async function gotoWithRetry(page: Page, url: string, attempts = 3): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -146,7 +147,7 @@ async function dismissAntModalIfPresent(page: Page): Promise<boolean> {
  * chợt ở nhiều thời điểm) thì tự đóng modal rồi thử lại 1 lần trước khi báo
  * lỗi hẳn.
  */
-async function clickDismissingModals(page: Page, locator: Locator, timeoutMs = 15_000): Promise<void> {
+export async function clickDismissingModals(page: Page, locator: Locator, timeoutMs = 15_000): Promise<void> {
   try {
     await locator.click({ timeout: timeoutMs });
   } catch (err) {
@@ -171,7 +172,7 @@ async function clickWithForceFallback(locator: Locator, timeoutMs = 10_000): Pro
   }
 }
 
-async function ensureLoggedIn(page: Page): Promise<void> {
+export async function ensureLoggedIn(page: Page): Promise<void> {
   const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
     .then(() => true)
     .catch(() => false);
@@ -189,7 +190,7 @@ async function ensureLoggedIn(page: Page): Promise<void> {
  * bằng phím Escape (đa số modal/dialog đều lắng nghe phím này); nếu vẫn còn
  * mới coi là bị chặn thật và báo lỗi rõ ràng.
  */
-async function dismissPaywallIfBlocking(page: Page): Promise<void> {
+export async function dismissPaywallIfBlocking(page: Page): Promise<void> {
   const visible = await firstVisible(creditPaywallModalCandidates(page), 2000)
     .then(() => true)
     .catch(() => false);
@@ -334,7 +335,7 @@ export async function captureSnapshot(page: Page, jobId: string, label: string):
 }
 
 /** Chụp trạng thái trang khi job THỰC SỰ lỗi (gọi trong catch). */
-async function captureErrorSnapshot(page: Page, jobId: string, err: unknown): Promise<void> {
+export async function captureErrorSnapshot(page: Page, jobId: string, err: unknown): Promise<void> {
   try {
     await writeSnapshotFiles(page, jobId);
   } catch (debugErr) {

@@ -13,7 +13,7 @@ async function main(): Promise<void> {
   const context = await getBrowserContext();
   const page = await context.newPage();
 
-  const url = new URL(config.hailuoCreatePath, config.hailuoBaseUrl).toString();
+  const url = new URL(config.hailuoCreateVideoPath, config.hailuoBaseUrl).toString();
   await page.goto(url, { waitUntil: "domcontentloaded" });
 
   // "domcontentloaded" fire rất sớm với SPA (React/Next.js) — DOM rỗng đã

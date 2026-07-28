@@ -5,17 +5,29 @@ import { randomUUID } from "node:crypto";
 import type { Telegram } from "telegraf";
 import { config } from "./config";
 import { generateVideo } from "./automation/hailuo";
+import { generateImage } from "./automation/hailuoImage";
 
-export interface VideoJob {
+interface BaseJob {
   chatId: number;
   prompt: string;
-  resolution?: string;
-  model?: string;
-  /** Tin nhắn prompt gốc — dùng để reply video/404 vào đúng chỗ. */
+  /** Tin nhắn prompt gốc — dùng để reply kết quả/404 vào đúng chỗ. */
   promptMessageId: number;
-  /** Tin nhắn "⏳ Đang tạo video..." — xoá đi khi job xong (nếu còn tồn tại). */
+  /** Tin nhắn "⏳ Đang tạo..." — xoá đi khi job xong (nếu còn tồn tại). */
   statusMessageId?: number;
 }
+
+export interface VideoGenerationJob extends BaseJob {
+  type: "video";
+  resolution?: string;
+  model?: string;
+}
+
+export interface ImageGenerationJob extends BaseJob {
+  type: "image";
+  referenceImagePaths?: string[];
+}
+
+export type GenerationJob = VideoGenerationJob | ImageGenerationJob;
 
 const QUEUE_FILE = path.resolve("./storage/queue.json");
 
@@ -23,7 +35,7 @@ const QUEUE_FILE = path.resolve("./storage/queue.json");
 // qua restart/crash. Job vẫn nằm trong mảng (và trong file) SUỐT lúc xử lý,
 // chỉ gỡ ra sau khi thực sự xong (thành công/lỗi) — nếu bot crash giữa
 // chừng lúc generate, job vẫn còn trong file để thử lại ở lần chạy sau.
-const jobs: VideoJob[] = [];
+const jobs: GenerationJob[] = [];
 let processing = false;
 let telegram: Telegram | null = null;
 
@@ -37,7 +49,7 @@ export function initQueue(botTelegram: Telegram): void {
 function loadPersistedJobs(): void {
   try {
     if (!fs.existsSync(QUEUE_FILE)) return;
-    const restored: VideoJob[] = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+    const restored: GenerationJob[] = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
     if (restored.length > 0) {
       jobs.push(...restored);
       console.log(`[queue] Khôi phục ${restored.length} job còn dang dở từ lần chạy trước.`);
@@ -57,10 +69,11 @@ function persistJobs(): void {
 }
 
 /**
- * Chạy tuần tự từng job (1 browser context, 1 video tại một thời điểm)
- * để tránh nhiều tab cùng thao tác trên cùng một tài khoản hailuoai.video.
+ * Chạy tuần tự từng job — video và ảnh dùng CHUNG 1 hàng đợi (1 browser
+ * context, 1 job tại một thời điểm) để tránh nhiều tab cùng thao tác trên
+ * cùng một tài khoản hailuoai.video.
  */
-export function enqueueJob(job: VideoJob): void {
+export function enqueueJob(job: GenerationJob): void {
   jobs.push(job);
   persistJobs();
   void processQueue();
@@ -78,16 +91,20 @@ async function processQueue(): Promise<void> {
       const job = jobs[0];
       const jobId = randomUUID();
       try {
-        const filePath = await generateVideo(
-          job.prompt,
-          { resolution: job.resolution, model: job.model },
-          jobId,
-        );
+        const filePath =
+          job.type === "video"
+            ? await generateVideo(job.prompt, { resolution: job.resolution, model: job.model }, jobId)
+            : await generateImage(job.prompt, { referenceImagePaths: job.referenceImagePaths }, jobId);
         await notifySuccess(job, filePath);
         await fsp.unlink(filePath).catch(() => {});
       } catch (err) {
         await notifyError(job, err);
       } finally {
+        if (job.type === "image") {
+          for (const p of job.referenceImagePaths ?? []) {
+            await fsp.unlink(p).catch(() => {});
+          }
+        }
         jobs.shift();
         persistJobs();
       }
@@ -97,30 +114,32 @@ async function processQueue(): Promise<void> {
   }
 }
 
-async function notifySuccess(job: VideoJob, filePath: string): Promise<void> {
+async function notifySuccess(job: GenerationJob, filePath: string): Promise<void> {
   if (!telegram) return;
-  await telegram
-    .sendVideo(
-      job.chatId,
-      { source: filePath },
-      {
-        caption: `✅ Video cho prompt: "${job.prompt}"`,
-        reply_parameters: { message_id: job.promptMessageId },
-      },
-    )
-    .catch(async (err) => {
-      console.error("[queue] Gửi video thất bại:", err);
-      await telegram!.sendMessage(job.chatId, "404", {
-        reply_parameters: { message_id: job.promptMessageId },
-      });
-      await notifyAdmins(err);
+  const send =
+    job.type === "video"
+      ? telegram.sendVideo(job.chatId, { source: filePath }, {
+          caption: `✅ Video cho prompt: "${job.prompt}"`,
+          reply_parameters: { message_id: job.promptMessageId },
+        })
+      : telegram.sendPhoto(job.chatId, { source: filePath }, {
+          caption: `✅ Ảnh cho prompt: "${job.prompt}"`,
+          reply_parameters: { message_id: job.promptMessageId },
+        });
+
+  await send.catch(async (err) => {
+    console.error(`[queue] Gửi ${job.type === "video" ? "video" : "ảnh"} thất bại:`, err);
+    await telegram!.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
     });
+    await notifyAdmins(err);
+  });
   await deleteStatusMessage(job);
 }
 
-async function notifyError(job: VideoJob, err: unknown): Promise<void> {
+async function notifyError(job: GenerationJob, err: unknown): Promise<void> {
   if (!telegram) return;
-  console.error("[queue] Tạo video thất bại:", err);
+  console.error(`[queue] Tạo ${job.type === "video" ? "video" : "ảnh"} thất bại:`, err);
   await notifyAdmins(err);
   await telegram.sendMessage(job.chatId, "404", {
     reply_parameters: { message_id: job.promptMessageId },
@@ -128,7 +147,7 @@ async function notifyError(job: VideoJob, err: unknown): Promise<void> {
   await deleteStatusMessage(job);
 }
 
-async function deleteStatusMessage(job: VideoJob): Promise<void> {
+async function deleteStatusMessage(job: GenerationJob): Promise<void> {
   if (job.statusMessageId) {
     await telegram!.deleteMessage(job.chatId, job.statusMessageId).catch(() => {});
   }
