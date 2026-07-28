@@ -57,8 +57,13 @@ export async function generateImage(
     await ensureLoggedIn(page);
     await dismissPaywallIfBlocking(page);
 
-    const imageTab = await firstVisible(imageModeTabCandidates(page));
-    await clickDismissingModals(page, imageTab);
+    // Điều hướng thẳng tới config.hailuoCreateImagePath (URL riêng cho tạo
+    // ảnh) đã tự vào sẵn chế độ Image — thực tế xác nhận không còn tab
+    // "Image" nào để bấm nữa. Vẫn thử bấm (best-effort, không chặn job)
+    // phòng trường hợp site đổi lại UI dùng chung 1 trang có toggle.
+    await firstVisible(imageModeTabCandidates(page), 3000)
+      .then((imageTab) => clickDismissingModals(page, imageTab))
+      .catch(() => {});
     await dismissPromoOverlayIfPresent(page);
 
     for (let i = 0; i < referenceImagePaths.length; i++) {
