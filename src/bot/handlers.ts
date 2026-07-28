@@ -30,6 +30,8 @@ const waitingMode = new Map<number, PendingMode>();
 const PHOTO_BUFFER_DEBOUNCE_MS = 3000;
 interface PendingPhotoBuffer {
   ctx: Context;
+  /** "video": chỉ lấy ảnh GẦN NHẤT làm start frame. "image": lấy HẾT làm ảnh tham chiếu. */
+  mode: PendingMode;
   photoArrays: Array<Array<{ file_id: string }>>;
   caption?: string;
   promptMessageId: number;
@@ -82,6 +84,7 @@ interface SubmitVideoParams {
   promptMessageId: number;
   userId: number;
   rawText: string;
+  startFramePath?: string;
 }
 
 async function submitVideoJob({
@@ -90,16 +93,19 @@ async function submitVideoJob({
   promptMessageId,
   userId,
   rawText,
+  startFramePath,
 }: SubmitVideoParams): Promise<void> {
   const { text: prompt, resolution, model } = parsePromptMessage(rawText);
 
   if (!prompt) {
     await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
+    if (startFramePath) await fs.unlink(startFramePath).catch(() => {});
     return;
   }
 
+  const startFrameNote = startFramePath ? " (kèm ảnh start frame)" : "";
   const statusMessage = await ctx.reply(
-    `⏳ Đang tạo video cho prompt:\n"${prompt}"`,
+    `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${startFrameNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
     },
@@ -113,6 +119,7 @@ async function submitVideoJob({
     prompt,
     resolution,
     model: isAdmin(userId) ? model : DEFAULT_MODEL,
+    startFramePath,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
   });
@@ -146,7 +153,7 @@ async function submitImageJob({
       ? ` (kèm ${referenceImagePaths.length} ảnh tham chiếu)`
       : "";
   const statusMessage = await ctx.reply(
-    `⏳ Đang tạo ảnh cho prompt:\n"${prompt}"${refNote}`,
+    `⏳ Đang tạo ảnh cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${refNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
     },
@@ -172,7 +179,7 @@ function finalizeIfHasCaption(userId: number): void {
   if (!current) return;
   if ((current.caption ?? "").trim()) {
     pendingPhotoBuffers.delete(userId);
-    void handleImageBuffer(current, current.caption ?? "");
+    void handlePhotoBuffer(current, current.caption ?? "");
   }
 }
 
@@ -187,12 +194,35 @@ function scheduleFinalize(userId: number): void {
   );
 }
 
-async function handleImageBuffer(
+async function handlePhotoBuffer(
   buffer: PendingPhotoBuffer,
   rawText: string,
 ): Promise<void> {
-  const { ctx, photoArrays, promptMessageId } = buffer;
-  if (!ctx.chat) return;
+  const { ctx, mode, photoArrays, promptMessageId } = buffer;
+  if (!ctx.chat || !ctx.from) return;
+
+  if (mode === "video") {
+    // Chỉ cần ảnh GẦN NHẤT làm start frame — các ảnh gửi trước đó (nếu có)
+    // bị bỏ qua, không cần tải về.
+    let startFramePath: string;
+    try {
+      startFramePath = await downloadTelegramPhoto(ctx, photoArrays[photoArrays.length - 1]);
+    } catch (err) {
+      console.error("[bot] Tải ảnh Telegram thất bại:", err);
+      await ctx.reply("Không tải được ảnh từ Telegram, đã huỷ.", promptMenu);
+      return;
+    }
+
+    await submitVideoJob({
+      ctx,
+      groupChatId: ctx.chat.id,
+      promptMessageId,
+      userId: ctx.from.id,
+      rawText,
+      startFramePath,
+    });
+    return;
+  }
 
   const referenceImagePaths: string[] = [];
   try {
@@ -227,7 +257,9 @@ export function registerHandlers(bot: Telegraf): void {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     waitingMode.set(ctx.from.id, "video");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo:`,
+      `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
+        `hoặc gửi kèm 1 ảnh làm start frame trước (nếu gửi nhiều ảnh, ảnh gửi gần nhất sẽ được dùng), ` +
+        `rồi gõ prompt ở tin nhắn tiếp theo.`,
     );
   });
 
@@ -259,7 +291,7 @@ export function registerHandlers(bot: Telegraf): void {
       clearTimeout(photoBuffer.timer);
       pendingPhotoBuffers.delete(userId);
       waitingMode.delete(userId);
-      await handleImageBuffer(photoBuffer, ctx.message.text);
+      await handlePhotoBuffer(photoBuffer, ctx.message.text);
       return;
     }
 
@@ -287,18 +319,20 @@ export function registerHandlers(bot: Telegraf): void {
     }
   });
 
-  // Ảnh tham chiếu cho chế độ tạo ảnh — chỉ nhận khi đang ở mode "image"
-  // hoặc đã có buffer đang chờ (đang gom thêm ảnh tiếp theo).
+  // Ảnh cho chế độ tạo ảnh (tham chiếu, tối đa MAX_REFERENCE_IMAGES) hoặc
+  // chế độ tạo video (start frame, chỉ ảnh gần nhất được dùng) — chỉ nhận
+  // khi đang ở mode tương ứng hoặc đã có buffer đang chờ (đang gom thêm ảnh
+  // tiếp theo, giữ nguyên mode đã chọn từ ảnh đầu tiên).
   bot.on(message("photo"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
     const userId = ctx.from.id;
-    const alreadyBuffering = pendingPhotoBuffers.has(userId);
-    if (waitingMode.get(userId) !== "image" && !alreadyBuffering) return next();
+    const existing = pendingPhotoBuffers.get(userId);
+    const mode = existing?.mode ?? waitingMode.get(userId);
+    if (mode !== "image" && mode !== "video") return next();
 
     waitingMode.delete(userId);
 
-    const existing = pendingPhotoBuffers.get(userId);
     if (existing) {
       if (existing.photoArrays.length < MAX_REFERENCE_IMAGES) {
         existing.photoArrays.push(ctx.message.photo);
@@ -308,6 +342,7 @@ export function registerHandlers(bot: Telegraf): void {
     } else {
       pendingPhotoBuffers.set(userId, {
         ctx,
+        mode,
         photoArrays: [ctx.message.photo],
         caption: ctx.message.caption,
         promptMessageId: ctx.message.message_id,

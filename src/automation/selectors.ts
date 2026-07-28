@@ -47,6 +47,18 @@ export const resolutionChipCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
+ * Nút "Start Frame" (upload ảnh khởi đầu video) hiện trực tiếp trong khung
+ * nhập prompt tạo video, cạnh "End Frame" — đã thấy qua screenshot debug
+ * nhưng CHƯA CÓ DOM thật (chưa lấy được HTML lúc đó), nên đây là candidate
+ * ban đầu, có thể cần chỉnh qua debug snapshot lần chạy thử đầu — cùng cách
+ * các tính năng khác trong project này đã được tinh chỉnh dần.
+ */
+export const startFrameButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /start frame/i }),
+  () => page.getByText(/^start frame$/i),
+];
+
+/**
  * Popover mở ra sau khi bấm chip model/resolution là Ant Design popover
  * (class "ant-popover-content"). Chỉ 1 popover mở tại 1 thời điểm, nên scope
  * tìm kiếm vào đây giúp tránh khớp nhầm chữ ẩn ở nơi khác trên trang.

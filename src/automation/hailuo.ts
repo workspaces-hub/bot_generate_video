@@ -16,6 +16,7 @@ import {
   promptInputCandidates,
   resolutionChipCandidates,
   signInIndicatorCandidates,
+  startFrameButtonCandidates,
 } from "./selectors";
 
 export class GenerationError extends Error {}
@@ -23,11 +24,13 @@ export class GenerationError extends Error {}
 export interface GenerateVideoOptions {
   resolution?: string;
   model?: string;
+  /** Ảnh start frame (tuỳ chọn) — nếu không có, tạo video thuần từ text như bình thường. */
+  startFramePath?: string;
 }
 
 export async function generateVideo(
   prompt: string,
-  { resolution, model }: GenerateVideoOptions,
+  { resolution, model, startFramePath }: GenerateVideoOptions,
   jobId: string,
 ): Promise<string> {
   const context = await getBrowserContext();
@@ -50,6 +53,10 @@ export async function generateVideo(
     const promptInput = await firstVisible(promptInputCandidates(page), 30_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
+
+    if (startFramePath) {
+      await uploadStartFrame(page, startFramePath);
+    }
 
     if (model) {
       await selectChipOption(page, modelChipCandidates(page), model, "model");
@@ -76,6 +83,31 @@ export async function generateVideo(
     throw err instanceof GenerationError ? err : new GenerationError(err instanceof Error ? err.message : String(err));
   } finally {
     await page.close();
+  }
+}
+
+/**
+ * Upload ảnh "Start Frame" cho video (tuỳ chọn, người dùng yêu cầu rõ ràng
+ * nên fail cứng nếu không tải lên được, thay vì âm thầm bỏ qua như
+ * selectChipOption — khác model/resolution, start frame ảnh hưởng trực tiếp
+ * tới nội dung video nên không thể để lặng lẽ tạo sai).
+ */
+async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
+  try {
+    const button = await firstVisible(startFrameButtonCandidates(page), 8000);
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent("filechooser", { timeout: 10_000 }),
+      clickDismissingModals(page, button),
+    ]);
+    await fileChooser.setFiles(imagePath);
+    await page.waitForTimeout(2000);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+  } catch (err) {
+    throw new GenerationError(
+      `Không tải được ảnh start frame lên — site có thể đã đổi giao diện upload: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
 }
 

@@ -20,6 +20,8 @@ export interface VideoGenerationJob extends BaseJob {
   type: "video";
   resolution?: string;
   model?: string;
+  /** Ảnh start frame (tuỳ chọn) — nếu có nhiều ảnh gửi lên, lấy ảnh gần nhất. */
+  startFramePath?: string;
 }
 
 export interface ImageGenerationJob extends BaseJob {
@@ -92,7 +94,11 @@ async function processQueue(): Promise<void> {
       const jobId = randomUUID();
       try {
         if (job.type === "video") {
-          const filePath = await generateVideo(job.prompt, { resolution: job.resolution, model: job.model }, jobId);
+          const filePath = await generateVideo(
+            job.prompt,
+            { resolution: job.resolution, model: job.model, startFramePath: job.startFramePath },
+            jobId,
+          );
           await notifyVideoSuccess(job, filePath);
           await fsp.unlink(filePath).catch(() => {});
         } else {
@@ -107,6 +113,8 @@ async function processQueue(): Promise<void> {
           for (const p of job.referenceImagePaths ?? []) {
             await fsp.unlink(p).catch(() => {});
           }
+        } else if (job.startFramePath) {
+          await fsp.unlink(job.startFramePath).catch(() => {});
         }
         jobs.shift();
         persistJobs();
