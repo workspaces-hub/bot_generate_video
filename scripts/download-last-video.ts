@@ -1,6 +1,6 @@
 import { config } from "../src/config";
 import { getBrowserContext } from "../src/automation/browser";
-import { downloadVideo } from "../src/automation/hailuo";
+import { captureSnapshot, downloadVideo } from "../src/automation/hailuo";
 import { historyVideoLocator } from "../src/automation/selectors";
 
 /**
@@ -15,7 +15,7 @@ async function main(): Promise<void> {
 
   const url = new URL(config.hailuoCreatePath, config.hailuoBaseUrl).toString();
   await page.goto(url, { waitUntil: "domcontentloaded" });
-
+  await captureSnapshot(page, 'download', 'download last')
   const videos = historyVideoLocator(page);
   const count = await videos.count();
   if (count === 0) {

@@ -324,7 +324,7 @@ async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
 }
 
 /** Chụp trạng thái trang giữa luồng để debug — KHÔNG có nghĩa là job lỗi. */
-async function captureSnapshot(page: Page, jobId: string, label: string): Promise<void> {
+export async function captureSnapshot(page: Page, jobId: string, label: string): Promise<void> {
   try {
     await writeSnapshotFiles(page, jobId);
     console.log(`[hailuo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`);
