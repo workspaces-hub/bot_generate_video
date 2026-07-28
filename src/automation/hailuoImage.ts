@@ -16,11 +16,13 @@ import {
   addReferenceImageButtonCandidates,
   busyReferenceImageThumbnailLocator,
   creditPaywallModalCandidates,
+  entryImagesLocator,
   errorIndicatorCandidates,
   firstVisible,
   generateButtonCandidates,
+  getEntryFeedId,
   getReferenceImageCount,
-  historyImageLocator,
+  historyEntryLocator,
   imageModeTabCandidates,
   promptInputCandidates,
 } from "./selectors";
@@ -32,18 +34,15 @@ export interface GenerateImageOptions {
 }
 
 /**
- * Tạo ảnh từ prompt + tối đa 16 ảnh tham chiếu (tuỳ chọn). CHƯA ĐƯỢC TEST
- * THẬT — selector cho tab "Image", nút thêm ảnh tham chiếu, và khu vực
- * lịch sử ảnh trong selectors.ts đều là phỏng đoán ban đầu (site chưa có
- * DOM thật để soi), nhiều khả năng cần chỉnh sau lần chạy thử đầu qua debug
- * snapshot — giống cách các tính năng khác trong project này đã được tinh
- * chỉnh dần.
+ * Tạo ảnh từ prompt + tối đa 16 ảnh tham chiếu (tuỳ chọn). Mỗi lần generate
+ * trả về CẢ CỤM nhiều ảnh (thực tế xác nhận: 4 ảnh/lần) — trả về mảng path,
+ * không phải 1 file duy nhất như video.
  */
 export async function generateImage(
   prompt: string,
   { referenceImagePaths = [] }: GenerateImageOptions,
   jobId: string,
-): Promise<string> {
+): Promise<string[]> {
   if (referenceImagePaths.length > MAX_REFERENCE_IMAGES) {
     throw new GenerationError(`Chỉ hỗ trợ tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu.`);
   }
@@ -91,9 +90,10 @@ export async function generateImage(
     await clickDismissingModals(page, generateButton);
     await captureSnapshot(page, jobId + "-after-generate-click", "after-generate-click");
 
-    const newImage = await waitForNewImage(page, baseline, config.generationTimeoutMs);
+    const newEntry = await waitForNewImageEntry(page, baseline, config.generationTimeoutMs);
+    await waitForEntryImagesToSettle(page, newEntry);
 
-    return await downloadImage(page, newImage, jobId);
+    return await downloadImagesInEntry(page, newEntry, jobId);
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
     throw err instanceof GenerationError ? err : new GenerationError(err instanceof Error ? err.message : String(err));
@@ -191,35 +191,41 @@ async function attemptUploadReferenceImage(page: Page, imagePath: string, expect
 }
 
 interface ImageBaseline {
-  count: number;
-  firstSrc: string | null;
-  lastSrc: string | null;
+  entryCount: number;
+  firstEntryFeedId: string | null;
+  lastEntryFeedId: string | null;
 }
 
 async function captureImageBaseline(page: Page): Promise<ImageBaseline> {
-  const images = historyImageLocator(page);
-  const count = await images.count();
+  const entries = historyEntryLocator(page);
+  const count = await entries.count();
   return {
-    count,
-    firstSrc: count > 0 ? await images.first().getAttribute("src") : null,
-    lastSrc: count > 0 ? await images.last().getAttribute("src") : null,
+    entryCount: count,
+    firstEntryFeedId: count > 0 ? await getEntryFeedId(entries.first()) : null,
+    lastEntryFeedId: count > 0 ? await getEntryFeedId(entries.last()) : null,
   };
 }
 
-/** Cùng cách tiếp cận với waitForNewVideo — xem chú thích ở đó. */
-async function waitForNewImage(page: Page, baseline: ImageBaseline, timeoutMs: number): Promise<Locator> {
-  const images = historyImageLocator(page);
+/**
+ * Mỗi lần generate là 1 ENTRY mới (không phải 1 <img> mới) — 1 entry ảnh có
+ * thể chứa NHIỀU ảnh (thực tế xác nhận: 4 ảnh/lần, gộp trong 1 khối
+ * "grid grid-cols-2"). Tìm đúng entry mới rồi trả về, để caller lấy HẾT ảnh
+ * bên trong thay vì chỉ 1 ảnh đầu/cuối. Cùng cách tiếp cận với
+ * waitForNewVideo — xem chú thích ở đó.
+ */
+async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeoutMs: number): Promise<Locator> {
+  const entries = historyEntryLocator(page);
   const start = Date.now();
   const pollIntervalMs = 5000;
 
   while (Date.now() - start < timeoutMs) {
-    const count = await images.count();
-    if (count > baseline.count) {
-      const currentFirstSrc = await images.first().getAttribute("src");
-      if (currentFirstSrc !== baseline.firstSrc) {
-        return images.first();
+    const count = await entries.count();
+    if (count > baseline.entryCount) {
+      const currentFirstFeedId = await getEntryFeedId(entries.first());
+      if (currentFirstFeedId !== baseline.firstEntryFeedId) {
+        return entries.first();
       }
-      return images.last();
+      return entries.last();
     }
 
     const paywall = await firstVisible(creditPaywallModalCandidates(page), 1000)
@@ -245,25 +251,64 @@ async function waitForNewImage(page: Page, baseline: ImageBaseline, timeoutMs: n
 }
 
 /**
- * Tải ảnh bằng cách fetch thẳng attribute src (khác video — chưa xác nhận
- * ảnh có bị watermark hay có URL "không watermark" riêng như video hay
- * không). Nếu phát hiện ảnh tải về có watermark, áp dụng lại kỹ thuật đọc
- * downloadURLWithoutWatermark từ trang chi tiết như downloadVideo().
+ * Entry mới xuất hiện trong lịch sử KHÔNG có nghĩa cả 4 ảnh đã render xong —
+ * site có thể thêm khối entry trước rồi lấp dần từng ảnh vào sau (giống
+ * cách reference-image thumbnail vẫn "aria-busy" một lúc sau khi đã upload
+ * xong). Vì vậy chờ số lượng <img> bên trong entry ỔN ĐỊNH (không tăng thêm
+ * trong vài giây liên tiếp) trước khi coi là "đã đủ", thay vì đọc số lượng
+ * ngay lúc entry vừa xuất hiện — tránh chỉ tải được 1-2/4 ảnh.
  */
-async function downloadImage(page: Page, image: Locator, jobId: string): Promise<string> {
+async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs = 600_000): Promise<void> {
+  const images = entryImagesLocator(entry);
+  const start = Date.now();
+  const pollIntervalMs = 15000;
+  const requiredStableMs = 120000;
+
+  let lastCount = await images.count();
+  let stableSince = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    if (Date.now() - stableSince >= requiredStableMs && lastCount > 0) {
+      return;
+    }
+    await page.waitForTimeout(pollIntervalMs);
+    const count = await images.count();
+    if (count !== lastCount) {
+      lastCount = count;
+      stableSince = Date.now();
+    }
+  }
+}
+
+/**
+ * Tải TẤT CẢ ảnh trong entry vừa tạo (fetch thẳng attribute src của từng
+ * ảnh — khác video — chưa xác nhận ảnh có bị watermark hay có URL "không
+ * watermark" riêng như video hay không). Nếu phát hiện ảnh tải về có
+ * watermark, áp dụng lại kỹ thuật đọc downloadURLWithoutWatermark từ trang
+ * chi tiết như downloadVideo().
+ */
+async function downloadImagesInEntry(page: Page, entry: Locator, jobId: string): Promise<string[]> {
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
-  const filePath = path.join(config.downloadDir, `${jobId}.png`);
-
-  const src = await image.getAttribute("src");
-  if (!src) {
-    throw new GenerationError("Ảnh mới không có thuộc tính src để tải xuống");
+  const images = entryImagesLocator(entry);
+  const count = await images.count();
+  if (count === 0) {
+    throw new GenerationError("Entry ảnh mới không chứa ảnh nào để tải xuống");
   }
 
-  const absoluteUrl = new URL(src, page.url()).toString();
-  const response = await page.context().request.get(absoluteUrl);
-  if (!response.ok()) {
-    throw new GenerationError(`Tải ảnh thất bại: HTTP ${response.status()}`);
+  const filePaths: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const src = await images.nth(i).getAttribute("src");
+    if (!src) {
+      throw new GenerationError(`Ảnh #${i + 1} không có thuộc tính src để tải xuống`);
+    }
+    const absoluteUrl = new URL(src, page.url()).toString();
+    const response = await page.context().request.get(absoluteUrl);
+    if (!response.ok()) {
+      throw new GenerationError(`Tải ảnh #${i + 1} thất bại: HTTP ${response.status()}`);
+    }
+    const filePath = path.join(config.downloadDir, count > 1 ? `${jobId}-${i + 1}.png` : `${jobId}.png`);
+    await fs.promises.writeFile(filePath, await response.body());
+    filePaths.push(filePath);
   }
-  await fs.promises.writeFile(filePath, await response.body());
-  return filePath;
+  return filePaths;
 }

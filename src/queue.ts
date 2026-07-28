@@ -91,12 +91,15 @@ async function processQueue(): Promise<void> {
       const job = jobs[0];
       const jobId = randomUUID();
       try {
-        const filePath =
-          job.type === "video"
-            ? await generateVideo(job.prompt, { resolution: job.resolution, model: job.model }, jobId)
-            : await generateImage(job.prompt, { referenceImagePaths: job.referenceImagePaths }, jobId);
-        await notifySuccess(job, filePath);
-        await fsp.unlink(filePath).catch(() => {});
+        if (job.type === "video") {
+          const filePath = await generateVideo(job.prompt, { resolution: job.resolution, model: job.model }, jobId);
+          await notifyVideoSuccess(job, filePath);
+          await fsp.unlink(filePath).catch(() => {});
+        } else {
+          const filePaths = await generateImage(job.prompt, { referenceImagePaths: job.referenceImagePaths }, jobId);
+          await notifyImageSuccess(job, filePaths);
+          for (const p of filePaths) await fsp.unlink(p).catch(() => {});
+        }
       } catch (err) {
         await notifyError(job, err);
       } finally {
@@ -114,27 +117,78 @@ async function processQueue(): Promise<void> {
   }
 }
 
-async function notifySuccess(job: GenerationJob, filePath: string): Promise<void> {
+async function notifyVideoSuccess(job: VideoGenerationJob, filePath: string): Promise<void> {
   if (!telegram) return;
-  const send =
-    job.type === "video"
-      ? telegram.sendVideo(job.chatId, { source: filePath }, {
-          caption: `✅ Video cho prompt: "${job.prompt}"`,
-          reply_parameters: { message_id: job.promptMessageId },
-        })
-      : telegram.sendPhoto(job.chatId, { source: filePath }, {
-          caption: `✅ Ảnh cho prompt: "${job.prompt}"`,
-          reply_parameters: { message_id: job.promptMessageId },
-        });
-
-  await send.catch(async (err) => {
-    console.error(`[queue] Gửi ${job.type === "video" ? "video" : "ảnh"} thất bại:`, err);
-    await telegram!.sendMessage(job.chatId, "404", {
+  try {
+    await telegram.sendVideo(job.chatId, { source: filePath }, {
+      caption: `✅ Video cho prompt: "${job.prompt.slice(0,100)}"`,
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+  } catch (err) {
+    console.error("[queue] Gửi video thất bại:", err);
+    await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
     });
     await notifyAdmins(err);
-  });
+  }
   await deleteStatusMessage(job);
+}
+
+async function notifyImageSuccess(job: ImageGenerationJob, filePaths: string[]): Promise<void> {
+  if (!telegram) return;
+  try {
+    await sendGeneratedImages(job, filePaths);
+  } catch (err) {
+    console.error("[queue] Gửi ảnh thất bại:", err);
+    await telegram.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+    await notifyAdmins(err);
+  }
+  await deleteStatusMessage(job);
+}
+
+/**
+ * Mỗi lần generate trả về CẢ CỤM ảnh (thực tế xác nhận: 4 ảnh/lần) — gửi
+ * chung 1 album (sendMediaGroup) để không spam nhiều tin nhắn rời. Nếu
+ * album lỗi (vd 1 ảnh trong cụm bị Telegram từ chối), fallback gửi RIÊNG
+ * từng ảnh bằng sendPhoto, rồi sendDocument nếu sendPhoto vẫn báo
+ * "400: Bad Request: IMAGE_PROCESS_FAILED" (Telegram không xử lý/nén được
+ * ảnh AI tạo ra) — sendDocument gửi file gốc nên đáng tin cậy hơn.
+ */
+async function sendGeneratedImages(job: ImageGenerationJob, filePaths: string[]): Promise<void> {
+  const caption = `✅ Ảnh cho prompt: "${job.prompt.slice(0,100)}"`;
+  try {
+    await telegram!.sendMediaGroup(
+      job.chatId,
+      filePaths.map((filePath, i) => ({
+        type: "photo" as const,
+        media: { source: filePath },
+        caption: i === 0 ? caption : undefined,
+      })),
+      { reply_parameters: { message_id: job.promptMessageId } },
+    );
+  } catch (err) {
+    console.warn("[queue] sendMediaGroup thất bại, gửi lần lượt từng ảnh:", err);
+    for (const filePath of filePaths) {
+      await sendGeneratedImage(job, filePath, caption);
+    }
+  }
+}
+
+async function sendGeneratedImage(job: ImageGenerationJob, filePath: string, caption: string): Promise<void> {
+  try {
+    await telegram!.sendPhoto(job.chatId, { source: filePath }, {
+      caption,
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+  } catch (err) {
+    console.warn("[queue] sendPhoto thất bại, thử lại bằng sendDocument (gửi file gốc, không nén):", err);
+    await telegram!.sendDocument(job.chatId, { source: filePath }, {
+      caption,
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+  }
 }
 
 async function notifyError(job: GenerationJob, err: unknown): Promise<void> {

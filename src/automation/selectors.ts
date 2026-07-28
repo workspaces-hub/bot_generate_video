@@ -200,9 +200,21 @@ export const busyReferenceImageThumbnailLocator = (page: Page): Locator =>
   page.locator('[aria-label="Uploaded image, click to preview"][aria-busy="true"]');
 
 /**
- * Khu vực lịch sử ảnh đã tạo — tương tự historyVideoLocator nhưng cho thẻ
- * <img>. Scope vào div[data-feed-id] để tránh khớp icon/avatar không liên
- * quan tới nội dung đã tạo. CHƯA CÓ DOM THẬT, cần xác nhận sau khi test.
+ * Mỗi lần generate ảnh, hailuoai.video trả về CẢ CỤM (thực tế xác nhận: 4
+ * ảnh) gộp chung trong 1 "entry" — mỗi entry là 1 con trực tiếp của
+ * #create-new-scroll-container, bên trong chứa nhiều div[data-feed-id]
+ * (mỗi ảnh 1 feed-id riêng, xem class "grid grid-cols-2" bọc ngoài trong DOM
+ * thật). Vì vậy KHÔNG thể đếm/so sánh theo từng <img> phẳng như video (1
+ * video = 1 entry = 1 file) — phải so sánh theo ENTRY rồi lấy hết ảnh bên
+ * trong entry mới, nếu không sẽ chỉ tải được 1/4 ảnh.
  */
-export const historyImageLocator = (page: Page): Locator =>
-  page.locator("#create-new-scroll-container div[data-feed-id] img[src]:visible");
+export const historyEntryLocator = (page: Page): Locator =>
+  page.locator("#create-new-scroll-container > div");
+
+/** Các ảnh (có thể nhiều, vd 4 ảnh/lần generate) bên trong 1 entry lịch sử. */
+export const entryImagesLocator = (entry: Locator): Locator =>
+  entry.locator("div[data-feed-id] img[src]:visible");
+
+export async function getEntryFeedId(entry: Locator): Promise<string | null> {
+  return entry.locator("div[data-feed-id]").first().getAttribute("data-feed-id").catch(() => null);
+}
