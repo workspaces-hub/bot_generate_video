@@ -39,7 +39,15 @@ export async function generateVideo(
     await ensureLoggedIn(page);
     await dismissPaywallIfBlocking(page);
 
-    const promptInput = await firstVisible(promptInputCandidates(page));
+    // gotoWithRetry chỉ chờ "domcontentloaded" — trang là SPA (React) nên
+    // sau đó còn cần thời gian hydrate/render UI thật. Thực tế đã gặp: 20s
+    // (4 candidate x 5s) không đủ với tài khoản có nhiều lịch sử/đang bật
+    // Start-End Frame (thêm nút upload), khiến "#video-create-textarea"
+    // chưa kịp render dù chỉ trễ thêm 1-2s. Chờ mạng rảnh trước, rồi mới
+    // tìm ô nhập prompt với timeout dài hơn để có biên độ an toàn.
+    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+
+    const promptInput = await firstVisible(promptInputCandidates(page), 10_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
 

@@ -76,7 +76,15 @@ export async function generateImage(
       await waitForUploadsToSettle(page);
     }
 
-    const promptInput = await firstVisible(promptInputCandidates(page));
+    // Cùng lý do đã sửa cho video (xem chú thích generateVideo trong
+    // hailuo.ts): gotoWithRetry chỉ chờ domcontentloaded, SPA còn cần thêm
+    // thời gian hydrate. Nếu không có ảnh tham chiếu thì không bước nào ở
+    // trên chờ mạng cả, nên vẫn cần chờ ở đây trước khi tìm ô nhập prompt.
+    if (referenceImagePaths.length === 0) {
+      await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+    }
+
+    const promptInput = await firstVisible(promptInputCandidates(page), 10_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
 
