@@ -14,6 +14,7 @@ import {
 } from "./hailuo";
 import {
   addReferenceImageButtonCandidates,
+  busyReferenceImageThumbnailLocator,
   creditPaywallModalCandidates,
   errorIndicatorCandidates,
   firstVisible,
@@ -97,12 +98,27 @@ export async function generateImage(
 }
 
 /**
- * Chờ mạng rảnh (không còn request nào đang chạy trong 500ms) sau khi
- * upload xong tất cả ảnh tham chiếu — đếm trong aria-label có thể tăng
- * ngay (optimistic UI) trước khi bytes thực sự upload lên xong.
+ * Chờ mạng rảnh trước (upload bytes xong), RỒI chờ từng thumbnail hết
+ * "aria-busy=true" (spinner xử lý ảnh phía client sau khi upload — thực tế
+ * đã xác nhận: đếm tăng đúng + mạng rảnh vẫn chưa đủ, ảnh có thể vẫn hiện
+ * spinner lúc bấm Generate). Đây mới là tín hiệu chính xác ảnh đã sẵn sàng.
  */
 async function waitForUploadsToSettle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll('[aria-label="Uploaded image, click to preview"][aria-busy="true"]').length === 0,
+      { timeout: 60_000 },
+    );
+  } catch {
+    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
+    if (stillBusy > 0) {
+      throw new GenerationError(
+        `Còn ${stillBusy} ảnh tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng ảnh chưa load xong.`,
+      );
+    }
+  }
 }
 
 /**

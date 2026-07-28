@@ -181,6 +181,16 @@ export async function getReferenceImageCount(page: Page): Promise<number | null>
 }
 
 /**
+ * Mỗi thumbnail ảnh tham chiếu vừa upload có aria-label cố định "Uploaded
+ * image, click to preview" và aria-busy="true" TRONG LÚC còn đang xử lý
+ * (kèm spinner .anticon-spin) — khi xong thì aria-busy biến mất/thành
+ * false. Đáng tin cậy hơn nhiều so với đếm số lượng hay networkidle để biết
+ * ảnh đã THỰC SỰ sẵn sàng trước khi bấm Generate.
+ */
+export const busyReferenceImageThumbnailLocator = (page: Page): Locator =>
+  page.locator('[aria-label="Uploaded image, click to preview"][aria-busy="true"]');
+
+/**
  * Khu vực lịch sử ảnh đã tạo — tương tự historyVideoLocator nhưng cho thẻ
  * <img>. Scope vào div[data-feed-id] để tránh khớp icon/avatar không liên
  * quan tới nội dung đã tạo. CHƯA CÓ DOM THẬT, cần xác nhận sau khi test.

@@ -290,7 +290,6 @@ export function registerHandlers(bot: Telegraf): void {
   // Ảnh tham chiếu cho chế độ tạo ảnh — chỉ nhận khi đang ở mode "image"
   // hoặc đã có buffer đang chờ (đang gom thêm ảnh tiếp theo).
   bot.on(message("photo"), async (ctx, next) => {
-    console.log("media_group_id", ctx.message.media_group_id);
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
     const userId = ctx.from.id;
