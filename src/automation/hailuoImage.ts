@@ -122,13 +122,13 @@ async function waitForUploadsToSettle(page: Page): Promise<void> {
   try {
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label="Uploaded image, click to preview"][aria-busy="true"]').length === 0,
-      { timeout: 60_000 },
+      { timeout: 180_000 },
     );
   } catch {
     const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
     if (stillBusy > 0) {
       throw new GenerationError(
-        `Còn ${stillBusy} ảnh tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng ảnh chưa load xong.`,
+        `Còn ${stillBusy} ảnh tham chiếu vẫn đang xử lý (aria-busy) sau 180s chờ — không bấm Generate để tránh dùng ảnh chưa load xong.`,
       );
     }
   }
