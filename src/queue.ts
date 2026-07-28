@@ -183,7 +183,7 @@ async function sendGeneratedImage(job: ImageGenerationJob, filePath: string, cap
       reply_parameters: { message_id: job.promptMessageId },
     });
   } catch (err) {
-    console.warn("[queue] sendPhoto thất bại, thử lại bằng sendDocument (gửi file gốc, không nén):", err);
+    console.warn("[queue] sendPhoto thất bại, thử lại bằng sendDocument (gửi file gốc, không nén):", filePath, err);
     await telegram!.sendDocument(job.chatId, { source: filePath }, {
       caption,
       reply_parameters: { message_id: job.promptMessageId },
