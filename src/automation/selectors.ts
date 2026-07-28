@@ -80,9 +80,18 @@ export const generateButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /tạo/i }),
 ];
 
+/**
+ * CHỈ khớp EXACT (^...$), không dùng substring rộng — thực tế đã gặp báo
+ * nhầm "chưa đăng nhập" vì popup quảng cáo MiniMax Hub có câu "Sign in for
+ * 3,000 free credits" chứa substring "sign in", trong khi session vẫn hợp
+ * lệ (xác nhận qua scripts/check-session.ts). "Continue with Google" là
+ * nút đăng nhập thật đã xác nhận từ dữ liệu tracking khi site ở trạng thái
+ * chưa đăng nhập — ưu tiên tín hiệu này hơn text "sign in" chung chung.
+ */
 export const signInIndicatorCandidates = (page: Page): Array<() => Locator> => [
-  () => page.getByRole("button", { name: /sign in|log in|đăng nhập/i }),
-  () => page.getByText(/sign in|log in|đăng nhập/i),
+  () => page.getByRole("button", { name: /^continue with google$/i }),
+  () => page.getByRole("button", { name: /^(sign in|log in|đăng nhập)$/i }),
+  () => page.getByText(/^(sign in|log in|đăng nhập)$/i),
 ];
 
 /**
