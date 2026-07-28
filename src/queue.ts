@@ -121,7 +121,7 @@ async function notifyVideoSuccess(job: VideoGenerationJob, filePath: string): Pr
   if (!telegram) return;
   try {
     await telegram.sendVideo(job.chatId, { source: filePath }, {
-      caption: `✅ Video cho prompt: "${job.prompt.slice(0,100)}"`,
+      caption: `✅ Video cho prompt: "${job.prompt.split(" ").slice(0,20).join(" ")}"`,
       reply_parameters: { message_id: job.promptMessageId },
     });
   } catch (err) {
@@ -157,7 +157,7 @@ async function notifyImageSuccess(job: ImageGenerationJob, filePaths: string[]):
  * ảnh AI tạo ra) — sendDocument gửi file gốc nên đáng tin cậy hơn.
  */
 async function sendGeneratedImages(job: ImageGenerationJob, filePaths: string[]): Promise<void> {
-  const caption = `✅ Ảnh cho prompt: "${job.prompt.slice(0,100)}"`;
+  const caption = `✅ Ảnh cho prompt: "${job.prompt.split(" ").slice(0,20).join(" ")}"`;
   try {
     await telegram!.sendMediaGroup(
       job.chatId,

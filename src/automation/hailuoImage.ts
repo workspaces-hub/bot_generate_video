@@ -22,7 +22,7 @@ import {
   generateButtonCandidates,
   getEntryFeedId,
   getReferenceImageCount,
-  historyEntryLocator,
+  historyImageEntryLocator,
   imageModeTabCandidates,
   promptInputCandidates,
 } from "./selectors";
@@ -205,7 +205,7 @@ interface ImageBaseline {
 }
 
 async function captureImageBaseline(page: Page): Promise<ImageBaseline> {
-  const entries = historyEntryLocator(page);
+  const entries = historyImageEntryLocator(page);
   const count = await entries.count();
   return {
     entryCount: count,
@@ -222,7 +222,7 @@ async function captureImageBaseline(page: Page): Promise<ImageBaseline> {
  * waitForNewVideo — xem chú thích ở đó.
  */
 async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeoutMs: number): Promise<Locator> {
-  const entries = historyEntryLocator(page);
+  const entries = historyImageEntryLocator(page);
   const start = Date.now();
   const pollIntervalMs = 5000;
 

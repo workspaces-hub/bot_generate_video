@@ -201,15 +201,34 @@ export const busyReferenceImageThumbnailLocator = (page: Page): Locator =>
 
 /**
  * Mỗi lần generate ảnh, hailuoai.video trả về CẢ CỤM (thực tế xác nhận: 4
- * ảnh) gộp chung trong 1 "entry" — mỗi entry là 1 con trực tiếp của
- * #create-new-scroll-container, bên trong chứa nhiều div[data-feed-id]
+ * ảnh) gộp chung trong 1 "entry", bên trong chứa nhiều div[data-feed-id]
  * (mỗi ảnh 1 feed-id riêng, xem class "grid grid-cols-2" bọc ngoài trong DOM
  * thật). Vì vậy KHÔNG thể đếm/so sánh theo từng <img> phẳng như video (1
  * video = 1 entry = 1 file) — phải so sánh theo ENTRY rồi lấy hết ảnh bên
  * trong entry mới, nếu không sẽ chỉ tải được 1/4 ảnh.
+ *
+ * SỬA LỖI: trước đây dùng "#create-new-scroll-container > div" (con TRỰC
+ * TIẾP) — SAI, vì con trực tiếp thật sự chỉ là vài div cấu trúc cố định
+ * (hint "not all results...", div rỗng, div wrapper bọc cả danh sách), số
+ * lượng KHÔNG BAO GIỜ tăng dù có generate thêm bao nhiêu lần — khiến
+ * waitForNewImageEntry không bao giờ phát hiện được entry mới và luôn
+ * timeout 5 phút. DOM thật xác nhận mỗi lần generate (video lẫn ảnh) được
+ * bọc trong div id="media-group-<id>" (nằm SÂU hơn, không phải con trực
+ * tiếp) — dùng selector này, không phụ thuộc độ sâu lồng nhau.
  */
 export const historyEntryLocator = (page: Page): Locator =>
-  page.locator("#create-new-scroll-container > div");
+  page.locator('#create-new-scroll-container div[id^="media-group-"]');
+
+/**
+ * Lịch sử gộp CHUNG cả video lẫn ảnh (cùng #create-new-scroll-container),
+ * nên historyEntryLocator ở trên khớp CẢ HAI loại — nếu dùng thẳng để dò
+ * "ảnh mới" thì có rủi ro (dù hiếm, do queue xử lý tuần tự) nhầm 1 entry
+ * video vừa xuất hiện thành ảnh mới, dẫn tới tải nhầm sang trang chi tiết
+ * /ai-image/ của 1 video. Lọc bỏ entry có chứa <video> để chỉ còn entry ảnh
+ * — mỗi media-group đã xác nhận chỉ chứa 1 loại nội dung, không trộn lẫn.
+ */
+export const historyImageEntryLocator = (page: Page): Locator =>
+  historyEntryLocator(page).filter({ hasNot: page.locator("video") });
 
 /** Các ảnh (có thể nhiều, vd 4 ảnh/lần generate) bên trong 1 entry lịch sử. */
 export const entryImagesLocator = (entry: Locator): Locator =>
