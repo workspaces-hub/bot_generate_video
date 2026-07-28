@@ -112,7 +112,7 @@ export async function gotoWithRetry(page: Page, url: string, attempts = 3): Prom
   let lastErr: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
       return;
     } catch (err) {
       lastErr = err;
