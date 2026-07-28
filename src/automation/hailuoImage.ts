@@ -16,7 +16,6 @@ import {
   addReferenceImageButtonCandidates,
   busyReferenceImageThumbnailLocator,
   creditPaywallModalCandidates,
-  entryImagesLocator,
   errorIndicatorCandidates,
   firstVisible,
   generateButtonCandidates,
@@ -262,25 +261,33 @@ async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeout
  * Entry mới xuất hiện trong lịch sử KHÔNG có nghĩa cả 4 ảnh đã render xong —
  * site có thể thêm khối entry trước rồi lấp dần từng ảnh vào sau (giống
  * cách reference-image thumbnail vẫn "aria-busy" một lúc sau khi đã upload
- * xong). Vì vậy chờ số lượng <img> bên trong entry ỔN ĐỊNH (không tăng thêm
- * trong vài giây liên tiếp) trước khi coi là "đã đủ", thay vì đọc số lượng
- * ngay lúc entry vừa xuất hiện — tránh chỉ tải được 1-2/4 ảnh.
+ * xong). Vì vậy chờ số lượng card đã NGÃ NGŨ (thành công có <img> HOẶC lỗi
+ * có data-batch-disabled) ỔN ĐỊNH (không đổi thêm trong 1 lúc) trước khi coi
+ * là "đã xong", thay vì đọc số lượng ngay lúc entry vừa xuất hiện — tránh
+ * chỉ tải được 1-2/4 ảnh.
+ *
+ * Đếm theo card THÀNH CÔNG hay LỖI đều tính là "đã ngã ngũ" (khác bản trước
+ * chỉ đếm ảnh thành công, lastCount>0) — để xử lý đúng cả trường hợp CẢ 4
+ * ẢNH ĐỀU LỖI: nếu chỉ đợi ảnh thành công > 0 thì sẽ không bao giờ đúng,
+ * khiến hàm này chờ hết nguyên timeoutMs (10 phút) một cách vô ích trước khi
+ * downloadImagesInEntry mới báo lỗi "không có ảnh nào". Đếm cả 2 loại giúp
+ * phát hiện "đã ngã ngũ" nhanh hơn nhiều, kể cả khi kết quả là toàn bộ lỗi.
  */
 async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs = 600_000): Promise<void> {
-  const images = entryImagesLocator(entry);
+  const resolvedCards = entry.locator("div[data-feed-id]:has(img[src]), div[data-feed-id][data-batch-disabled]");
   const start = Date.now();
   const pollIntervalMs = 15000;
   const requiredStableMs = 120000;
 
-  let lastCount = await images.count();
+  let lastCount = await resolvedCards.count();
   let stableSince = Date.now();
 
   while (Date.now() - start < timeoutMs) {
-    if (Date.now() - stableSince >= requiredStableMs && lastCount > 0) {
+    if (Date.now() - stableSince >= requiredStableMs) {
       return;
     }
     await page.waitForTimeout(pollIntervalMs);
-    const count = await images.count();
+    const count = await resolvedCards.count();
     if (count !== lastCount) {
       lastCount = count;
       stableSince = Date.now();
@@ -289,12 +296,18 @@ async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs 
 }
 
 /**
- * Lấy data-feed-id của từng ảnh (mỗi media-card-wrapper trong entry mang 1
- * data-feed-id riêng) — cần lấy HẾT trước khi điều hướng trang đi chỗ khác,
- * vì entry locator gắn với DOM hiện tại của trang tạo ảnh.
+ * Lấy data-feed-id của từng ảnh THÀNH CÔNG trong entry (mỗi media-card-wrapper
+ * mang 1 data-feed-id riêng) — cần lấy HẾT trước khi điều hướng trang đi chỗ
+ * khác, vì entry locator gắn với DOM hiện tại của trang tạo ảnh.
+ *
+ * Thực tế xác nhận: 1 lần generate 4 ảnh không phải lúc nào cũng cả 4 đều
+ * thành công — card bị lỗi có data-batch-disabled/aria-disabled="true" trên
+ * media-card-wrapper và KHÔNG có thẻ <img src> bên trong (chỉ icon lỗi +
+ * nút info), dù div[data-feed-id] vẫn tồn tại. Lọc theo ":has(img[src])" để
+ * chỉ lấy card đã render ảnh thật, tránh cố tải ảnh không tồn tại.
  */
 async function getEntryFeedIds(entry: Locator): Promise<string[]> {
-  const cards = entry.locator("div[data-feed-id]");
+  const cards = entry.locator("div[data-feed-id]:has(img[src])");
   const count = await cards.count();
   const ids: string[] = [];
   for (let i = 0; i < count; i++) {
@@ -317,7 +330,9 @@ async function downloadImagesInEntry(page: Page, entry: Locator, jobId: string):
 
   const feedIds = await getEntryFeedIds(entry);
   if (feedIds.length === 0) {
-    throw new GenerationError("Entry ảnh mới không có data-feed-id nào để tải xuống");
+    // Cả cụm (thường 4 ảnh) đều rơi vào trạng thái lỗi (data-batch-disabled,
+    // không có <img src>) — không phải bug, chỉ là site tạo ảnh thất bại.
+    throw new GenerationError("Không tạo được ảnh nào — site báo lỗi tất cả ảnh trong lần generate này");
   }
 
   const filePaths: string[] = [];
@@ -337,6 +352,17 @@ async function downloadImageByFeedId(
   const detailUrl = new URL(`/my-work-detail/ai-image/${feedId}`, config.hailuoBaseUrl);
   detailUrl.searchParams.set("source-page", "create");
   await gotoWithRetry(page, detailUrl.toString());
+
+  // gotoWithRetry chỉ chờ domcontentloaded — trang chi tiết là SPA, có lúc
+  // vẫn còn đang ở màn hình loading trống (đã xác nhận qua debug screenshot
+  // thực tế) khi đọc page.content() ngay, nên đọc hụt downloadURLWithoutWatermark
+  // dù trang sau đó vẫn render đúng. Chờ tới khi flight data thật sự xuất
+  // hiện trong DOM trước khi trích xuất.
+  await page
+    .waitForFunction(() => document.documentElement.innerHTML.includes("downloadURLWithoutWatermark"), {
+      timeout: 120_000,
+    })
+    .catch(() => {});
 
   const html = await page.content();
   const match = html.match(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/);

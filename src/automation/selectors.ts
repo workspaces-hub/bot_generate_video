@@ -160,6 +160,17 @@ export const historyVideoLocator = (page: Page): Locator =>
   page.locator("#create-new-scroll-container video[src]:visible");
 
 /**
+ * Card lịch sử bị lỗi (generate thất bại) mang data-batch-disabled +
+ * aria-disabled="true", KHÔNG có nội dung thật (<video>/<img>) bên trong —
+ * đã xác nhận thật qua DOM của tính năng ảnh (1 trong 4 ảnh generate lỗi).
+ * Dùng chung marker này để phát hiện video generate lỗi NGAY khi nó xuất
+ * hiện trong lịch sử, thay vì chỉ trông chờ toast lỗi hiện trên trang (có
+ * thể site chỉ âm thầm đánh dấu card lỗi mà không hiện toast).
+ */
+export const failedGenerationCardLocator = (page: Page): Locator =>
+  page.locator("#create-new-scroll-container [data-batch-disabled]");
+
+/**
  * CHƯA CÓ DOM THẬT — đây là phỏng đoán ban đầu cho tính năng tạo ẢNH (mới
  * thêm). Khung nhập prompt có tab chuyển "Video"/"Image"/"Audio" (đã thấy
  * trong screenshot trước đây nhưng chưa lấy được HTML chính xác). Nhiều

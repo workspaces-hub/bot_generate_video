@@ -45,9 +45,9 @@ export async function generateVideo(
     // Start-End Frame (thêm nút upload), khiến "#video-create-textarea"
     // chưa kịp render dù chỉ trễ thêm 1-2s. Chờ mạng rảnh trước, rồi mới
     // tìm ô nhập prompt với timeout dài hơn để có biên độ an toàn.
-    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 120_000 }).catch(() => {});
 
-    const promptInput = await firstVisible(promptInputCandidates(page), 10_000);
+    const promptInput = await firstVisible(promptInputCandidates(page), 30_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
 
@@ -301,6 +301,16 @@ export async function downloadVideo(page: Page, video: Locator, jobId: string): 
   const detailUrl = new URL(`/my-work-detail/ai-video/${feedId}`, config.hailuoBaseUrl);
   detailUrl.searchParams.set("source-page", "create");
   await gotoWithRetry(page, detailUrl.toString());
+
+  // gotoWithRetry chỉ chờ domcontentloaded — trang chi tiết là SPA, có lúc
+  // vẫn còn màn hình loading trống khi đọc page.content() ngay (đã xác nhận
+  // qua debug screenshot ở luồng tạo ảnh dùng chung hàm gotoWithRetry này).
+  // Chờ tới khi flight data thật sự xuất hiện trong DOM trước khi trích xuất.
+  await page
+    .waitForFunction(() => document.documentElement.innerHTML.includes("downloadURLWithoutWatermark"), {
+      timeout: 60_000,
+    })
+    .catch(() => {});
 
   // Trang chi tiết nhúng sẵn URL không watermark ngay trong dữ liệu Next.js
   // flight data (self.__next_f.push(...)) của chính trang, dạng
