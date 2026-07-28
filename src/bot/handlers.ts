@@ -47,42 +47,15 @@ async function submitJob({ ctx, groupChatId, promptMessageId, userId, rawText }:
     reply_parameters: { message_id: promptMessageId },
   });
 
+  // Chỉ dữ liệu thuần (không callback/ctx) — enqueueJob tự ghi ra file để
+  // sống sót qua restart/crash, xem src/queue.ts.
   enqueueJob({
     chatId: groupChatId,
     prompt,
     resolution,
     model: isAdmin(userId) ? model : DEFAULT_MODEL,
-    onSuccess: async (filePath) => {
-      await ctx.telegram
-        .sendVideo(
-          groupChatId,
-          { source: filePath },
-          {
-            caption: `✅ Video cho prompt: "${prompt}"`,
-            reply_parameters: { message_id: promptMessageId },
-          },
-        )
-        .catch(async (err: any) => {
-          console.error("[bot] Gửi video thất bại:", err);
-          await ctx.telegram.sendMessage(groupChatId, "404", {
-            reply_parameters: { message_id: promptMessageId },
-          });
-          try {
-            await ctx.telegram.sendMessage(config.adminsNotify, err.message);
-          } catch {}
-        });
-      await ctx.telegram.deleteMessage(groupChatId, statusMessage.message_id).catch(() => {});
-    },
-    onError: async (err: any) => {
-      console.error("[bot] Tạo video thất bại:", err);
-      try {
-        await ctx.telegram.sendMessage(config.adminsNotify, err.message);
-      } catch {}
-      await ctx.telegram.sendMessage(groupChatId, "404", {
-        reply_parameters: { message_id: promptMessageId },
-      });
-      await ctx.telegram.deleteMessage(groupChatId, statusMessage.message_id).catch(() => {});
-    },
+    promptMessageId,
+    statusMessageId: statusMessage.message_id,
   });
 }
 

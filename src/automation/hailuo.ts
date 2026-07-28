@@ -58,7 +58,7 @@ export async function generateVideo(
 
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    await captureSnapshot(page, jobId + "_" + "after-generate-click", "after-generate-click");
+    // await captureSnapshot(page, jobId + "_" + "after-generate-click", "after-generate-click");
 
     const newVideo = await waitForNewVideo(page, baseline, config.generationTimeoutMs);
 
