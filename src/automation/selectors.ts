@@ -138,8 +138,17 @@ export const videoElementCandidates = (page: Page): Array<() => Locator> => [
  * flex-col-reverse: video mới nhất được thêm vào CUỐI DOM nhưng hiển thị
  * ở TRÊN CÙNG. Vì vậy không thể tin vào .first()/.last() một cách cố định —
  * xem waitForNewVideo() trong hailuo.ts, nơi tự phát hiện đầu nào vừa đổi.
+ *
+ * Mỗi card thực ra có 2 thẻ <video> TRÙNG src: 1 cái hiển thị (thumbnail
+ * dạng lưới, object-cover) và 1 cái ẩn (preload="none", dùng cho
+ * lightbox/modal chi tiết, chỉ hiện khi mở). Nếu khớp trúng cái ẩn, click
+ * để mở trang chi tiết sẽ luôn timeout "element is not visible" và không
+ * tìm thấy ancestor div[data-feed-id] (vì nằm trong container khác) — nên
+ * dùng ":visible" (pseudo-class riêng của Playwright) để chỉ khớp bản
+ * đang hiển thị thật sự.
  */
-export const historyVideoLocator = (page: Page): Locator => page.locator("#create-new-scroll-container video[src]");
+export const historyVideoLocator = (page: Page): Locator =>
+  page.locator("#create-new-scroll-container video[src]:visible");
 
 /**
  * Trang chi tiết video (sau khi bấm vào video trong lịch sử) có nút dropdown
