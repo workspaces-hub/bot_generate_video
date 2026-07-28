@@ -281,34 +281,71 @@ async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs 
 }
 
 /**
- * Tải TẤT CẢ ảnh trong entry vừa tạo (fetch thẳng attribute src của từng
- * ảnh — khác video — chưa xác nhận ảnh có bị watermark hay có URL "không
- * watermark" riêng như video hay không). Nếu phát hiện ảnh tải về có
- * watermark, áp dụng lại kỹ thuật đọc downloadURLWithoutWatermark từ trang
- * chi tiết như downloadVideo().
+ * Lấy data-feed-id của từng ảnh (mỗi media-card-wrapper trong entry mang 1
+ * data-feed-id riêng) — cần lấy HẾT trước khi điều hướng trang đi chỗ khác,
+ * vì entry locator gắn với DOM hiện tại của trang tạo ảnh.
+ */
+async function getEntryFeedIds(entry: Locator): Promise<string[]> {
+  const cards = entry.locator("div[data-feed-id]");
+  const count = await cards.count();
+  const ids: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const id = await cards.nth(i).getAttribute("data-feed-id");
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Tải TẤT CẢ ảnh trong entry, mỗi ảnh KHÔNG watermark — cùng kỹ thuật với
+ * downloadVideo() trong hailuo.ts: điều hướng thẳng tới trang chi tiết
+ * /my-work-detail/ai-image/<feedId>?source-page=create (mỗi ảnh trong cụm
+ * có feedId riêng) rồi đọc downloadURLWithoutWatermark nhúng sẵn trong
+ * Next.js flight data của trang — đáng tin cậy hơn nhiều so với fetch thẳng
+ * <img src> (bản đó có watermark, giống video trước khi sửa).
  */
 async function downloadImagesInEntry(page: Page, entry: Locator, jobId: string): Promise<string[]> {
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
-  const images = entryImagesLocator(entry);
-  const count = await images.count();
-  if (count === 0) {
-    throw new GenerationError("Entry ảnh mới không chứa ảnh nào để tải xuống");
+
+  const feedIds = await getEntryFeedIds(entry);
+  if (feedIds.length === 0) {
+    throw new GenerationError("Entry ảnh mới không có data-feed-id nào để tải xuống");
   }
 
   const filePaths: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const src = await images.nth(i).getAttribute("src");
-    if (!src) {
-      throw new GenerationError(`Ảnh #${i + 1} không có thuộc tính src để tải xuống`);
-    }
-    const absoluteUrl = new URL(src, page.url()).toString();
-    const response = await page.context().request.get(absoluteUrl);
-    if (!response.ok()) {
-      throw new GenerationError(`Tải ảnh #${i + 1} thất bại: HTTP ${response.status()}`);
-    }
-    const filePath = path.join(config.downloadDir, count > 1 ? `${jobId}-${i + 1}.png` : `${jobId}.png`);
-    await fs.promises.writeFile(filePath, await response.body());
-    filePaths.push(filePath);
+  for (let i = 0; i < feedIds.length; i++) {
+    filePaths.push(await downloadImageByFeedId(page, feedIds[i], jobId, i, feedIds.length));
   }
   return filePaths;
+}
+
+async function downloadImageByFeedId(
+  page: Page,
+  feedId: string,
+  jobId: string,
+  index: number,
+  total: number,
+): Promise<string> {
+  const detailUrl = new URL(`/my-work-detail/ai-image/${feedId}`, config.hailuoBaseUrl);
+  detailUrl.searchParams.set("source-page", "create");
+  await gotoWithRetry(page, detailUrl.toString());
+
+  const html = await page.content();
+  const match = html.match(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/);
+  if (!match) {
+    throw new GenerationError(`Không tìm thấy downloadURLWithoutWatermark trên trang chi tiết ảnh #${index + 1}`);
+  }
+  const noWatermarkUrl = match[1];
+
+  const response = await page.context().request.get(noWatermarkUrl);
+  if (!response.ok()) {
+    throw new GenerationError(`Tải ảnh #${index + 1} (không watermark) thất bại: HTTP ${response.status()}`);
+  }
+
+  // Suy ra đuôi file thật từ URL thay vì hardcode .png — tránh lệch định
+  // dạng thật (có thể là .jpg/.webp) khiến Telegram xử lý ảnh lỗi.
+  const ext = path.extname(new URL(noWatermarkUrl).pathname) || ".png";
+  const filePath = path.join(config.downloadDir, total > 1 ? `${jobId}-${index + 1}${ext}` : `${jobId}${ext}`);
+  await fs.promises.writeFile(filePath, await response.body());
+  return filePath;
 }
