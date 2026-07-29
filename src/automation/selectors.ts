@@ -47,6 +47,17 @@ export const resolutionChipCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
+ * Chip chuyển chế độ nhập liệu cho video, mặc định hiện nhãn "Start/End
+ * Frame" trên trang /create/subject-reference-to-video — bấm vào mở popover
+ * chọn mode khác (vd "Image Reference"), do người dùng xác nhận trực tiếp
+ * qua thao tác thủ công trên site (không phải phỏng đoán).
+ */
+export const videoInputModeChipCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByText(/^Start\/End Frame$/i),
+  () => page.getByRole("button", { name: /^Start\/End Frame$/i }),
+];
+
+/**
  * Nút "Start Frame" (upload ảnh khởi đầu video) hiện trực tiếp trong khung
  * nhập prompt tạo video, cạnh "End Frame" — đã thấy qua screenshot debug
  * nhưng CHƯA CÓ DOM thật (chưa lấy được HTML lúc đó), nên đây là candidate
@@ -87,6 +98,11 @@ export const generateButtonCandidates = (page: Page): Array<() => Locator> => [
   // Nút generate thật của hailuoai.video không có chữ "Generate" — chỉ có
   // icon + số credit (vd "25"). Xác định qua class riêng của app.
   () => page.locator("button.new-color-btn-bg"),
+  // Mode "Image Reference" (model Veo) dùng nút khác hẳn — cũng không có
+  // chữ "generate"/"create"/"tạo", chỉ icon + số credit + badge "63% Off",
+  // nhưng class riêng "bg-hl_brand_00" (xác nhận qua debug HTML thực tế,
+  // chỉ xuất hiện đúng 1 lần trên trang).
+  () => page.locator("button.bg-hl_brand_00"),
   () => page.getByRole("button", { name: /generate/i }),
   () => page.getByRole("button", { name: /create/i }),
   () => page.getByRole("button", { name: /tạo/i }),
@@ -224,26 +240,6 @@ export async function getReferenceImageCount(page: Page): Promise<number | null>
 }
 
 /**
- * CHƯA CÓ DOM THẬT — trang /create/subject-reference-to-video (tạo video từ
- * tối đa 3 video tham chiếu) là URL riêng do người dùng cung cấp, chưa từng
- * lấy được debug snapshot. Phỏng đoán ban đầu dựa theo đúng quy ước aria-label
- * đã xác nhận thật của "Upload Image Refs(N/16)" — nhiều khả năng cần chỉnh
- * qua debug snapshot sau lần chạy thử đầu.
- */
-export const addReferenceVideoButtonCandidates = (page: Page): Array<() => Locator> => [
-  () => page.getByRole("button", { name: /^Upload Video Refs/i }),
-  () => page.getByRole("button", { name: /upload.*video/i }),
-];
-
-/** Đọc số video tham chiếu hiện tại — cùng quy ước aria-label "(N/3)" như ảnh. */
-export async function getReferenceVideoCount(page: Page): Promise<number | null> {
-  const button = page.getByRole("button", { name: /^Upload Video Refs/i }).first();
-  const label = await button.getAttribute("aria-label").catch(() => null);
-  const match = label?.match(/\((\d+)\/\d+\)/);
-  return match ? Number(match[1]) : null;
-}
-
-/**
  * Mỗi thumbnail ảnh tham chiếu vừa upload có aria-label cố định "Uploaded
  * image, click to preview" và aria-busy="true" TRONG LÚC còn đang xử lý
  * (kèm spinner .anticon-spin) — khi xong thì aria-busy biến mất/thành
@@ -252,15 +248,6 @@ export async function getReferenceVideoCount(page: Page): Promise<number | null>
  */
 export const busyReferenceImageThumbnailLocator = (page: Page): Locator =>
   page.locator('[aria-label="Uploaded image, click to preview"][aria-busy="true"]');
-
-/**
- * CHƯA CÓ DOM THẬT — phỏng đoán tương tự busyReferenceImageThumbnailLocator
- * cho video tham chiếu (trang /create/subject-reference-to-video), đổi
- * "image" thành "video" theo đúng quy ước site đã dùng. Cần chỉnh qua debug
- * snapshot sau lần chạy thử đầu nếu aria-label thực tế khác.
- */
-export const busyReferenceVideoThumbnailLocator = (page: Page): Locator =>
-  page.locator('[aria-label="Uploaded video, click to preview"][aria-busy="true"]');
 
 /**
  * Mỗi lần generate ảnh, hailuoai.video trả về CẢ CỤM (thực tế xác nhận: 4

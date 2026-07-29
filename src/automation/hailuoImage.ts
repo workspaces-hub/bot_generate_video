@@ -8,6 +8,7 @@ import {
   captureErrorSnapshot,
   captureSnapshot,
   clickDismissingModals,
+  dismissBlockingOverlays,
   dismissPaywallIfBlocking,
   ensureLoggedIn,
   fetchWithRetry,
@@ -64,7 +65,7 @@ export async function generateImage(
     await firstVisible(imageModeTabCandidates(page), 3000)
       .then((imageTab) => clickDismissingModals(page, imageTab))
       .catch(() => {});
-    await dismissPromoOverlayIfPresent(page);
+    await dismissBlockingOverlays(page);
 
     for (let i = 0; i < referenceImagePaths.length; i++) {
       await uploadReferenceImage(page, referenceImagePaths[i], i + 1);
@@ -85,6 +86,7 @@ export async function generateImage(
       await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
     }
 
+    await dismissBlockingOverlays(page);
     const promptInput = await firstVisible(promptInputCandidates(page), 10_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
@@ -95,6 +97,7 @@ export async function generateImage(
     const baseline = await captureImageBaseline(page);
     await captureSnapshot(page, jobId + "-before-generate-click", "before-generate-click");
 
+    await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
     await captureSnapshot(page, jobId + "-after-generate-click", "after-generate-click");
@@ -136,24 +139,6 @@ async function waitForUploadsToSettle(page: Page): Promise<void> {
 }
 
 /**
- * Popup quảng cáo tải app "MiniMax Hub" (khác các modal Ant Design đã xử lý
- * trước đây — không có class .ant-modal-wrap) từng che kín khu vực upload
- * ảnh, xuất hiện GIỮA CHỪNG (sau khi đã upload 1 vài ảnh thành công), khiến
- * click vào nút "+" không mở được file picker (không lỗi "intercept" rõ
- * ràng, chỉ đơn giản là không có filechooser event nào bắn ra). Thử đóng
- * bằng Escape trước (nhiều modal tuỳ biến vẫn lắng nghe phím này dù không
- * phải Ant Design), sau đó thử nút có aria-label chứa "close" nếu có.
- */
-async function dismissPromoOverlayIfPresent(page: Page): Promise<void> {
-  await page.keyboard.press("Escape").catch(() => {});
-  const closeButton = page.getByRole("button", { name: /close/i }).first();
-  if (await closeButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await closeButton.click().catch(() => {});
-  }
-  await page.waitForTimeout(500);
-}
-
-/**
  * Nút thêm ảnh tham chiếu mở file picker hệ điều hành khi bấm — giống cơ
  * chế Upload Start/End Frame trước đây, dùng waitForEvent("filechooser")
  * thay vì setInputFiles trực tiếp (không biết trước input ẩn nằm đâu).
@@ -161,12 +146,12 @@ async function dismissPromoOverlayIfPresent(page: Page): Promise<void> {
  * (có thể do popup bật ra đúng lúc đó).
  */
 async function uploadReferenceImage(page: Page, imagePath: string, expectedCountAfter: number): Promise<void> {
-  await dismissPromoOverlayIfPresent(page);
+  await dismissBlockingOverlays(page);
   try {
     await attemptUploadReferenceImage(page, imagePath, expectedCountAfter);
   } catch (err) {
     console.warn("[hailuoImage] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:", err);
-    await dismissPromoOverlayIfPresent(page);
+    await dismissBlockingOverlays(page);
     await attemptUploadReferenceImage(page, imagePath, expectedCountAfter);
   }
 }

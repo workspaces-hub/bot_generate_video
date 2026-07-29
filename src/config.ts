@@ -23,7 +23,7 @@ export const config = {
   // Trang tạo video từ video tham chiếu (tối đa 3 video) — khác hẳn trang
   // tạo video thường (/create/video), do người dùng cung cấp trực tiếp.
   hailuoCreateVideoRefPath:
-    process.env.HAILUO_CREATE_VIDEO_REF_PATH ?? "/create/subject-reference-to-video",
+    process.env.HAILUO_CREATE_VIDEO_REF_PATH ?? "/create/video",
 
   storageStatePath: path.resolve(
     process.env.STORAGE_STATE_PATH ?? "./storage/session.json",

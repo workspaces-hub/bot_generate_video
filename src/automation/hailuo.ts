@@ -4,53 +4,53 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { getBrowserContext } from "./browser";
 import {
-  addReferenceVideoButtonCandidates,
+  addReferenceImageButtonCandidates,
   antModalCloseButtonLocator,
   antModalWrapperLocator,
   busyReferenceImageThumbnailLocator,
-  busyReferenceVideoThumbnailLocator,
   creditPaywallModalCandidates,
   dropdownOptionCandidates,
   errorIndicatorCandidates,
   firstVisible,
   generateButtonCandidates,
-  getReferenceVideoCount,
+  getReferenceImageCount,
   historyVideoLocator,
   modelChipCandidates,
   promptInputCandidates,
   resolutionChipCandidates,
   signInIndicatorCandidates,
   startFrameButtonCandidates,
+  videoInputModeChipCandidates,
 } from "./selectors";
 
 export class GenerationError extends Error {}
 
-export const MAX_REFERENCE_VIDEOS = 3;
+export const MAX_VIDEO_REF_IMAGES = 3;
 
 export interface GenerateVideoOptions {
   resolution?: string;
   model?: string;
   /** Ảnh start frame (tuỳ chọn) — nếu không có, tạo video thuần từ text như bình thường. */
   startFramePath?: string;
-  /** Video tham chiếu (tuỳ chọn, tối đa 3) — dùng trang riêng config.hailuoCreateVideoRefPath. */
-  referenceVideoPaths?: string[];
+  /** Ảnh tham chiếu (tuỳ chọn, tối đa 3) — dùng trang riêng config.hailuoCreateVideoRefPath. */
+  referenceImagePaths?: string[];
 }
 
 export async function generateVideo(
   prompt: string,
-  { resolution, model, startFramePath, referenceVideoPaths = [] }: GenerateVideoOptions,
+  { resolution, model, startFramePath, referenceImagePaths = [] }: GenerateVideoOptions,
   jobId: string,
 ): Promise<string> {
-  if (referenceVideoPaths.length > MAX_REFERENCE_VIDEOS) {
-    throw new GenerationError(`Chỉ hỗ trợ tối đa ${MAX_REFERENCE_VIDEOS} video tham chiếu.`);
+  if (referenceImagePaths.length > MAX_VIDEO_REF_IMAGES) {
+    throw new GenerationError(`Chỉ hỗ trợ tối đa ${MAX_VIDEO_REF_IMAGES} ảnh tham chiếu.`);
   }
 
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
-    const usingReferenceVideos = referenceVideoPaths.length > 0;
+    const usingReferenceImages = referenceImagePaths.length > 0;
     const url = new URL(
-      usingReferenceVideos ? config.hailuoCreateVideoRefPath : config.hailuoCreateVideoPath,
+      usingReferenceImages ? config.hailuoCreateVideoRefPath : config.hailuoCreateVideoPath,
       config.hailuoBaseUrl,
     ).toString();
     await gotoWithRetry(page, url);
@@ -66,13 +66,19 @@ export async function generateVideo(
     // tìm ô nhập prompt với timeout dài hơn để có biên độ an toàn.
     await page.waitForLoadState("networkidle", { timeout: 120_000 }).catch(() => {});
 
-    if (usingReferenceVideos) {
-      for (let i = 0; i < referenceVideoPaths.length; i++) {
-        await uploadReferenceVideo(page, referenceVideoPaths[i], i + 1);
+    if (usingReferenceImages) {
+      // Trang /create/subject-reference-to-video mặc định ở mode "Start/End
+      // Frame" (y hệt trang tạo video thường) — phải chuyển sang mode "Image
+      // Reference" mới lộ ra khu vực upload ảnh tham chiếu thật, xác nhận qua
+      // thao tác thủ công trên site (không phải phỏng đoán selector).
+      await switchToImageReferenceMode(page);
+      for (let i = 0; i < referenceImagePaths.length; i++) {
+        await uploadVideoRefImage(page, referenceImagePaths[i], i + 1);
       }
-      await waitForReferenceVideoUploadsToSettle(page);
+      await waitForVideoRefImageUploadsToSettle(page);
     }
 
+    await dismissBlockingOverlays(page);
     const promptInput = await firstVisible(promptInputCandidates(page), 30_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
@@ -94,6 +100,7 @@ export async function generateVideo(
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).
     const baseline = await captureVideoBaseline(page);
 
+    await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
     await captureSnapshot(page, jobId + "-after-generate-click", "after-generate-click");
@@ -116,6 +123,7 @@ export async function generateVideo(
  * tới nội dung video nên không thể để lặng lẽ tạo sai).
  */
 async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
+  await dismissBlockingOverlays(page);
   try {
     const button = await firstVisible(startFrameButtonCandidates(page), 8000);
     const [fileChooser] = await Promise.all([
@@ -156,39 +164,24 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
 }
 
 /**
- * Upload 1 video tham chiếu (trang /create/subject-reference-to-video, tối
- * đa 3 video) — cùng cơ chế OS file-picker (waitForEvent("filechooser")) và
- * cùng cách xác nhận đếm tăng đúng như ảnh tham chiếu. Retry 1 lần nếu lần
- * đầu thất bại (có thể do popup quảng cáo bật ra đúng lúc, giống ảnh).
+ * Chuyển mode nhập liệu video từ "Start/End Frame" (mặc định) sang "Image
+ * Reference" — bấm chip mở popover rồi chọn option, cùng cơ chế popover đã
+ * dùng cho model/resolution (dropdownOptionCandidates). Fail CỨNG nếu không
+ * chuyển được (khác selectChipOption chỉ warn) vì bước upload ảnh tham
+ * chiếu ngay sau đó chắc chắn sai nếu bỏ qua bước này.
  */
-async function uploadReferenceVideo(page: Page, videoPath: string, expectedCountAfter: number): Promise<void> {
+async function switchToImageReferenceMode(page: Page): Promise<void> {
+  await dismissBlockingOverlays(page);
   try {
-    await attemptUploadReferenceVideo(page, videoPath, expectedCountAfter);
-  } catch (err) {
-    console.warn("[hailuo] Upload video tham chiếu lần đầu thất bại, thử lại:", err);
-    await attemptUploadReferenceVideo(page, videoPath, expectedCountAfter);
-  }
-}
+    const chip = await firstVisible(videoInputModeChipCandidates(page), 8000);
+    await clickDismissingModals(page, chip);
 
-async function attemptUploadReferenceVideo(page: Page, videoPath: string, expectedCountAfter: number): Promise<void> {
-  try {
-    const addButton = await firstVisible(addReferenceVideoButtonCandidates(page), 8000);
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent("filechooser", { timeout: 10_000 }),
-      clickDismissingModals(page, addButton),
-    ]);
-    await fileChooser.setFiles(videoPath);
-    await page.waitForTimeout(1500);
-
-    const currentCount = await getReferenceVideoCount(page);
-    if (currentCount !== null && currentCount < expectedCountAfter) {
-      throw new Error(
-        `Site chưa ghi nhận video vừa upload (đếm hiện tại: ${currentCount}/${expectedCountAfter} kỳ vọng)`,
-      );
-    }
+    const option = await firstVisible(dropdownOptionCandidates(page, "Image Reference"), 5000);
+    await clickWithForceFallback(option);
+    await page.waitForTimeout(500);
   } catch (err) {
     throw new GenerationError(
-      `Không tải được video tham chiếu lên — site có thể đã đổi giao diện upload: ${
+      `Không chuyển được sang chế độ "Image Reference" — site có thể đã đổi giao diện: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
@@ -196,23 +189,72 @@ async function attemptUploadReferenceVideo(page: Page, videoPath: string, expect
 }
 
 /**
- * Cùng lý do đã sửa cho start frame (xem uploadStartFrame): thumbnail video
- * tham chiếu nhiều khả năng cũng còn "aria-busy" một lúc sau khi upload —
- * đợi hết busy trước khi bấm Generate để tránh bị site âm thầm từ chối.
+ * Upload 1 ảnh tham chiếu (trang /create/subject-reference-to-video, tối đa
+ * 3 ảnh) — cùng cơ chế/selector với ảnh tham chiếu của tính năng tạo ảnh
+ * (addReferenceImageButtonCandidates/getReferenceImageCount), vì đây cũng là
+ * upload ảnh, chỉ khác trang. Retry 1 lần nếu lần đầu thất bại (có thể do
+ * popup quảng cáo bật ra đúng lúc).
+ *
+ * Thực tế xác nhận qua debug screenshot: popup "MiniMax Hub" che gần kín
+ * trang NGAY TỪ ĐẦU — khiến bước tìm nút upload timeout ngay ở khâu tìm
+ * locator, chưa kịp click nên clickDismissingModals (chỉ đóng modal khi
+ * CLICK bị chặn) không có cơ hội chạy. Phải đóng popup CHỦ ĐỘNG trước khi
+ * tìm nút — xem dismissBlockingOverlays().
  */
-async function waitForReferenceVideoUploadsToSettle(page: Page): Promise<void> {
+async function uploadVideoRefImage(page: Page, imagePath: string, expectedCountAfter: number): Promise<void> {
+  await dismissBlockingOverlays(page);
+  try {
+    await attemptUploadVideoRefImage(page, imagePath, expectedCountAfter);
+  } catch (err) {
+    console.warn("[hailuo] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:", err);
+    await dismissBlockingOverlays(page);
+    await attemptUploadVideoRefImage(page, imagePath, expectedCountAfter);
+  }
+}
+
+async function attemptUploadVideoRefImage(page: Page, imagePath: string, expectedCountAfter: number): Promise<void> {
+  try {
+    const addButton = await firstVisible(addReferenceImageButtonCandidates(page), 8000);
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent("filechooser", { timeout: 10_000 }),
+      clickDismissingModals(page, addButton),
+    ]);
+    await fileChooser.setFiles(imagePath);
+    await page.waitForTimeout(1500);
+
+    const currentCount = await getReferenceImageCount(page);
+    if (currentCount !== null && currentCount < expectedCountAfter) {
+      throw new Error(
+        `Site chưa ghi nhận ảnh vừa upload (đếm hiện tại: ${currentCount}/${expectedCountAfter} kỳ vọng)`,
+      );
+    }
+  } catch (err) {
+    throw new GenerationError(
+      `Không tải được ảnh tham chiếu lên — site có thể đã đổi giao diện upload: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/**
+ * Cùng lý do đã sửa cho start frame (xem uploadStartFrame): thumbnail ảnh
+ * tham chiếu vẫn còn "aria-busy" một lúc sau khi upload — đợi hết busy
+ * trước khi bấm Generate để tránh bị site âm thầm từ chối.
+ */
+async function waitForVideoRefImageUploadsToSettle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
 
   try {
     await page.waitForFunction(
-      () => document.querySelectorAll('[aria-label="Uploaded video, click to preview"][aria-busy="true"]').length === 0,
+      () => document.querySelectorAll('[aria-label="Uploaded image, click to preview"][aria-busy="true"]').length === 0,
       { timeout: 60_000 },
     );
   } catch {
-    const stillBusy = await busyReferenceVideoThumbnailLocator(page).count();
+    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
     if (stillBusy > 0) {
       throw new GenerationError(
-        `Còn ${stillBusy} video tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng video chưa load xong.`,
+        `Còn ${stillBusy} ảnh tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng ảnh chưa load xong.`,
       );
     }
   }
@@ -327,6 +369,32 @@ export async function clickDismissingModals(page: Page, locator: Locator, timeou
     const dismissed = await dismissAntModalIfPresent(page);
     if (!dismissed) throw err;
     await locator.click({ timeout: timeoutMs });
+  }
+}
+
+/**
+ * Đóng CHỦ ĐỘNG mọi popup/modal đang che trang — gọi TRƯỚC khi tìm phần tử
+ * (firstVisible), không đợi thao tác thất bại mới đóng như
+ * clickDismissingModals. Thực tế xác nhận: popup "MiniMax Hub" có thể che
+ * kín trang NGAY TỪ ĐẦU, khiến bước TÌM phần tử (firstVisible) timeout
+ * trước khi kịp click — lúc đó clickDismissingModals không có cơ hội chạy
+ * vì nó chỉ phản ứng khi CLICK bị chặn, không giúp gì nếu chưa tìm được
+ * phần tử để click. Nên gọi hàm này trước MỌI bước quan trọng: tìm ô nhập
+ * prompt, tìm nút upload ảnh, tìm nút Generate.
+ *
+ * Xử lý cả 2 dạng popup đã gặp: modal Ant Design chuẩn (.ant-modal-wrap, có
+ * nút .ant-modal-close — dismissAntModalIfPresent) VÀ popup tuỳ biến không
+ * theo chuẩn Ant Design (không có class trên, chỉ có nút mang tên "close"
+ * chung hoặc lắng nghe phím Escape).
+ */
+export async function dismissBlockingOverlays(page: Page): Promise<void> {
+  await dismissAntModalIfPresent(page);
+
+  await page.keyboard.press("Escape").catch(() => {});
+  const closeButton = page.getByRole("button", { name: /close/i }).first();
+  if (await closeButton.isVisible({ timeout: 500 }).catch(() => false)) {
+    await closeButton.click().catch(() => {});
+    await page.waitForTimeout(500);
   }
 }
 
