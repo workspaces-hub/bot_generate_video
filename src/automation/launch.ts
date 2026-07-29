@@ -17,7 +17,15 @@ export async function launchRealChrome(): Promise<Browser> {
     );
   }
 
-  const args = ["--disable-blink-features=AutomationControlled"];
+  const args = [
+    "--disable-blink-features=AutomationControlled",
+    // /dev/shm mặc định rất nhỏ trên nhiều VPS/container (thường 64MB) —
+    // Chrome dùng /dev/shm cho shared memory khi decode/render video, dễ
+    // gây "Target crashed" (crash cả tiến trình renderer) khi xử lý file
+    // video nặng (tính năng Omni Reference). Chuyển sang dùng /tmp thay vì
+    // /dev/shm để tránh giới hạn này.
+    "--disable-dev-shm-usage",
+  ];
   if (config.chromeNoSandbox) {
     args.push("--no-sandbox", "--disable-setuid-sandbox");
   }

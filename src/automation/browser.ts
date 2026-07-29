@@ -20,10 +20,22 @@ export function getBrowserContext(): Promise<BrowserContext> {
           `[browser] Không tìm thấy session tại ${config.storageStatePath}. Chạy "npm run login" trước khi tạo video.`,
         );
       }
-      return browser.newContext({
+      const context = await browser.newContext({
         storageState: hasSession ? config.storageStatePath : undefined,
         viewport: { width: 1440, height: 900 },
       });
+
+      // Nếu Chrome crash ("Target crashed") hoặc bị đóng vì bất kỳ lý do
+      // gì, contextPromise đã cache PHẢI được xoá — nếu không, mọi job sau
+      // đó sẽ luôn tái sử dụng browser đã chết và fail mãi mãi, cho tới khi
+      // restart bot thủ công. Xoá cache để lần gọi tiếp theo tự khởi động
+      // lại Chrome mới (tự phục hồi).
+      browser.on("disconnected", () => {
+        console.warn("[browser] Chrome đã ngắt kết nối/crash — sẽ khởi động lại ở job tiếp theo.");
+        contextPromise = null;
+      });
+
+      return context;
     })();
   }
   return contextPromise;
