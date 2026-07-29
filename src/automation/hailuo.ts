@@ -124,11 +124,11 @@ export async function generateVideo(
     //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
     // }
 
-    await captureSnapshot(
-      page,
-      jobId + "-before-generate-click",
-      "before-generate-click",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-before-generate-click",
+    //   "before-generate-click",
+    // );
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác video
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).
@@ -137,11 +137,11 @@ export async function generateVideo(
     await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    await captureSnapshot(
-      page,
-      jobId + "-after-generate-click",
-      "after-generate-click",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-after-generate-click",
+    //   "after-generate-click",
+    // );
 
     const newVideo = await waitForNewVideo(
       page,
@@ -233,7 +233,7 @@ async function switchVideoInputMode(
     // Chụp debug ngay khi popover vừa mở (TRƯỚC khi chọn option) — nếu bước
     // sau vẫn lỗi, đây là bằng chứng trực tiếp để biết text option thật là
     // gì, thay vì đoán mò.
-    await captureSnapshot(page, jobId + "-mode-popover-open", "mode-popover-open");
+    // await captureSnapshot(page, jobId + "-mode-popover-open", "mode-popover-open");
 
     const option = await firstVisible(
       dropdownOptionCandidates(page, modeName),

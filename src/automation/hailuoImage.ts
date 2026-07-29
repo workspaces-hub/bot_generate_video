@@ -95,12 +95,12 @@ export async function generateImage(
     // nào là MỚI (không phải ảnh cũ nhất trong lịch sử) — cùng cách tiếp
     // cận đã dùng cho video (xem waitForNewVideo trong hailuo.ts).
     const baseline = await captureImageBaseline(page);
-    await captureSnapshot(page, jobId + "-before-generate-click", "before-generate-click");
+    // await captureSnapshot(page, jobId + "-before-generate-click", "before-generate-click");
 
     await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    await captureSnapshot(page, jobId + "-after-generate-click", "after-generate-click");
+    // await captureSnapshot(page, jobId + "-after-generate-click", "after-generate-click");
 
     const newEntry = await waitForNewImageEntry(page, baseline, config.generationTimeoutMs);
     await waitForEntryImagesToSettle(page, newEntry);
