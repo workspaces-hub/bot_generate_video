@@ -58,6 +58,29 @@ export const videoInputModeChipCandidates = (page: Page): Array<() => Locator> =
 ];
 
 /**
+ * Mode "Character Reference": sau khi upload ảnh nhân vật, site cần vài
+ * giây để nhận diện (character detection) trước khi cho generate. Nếu
+ * KHÔNG nhận diện được sẽ hiện text "No person detected" hoặc đổi nút thành
+ * "Change Characters" (do người dùng xác nhận trực tiếp qua thao tác thủ
+ * công trên site).
+ */
+export const characterDetectionFailedCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByText(/no person detected/i),
+  () => page.getByText(/change characters?/i),
+];
+
+/**
+ * Nút "Confirm" xác nhận nhân vật sau khi detection xong (mode "Character
+ * Reference") — DOM thật do người dùng cung cấp trực tiếp:
+ * <button class="new-color-btn-bg ... disabled:cursor-not-allowed
+ * disabled:opacity-50">Confirm</button>. Dùng exact text match, KHÔNG dùng
+ * class (trùng class với nút Generate thường — button.new-color-btn-bg).
+ */
+export const confirmCharacterButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^confirm$/i }),
+];
+
+/**
  * Nút "Start Frame" (upload ảnh khởi đầu video) hiện trực tiếp trong khung
  * nhập prompt tạo video, cạnh "End Frame" — đã thấy qua screenshot debug
  * nhưng CHƯA CÓ DOM thật (chưa lấy được HTML lúc đó), nên đây là candidate
@@ -229,6 +252,15 @@ export const imageModeTabCandidates = (page: Page): Array<() => Locator> => [
  */
 export const addReferenceImageButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /^Upload Image Refs/i }),
+];
+
+/**
+ * Nút upload ảnh nhân vật ở mode "Character Reference" — DOM thật xác nhận
+ * aria-label="Upload Character Refs" (KHÔNG có số đếm (N/M) như Image Refs,
+ * vì chỉ nhận đúng 1 ảnh).
+ */
+export const addCharacterRefButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^Upload Character Refs/i }),
 ];
 
 /** Đọc số ảnh tham chiếu hiện tại từ aria-label "Upload Image Refs(N/16)". */

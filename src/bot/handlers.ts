@@ -9,14 +9,15 @@ import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import { config } from "../config";
 import { enqueueJob } from "../queue";
 import {
+  CHARACTER_REF_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
   VIDEO_REF_BUTTON_LABEL,
   promptMenu,
 } from "./keyboard";
 
-type PendingMode = "video" | "image" | "videoRef";
-// userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference).
+type PendingMode = "video" | "image" | "videoRef" | "characterRef";
+// userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference).
 const waitingMode = new Map<number, PendingMode>();
 
 // Gom ảnh tham chiếu gửi liên tiếp từ CÙNG 1 user trong 1 khoảng thời gian
@@ -93,6 +94,7 @@ interface SubmitVideoParams {
   rawText: string;
   startFramePath?: string;
   referenceImagePaths?: string[];
+  characterImagePath?: string;
 }
 
 async function submitVideoJob({
@@ -103,12 +105,14 @@ async function submitVideoJob({
   rawText,
   startFramePath,
   referenceImagePaths,
+  characterImagePath,
 }: SubmitVideoParams): Promise<void> {
   const { text: prompt, resolution, model } = parsePromptMessage(rawText);
 
   if (!prompt) {
     await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
     if (startFramePath) await fs.unlink(startFramePath).catch(() => {});
+    if (characterImagePath) await fs.unlink(characterImagePath).catch(() => {});
     for (const p of referenceImagePaths ?? []) await fs.unlink(p).catch(() => {});
     return;
   }
@@ -118,8 +122,9 @@ async function submitVideoJob({
     referenceImagePaths && referenceImagePaths.length > 0
       ? ` (kèm ${referenceImagePaths.length} ảnh tham chiếu)`
       : "";
+  const characterNote = characterImagePath ? " (kèm ảnh nhân vật)" : "";
   const statusMessage = await ctx.reply(
-    `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${startFrameNote}${refImageNote}`,
+    `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${startFrameNote}${refImageNote}${characterNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
     },
@@ -135,6 +140,7 @@ async function submitVideoJob({
     model: model, //isAdmin(userId) ? model : DEFAULT_MODEL,
     startFramePath,
     referenceImagePaths,
+    characterImagePath,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
   });
@@ -239,6 +245,28 @@ async function handlePhotoBuffer(
     return;
   }
 
+  if (mode === "characterRef") {
+    // Bắt buộc đúng 1 ảnh nhân vật — chỉ lấy ảnh GẦN NHẤT nếu gửi nhiều.
+    let characterImagePath: string;
+    try {
+      characterImagePath = await downloadTelegramPhoto(ctx, photoArrays[photoArrays.length - 1]);
+    } catch (err) {
+      console.error("[bot] Tải ảnh Telegram thất bại:", err);
+      await ctx.reply("Không tải được ảnh từ Telegram, đã huỷ.", promptMenu);
+      return;
+    }
+
+    await submitVideoJob({
+      ctx,
+      groupChatId: ctx.chat.id,
+      promptMessageId,
+      userId: ctx.from.id,
+      rawText,
+      characterImagePath,
+    });
+    return;
+  }
+
   // "videoRef": lấy HẾT ảnh đã gom (tối đa MAX_VIDEO_REF_IMAGES) làm ảnh
   // tham chiếu cho video — khác "image" chỉ ở chỗ dùng submitVideoJob thay
   // vì submitImageJob.
@@ -311,13 +339,23 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(CHARACTER_REF_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    waitingMode.set(ctx.from.id, "characterRef");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi 1 ảnh nhân vật (bắt buộc — nếu gửi nhiều ảnh, ảnh gửi gần nhất sẽ được dùng), ` +
+        `rồi gõ prompt ở tin nhắn tiếp theo.`,
+    );
+  });
+
   bot.on(message("text"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
     if (
       ctx.message.text.startsWith("/") ||
       ctx.message.text === PROMPT_BUTTON_LABEL ||
       ctx.message.text === IMAGE_BUTTON_LABEL ||
-      ctx.message.text === VIDEO_REF_BUTTON_LABEL
+      ctx.message.text === VIDEO_REF_BUTTON_LABEL ||
+      ctx.message.text === CHARACTER_REF_BUTTON_LABEL
     ) {
       return next();
     }
@@ -340,7 +378,14 @@ export function registerHandlers(bot: Telegraf): void {
 
     waitingMode.delete(userId);
 
-    if (mode === "video" || mode === "videoRef") {
+    if (mode === "characterRef") {
+      // Bắt buộc phải có ảnh nhân vật — khác "video"/"videoRef" (ảnh tuỳ
+      // chọn), gõ text không kèm ảnh nào thì từ chối luôn.
+      await ctx.reply(
+        "Chế độ Video - Character Reference bắt buộc phải gửi kèm 1 ảnh nhân vật trước khi gõ prompt.",
+        promptMenu,
+      );
+    } else if (mode === "video" || mode === "videoRef") {
       // "videoRef" không gửi ảnh nào, chỉ gõ text — hoạt động y hệt "Prompt" thường.
       await submitVideoJob({
         ctx,
@@ -361,17 +406,21 @@ export function registerHandlers(bot: Telegraf): void {
   });
 
   // Ảnh cho chế độ tạo ảnh (tham chiếu), chế độ tạo video (start frame, chỉ
-  // ảnh gần nhất được dùng), hoặc chế độ "Video - Image Reference" (ảnh tham
-  // chiếu cho video, tối đa MAX_VIDEO_REF_IMAGES) — chỉ nhận khi đang ở mode
-  // tương ứng hoặc đã có buffer đang chờ (giữ nguyên mode đã chọn từ ảnh đầu
-  // tiên). Số ảnh tối đa gom được tuỳ theo mode, xem maxPhotosForMode().
+  // ảnh gần nhất được dùng), chế độ "Video - Image Reference" (ảnh tham
+  // chiếu cho video, tối đa MAX_VIDEO_REF_IMAGES), hoặc chế độ "Video -
+  // Character Reference" (bắt buộc đúng 1 ảnh nhân vật, chỉ ảnh gần nhất
+  // được dùng) — chỉ nhận khi đang ở mode tương ứng hoặc đã có buffer đang
+  // chờ (giữ nguyên mode đã chọn từ ảnh đầu tiên). Số ảnh tối đa gom được
+  // tuỳ theo mode, xem maxPhotosForMode().
   bot.on(message("photo"), async (ctx, next) => {
+    console.log("🚀 ~ registerHandlers ~ ctx.from, !isAllowedGroup(ctx.chat.id:", ctx.from, !isAllowedGroup(ctx.chat.id))
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
     const userId = ctx.from.id;
     const existing = pendingPhotoBuffers.get(userId);
     const mode = existing?.mode ?? waitingMode.get(userId);
-    if (mode !== "image" && mode !== "video" && mode !== "videoRef") return next();
+    console.log("🚀 ~ registerHandlers ~ mode:", mode)
+    if (mode !== "image" && mode !== "video" && mode !== "videoRef" && mode !== "characterRef") return next();
 
     waitingMode.delete(userId);
 

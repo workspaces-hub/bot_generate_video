@@ -20,10 +20,14 @@ export const config = {
   hailuoBaseUrl: process.env.HAILUO_BASE_URL ?? "https://hailuoai.video",
   hailuoCreateVideoPath: process.env.HAILUO_CREATE_VIDEO_PATH ?? "/create/video",
   hailuoCreateImagePath: process.env.HAILUO_CREATE_IMAGE_PATH ?? "/create/image-generation",
-  // Trang tạo video từ video tham chiếu (tối đa 3 video) — khác hẳn trang
-  // tạo video thường (/create/video), do người dùng cung cấp trực tiếp.
+  // Trang tạo video từ Image Reference / Character Reference — khác hẳn
+  // trang tạo video thường (/create/video). Xác nhận thật: chip chuyển mode
+  // "Start/End Frame" chỉ mở popover Image/Character Reference trên trang
+  // NÀY — trên /create/video, chip đó không mở popover mode nào cả (đã thử
+  // và xác nhận qua debug HTML: click không mở đúng popover, chỉ có popover
+  // "model-selection-options" không liên quan tồn tại sẵn trong DOM).
   hailuoCreateVideoRefPath:
-    process.env.HAILUO_CREATE_VIDEO_REF_PATH ?? "/create/video",
+    process.env.HAILUO_CREATE_VIDEO_REF_PATH ?? "/create/subject-reference-to-video",
 
   storageStatePath: path.resolve(
     process.env.STORAGE_STATE_PATH ?? "./storage/session.json",
