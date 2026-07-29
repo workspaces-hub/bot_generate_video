@@ -20,6 +20,10 @@ export const config = {
   hailuoBaseUrl: process.env.HAILUO_BASE_URL ?? "https://hailuoai.video",
   hailuoCreateVideoPath: process.env.HAILUO_CREATE_VIDEO_PATH ?? "/create/video",
   hailuoCreateImagePath: process.env.HAILUO_CREATE_IMAGE_PATH ?? "/create/image-generation",
+  // Trang tạo video từ video tham chiếu (tối đa 3 video) — khác hẳn trang
+  // tạo video thường (/create/video), do người dùng cung cấp trực tiếp.
+  hailuoCreateVideoRefPath:
+    process.env.HAILUO_CREATE_VIDEO_REF_PATH ?? "/create/subject-reference-to-video",
 
   storageStatePath: path.resolve(
     process.env.STORAGE_STATE_PATH ?? "./storage/session.json",

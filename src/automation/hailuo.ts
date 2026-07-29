@@ -4,14 +4,17 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { getBrowserContext } from "./browser";
 import {
+  addReferenceVideoButtonCandidates,
   antModalCloseButtonLocator,
   antModalWrapperLocator,
   busyReferenceImageThumbnailLocator,
+  busyReferenceVideoThumbnailLocator,
   creditPaywallModalCandidates,
   dropdownOptionCandidates,
   errorIndicatorCandidates,
   firstVisible,
   generateButtonCandidates,
+  getReferenceVideoCount,
   historyVideoLocator,
   modelChipCandidates,
   promptInputCandidates,
@@ -22,22 +25,34 @@ import {
 
 export class GenerationError extends Error {}
 
+export const MAX_REFERENCE_VIDEOS = 3;
+
 export interface GenerateVideoOptions {
   resolution?: string;
   model?: string;
   /** Ảnh start frame (tuỳ chọn) — nếu không có, tạo video thuần từ text như bình thường. */
   startFramePath?: string;
+  /** Video tham chiếu (tuỳ chọn, tối đa 3) — dùng trang riêng config.hailuoCreateVideoRefPath. */
+  referenceVideoPaths?: string[];
 }
 
 export async function generateVideo(
   prompt: string,
-  { resolution, model, startFramePath }: GenerateVideoOptions,
+  { resolution, model, startFramePath, referenceVideoPaths = [] }: GenerateVideoOptions,
   jobId: string,
 ): Promise<string> {
+  if (referenceVideoPaths.length > MAX_REFERENCE_VIDEOS) {
+    throw new GenerationError(`Chỉ hỗ trợ tối đa ${MAX_REFERENCE_VIDEOS} video tham chiếu.`);
+  }
+
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
-    const url = new URL(config.hailuoCreateVideoPath, config.hailuoBaseUrl).toString();
+    const usingReferenceVideos = referenceVideoPaths.length > 0;
+    const url = new URL(
+      usingReferenceVideos ? config.hailuoCreateVideoRefPath : config.hailuoCreateVideoPath,
+      config.hailuoBaseUrl,
+    ).toString();
     await gotoWithRetry(page, url);
 
     await ensureLoggedIn(page);
@@ -50,6 +65,13 @@ export async function generateVideo(
     // chưa kịp render dù chỉ trễ thêm 1-2s. Chờ mạng rảnh trước, rồi mới
     // tìm ô nhập prompt với timeout dài hơn để có biên độ an toàn.
     await page.waitForLoadState("networkidle", { timeout: 120_000 }).catch(() => {});
+
+    if (usingReferenceVideos) {
+      for (let i = 0; i < referenceVideoPaths.length; i++) {
+        await uploadReferenceVideo(page, referenceVideoPaths[i], i + 1);
+      }
+      await waitForReferenceVideoUploadsToSettle(page);
+    }
 
     const promptInput = await firstVisible(promptInputCandidates(page), 30_000);
     await clickDismissingModals(page, promptInput);
@@ -131,6 +153,69 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
     }
   }
   await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+}
+
+/**
+ * Upload 1 video tham chiếu (trang /create/subject-reference-to-video, tối
+ * đa 3 video) — cùng cơ chế OS file-picker (waitForEvent("filechooser")) và
+ * cùng cách xác nhận đếm tăng đúng như ảnh tham chiếu. Retry 1 lần nếu lần
+ * đầu thất bại (có thể do popup quảng cáo bật ra đúng lúc, giống ảnh).
+ */
+async function uploadReferenceVideo(page: Page, videoPath: string, expectedCountAfter: number): Promise<void> {
+  try {
+    await attemptUploadReferenceVideo(page, videoPath, expectedCountAfter);
+  } catch (err) {
+    console.warn("[hailuo] Upload video tham chiếu lần đầu thất bại, thử lại:", err);
+    await attemptUploadReferenceVideo(page, videoPath, expectedCountAfter);
+  }
+}
+
+async function attemptUploadReferenceVideo(page: Page, videoPath: string, expectedCountAfter: number): Promise<void> {
+  try {
+    const addButton = await firstVisible(addReferenceVideoButtonCandidates(page), 8000);
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent("filechooser", { timeout: 10_000 }),
+      clickDismissingModals(page, addButton),
+    ]);
+    await fileChooser.setFiles(videoPath);
+    await page.waitForTimeout(1500);
+
+    const currentCount = await getReferenceVideoCount(page);
+    if (currentCount !== null && currentCount < expectedCountAfter) {
+      throw new Error(
+        `Site chưa ghi nhận video vừa upload (đếm hiện tại: ${currentCount}/${expectedCountAfter} kỳ vọng)`,
+      );
+    }
+  } catch (err) {
+    throw new GenerationError(
+      `Không tải được video tham chiếu lên — site có thể đã đổi giao diện upload: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/**
+ * Cùng lý do đã sửa cho start frame (xem uploadStartFrame): thumbnail video
+ * tham chiếu nhiều khả năng cũng còn "aria-busy" một lúc sau khi upload —
+ * đợi hết busy trước khi bấm Generate để tránh bị site âm thầm từ chối.
+ */
+async function waitForReferenceVideoUploadsToSettle(page: Page): Promise<void> {
+  await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll('[aria-label="Uploaded video, click to preview"][aria-busy="true"]').length === 0,
+      { timeout: 60_000 },
+    );
+  } catch {
+    const stillBusy = await busyReferenceVideoThumbnailLocator(page).count();
+    if (stillBusy > 0) {
+      throw new GenerationError(
+        `Còn ${stillBusy} video tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng video chưa load xong.`,
+      );
+    }
+  }
 }
 
 /**
