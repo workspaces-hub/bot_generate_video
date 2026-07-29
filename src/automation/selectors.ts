@@ -298,14 +298,15 @@ export const busyReferenceImageThumbnailLocator = (page: Page): Locator =>
   page.locator('[aria-label="Uploaded image, click to preview"][aria-busy="true"]');
 
 /**
- * CHƯA CÓ DOM THẬT — mode "Omni Reference" nhận file ảnh/video/audio, thumbnail
- * mỗi loại nhiều khả năng dùng cùng quy ước aria-label "Uploaded <loại>,
- * click to preview" (đã xác nhận thật với "image") — dùng prefix/suffix
- * match để bắt cả 3 loại cùng lúc. Cần chỉnh qua debug snapshot nếu thực tế
- * khác.
+ * DOM thật xác nhận: mỗi loại file dùng aria-label KHÁC NHAU khi đang xử lý
+ * — ảnh: "Uploaded image, click to preview" (có hậu tố ", click to
+ * preview"), video: "Uploaded video" (KHÔNG có hậu tố đó). Vì vậy chỉ dùng
+ * prefix match "Uploaded" (bỏ suffix match) để bắt được cả 2 dạng cùng lúc —
+ * bản trước dùng suffix match nên bỏ sót video, khiến bot bấm Generate khi
+ * video vẫn còn đang tải.
  */
 export const busyOmniReferenceThumbnailLocator = (page: Page): Locator =>
-  page.locator('[aria-label^="Uploaded"][aria-label$="click to preview"][aria-busy="true"]');
+  page.locator('[aria-label^="Uploaded"][aria-busy="true"]');
 
 /**
  * Mỗi lần generate ảnh, hailuoai.video trả về CẢ CỤM (thực tế xác nhận: 4

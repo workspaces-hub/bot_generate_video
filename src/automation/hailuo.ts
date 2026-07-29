@@ -574,7 +574,7 @@ async function waitForOmniReferenceUploadsToSettle(page: Page): Promise<void> {
     await page.waitForFunction(
       () =>
         document.querySelectorAll(
-          '[aria-label^="Uploaded"][aria-label$="click to preview"][aria-busy="true"]',
+          '[aria-label^="Uploaded"][aria-busy="true"]',
         ).length === 0,
       { timeout: 60_000 },
     );
