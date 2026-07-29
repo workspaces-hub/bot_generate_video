@@ -263,9 +263,25 @@ export const addCharacterRefButtonCandidates = (page: Page): Array<() => Locator
   () => page.getByRole("button", { name: /^Upload Character Refs/i }),
 ];
 
+/** Nút upload file tham chiếu (ảnh/video/audio) ở mode "Omni Reference". */
+export const addOmniReferenceButtonCandidates = (page: Page): Array<() => Locator> => [
+  // DOM thật xác nhận: aria-label="Upload Refs (0/12)" (có khoảng trắng
+  // trước dấu ngoặc, KHÁC "Upload Image Refs(N/16)" không có khoảng trắng) —
+  // giới hạn thật là 12, không phải 3.
+  () => page.getByRole("button", { name: /^Upload Refs/i }),
+];
+
 /** Đọc số ảnh tham chiếu hiện tại từ aria-label "Upload Image Refs(N/16)". */
 export async function getReferenceImageCount(page: Page): Promise<number | null> {
   const button = page.getByRole("button", { name: /^Upload Image Refs/i }).first();
+  const label = await button.getAttribute("aria-label").catch(() => null);
+  const match = label?.match(/\((\d+)\/\d+\)/);
+  return match ? Number(match[1]) : null;
+}
+
+/** Đọc số file tham chiếu hiện tại ở mode "Omni Reference" — cùng quy ước "(N/M)". */
+export async function getOmniReferenceCount(page: Page): Promise<number | null> {
+  const button = page.getByRole("button", { name: /^Upload Refs/i }).first();
   const label = await button.getAttribute("aria-label").catch(() => null);
   const match = label?.match(/\((\d+)\/\d+\)/);
   return match ? Number(match[1]) : null;
@@ -280,6 +296,16 @@ export async function getReferenceImageCount(page: Page): Promise<number | null>
  */
 export const busyReferenceImageThumbnailLocator = (page: Page): Locator =>
   page.locator('[aria-label="Uploaded image, click to preview"][aria-busy="true"]');
+
+/**
+ * CHƯA CÓ DOM THẬT — mode "Omni Reference" nhận file ảnh/video/audio, thumbnail
+ * mỗi loại nhiều khả năng dùng cùng quy ước aria-label "Uploaded <loại>,
+ * click to preview" (đã xác nhận thật với "image") — dùng prefix/suffix
+ * match để bắt cả 3 loại cùng lúc. Cần chỉnh qua debug snapshot nếu thực tế
+ * khác.
+ */
+export const busyOmniReferenceThumbnailLocator = (page: Page): Locator =>
+  page.locator('[aria-label^="Uploaded"][aria-label$="click to preview"][aria-busy="true"]');
 
 /**
  * Mỗi lần generate ảnh, hailuoai.video trả về CẢ CỤM (thực tế xác nhận: 4

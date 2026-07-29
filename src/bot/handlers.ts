@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Context, Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
-import { MAX_VIDEO_REF_IMAGES } from "../automation/hailuo";
+import { MAX_OMNI_REFERENCE_ITEMS, MAX_VIDEO_REF_IMAGES } from "../automation/hailuo";
 import { MAX_REFERENCE_IMAGES } from "../automation/hailuoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import { config } from "../config";
@@ -11,13 +11,14 @@ import { enqueueJob } from "../queue";
 import {
   CHARACTER_REF_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
+  OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
   VIDEO_REF_BUTTON_LABEL,
   promptMenu,
 } from "./keyboard";
 
-type PendingMode = "video" | "image" | "videoRef" | "characterRef";
-// userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference).
+type PendingMode = "video" | "image" | "videoRef" | "characterRef" | "omniRef";
+// userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
 // Gom ảnh tham chiếu gửi liên tiếp từ CÙNG 1 user trong 1 khoảng thời gian
@@ -45,6 +46,29 @@ const pendingPhotoBuffers = new Map<number, PendingPhotoBuffer>();
 /** Số ảnh tối đa được gom theo từng mode — "videoRef" giới hạn thấp hơn nhiều so với "image". */
 function maxPhotosForMode(mode: PendingMode): number {
   return mode === "videoRef" ? MAX_VIDEO_REF_IMAGES : MAX_REFERENCE_IMAGES;
+}
+
+// Buffer riêng cho "omniRef" (ảnh/video/audio tối đa MAX_OMNI_REFERENCE_ITEMS)
+// — khác pendingPhotoBuffers vì cần biết LOẠI file (không chỉ ảnh) để tải
+// đúng cách và đặt đúng đuôi file khi lưu.
+type OmniRefKind = "photo" | "video" | "audio";
+interface PendingOmniRefItem {
+  kind: OmniRefKind;
+  fileId: string;
+}
+interface PendingOmniRefBuffer {
+  ctx: Context;
+  items: PendingOmniRefItem[];
+  caption?: string;
+  promptMessageId: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+const pendingOmniRefBuffers = new Map<number, PendingOmniRefBuffer>();
+
+function omniRefExtension(kind: OmniRefKind): string {
+  if (kind === "photo") return ".jpg";
+  if (kind === "video") return ".mp4";
+  return ".mp3";
 }
 
 function isAdmin(userId: number): boolean {
@@ -86,6 +110,26 @@ async function downloadTelegramPhoto(
   return imagePath;
 }
 
+/** Tải 1 file Telegram bất kỳ (ảnh/video/audio, dùng cho "omniRef") về local. */
+async function downloadTelegramFile(
+  ctx: Context,
+  fileId: string,
+  ext: string,
+): Promise<string> {
+  const fileUrl = await ctx.telegram.getFileLink(fileId);
+
+  const response = await fetch(fileUrl);
+  if (!response.ok) {
+    throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  await fs.mkdir(config.uploadsDir, { recursive: true });
+  const filePath = path.join(config.uploadsDir, `${randomUUID()}${ext}`);
+  await fs.writeFile(filePath, buffer);
+  return filePath;
+}
+
 interface SubmitVideoParams {
   ctx: Context;
   groupChatId: number;
@@ -95,6 +139,7 @@ interface SubmitVideoParams {
   startFramePath?: string;
   referenceImagePaths?: string[];
   characterImagePath?: string;
+  omniReferencePaths?: string[];
 }
 
 async function submitVideoJob({
@@ -106,6 +151,7 @@ async function submitVideoJob({
   startFramePath,
   referenceImagePaths,
   characterImagePath,
+  omniReferencePaths,
 }: SubmitVideoParams): Promise<void> {
   const { text: prompt, resolution, model } = parsePromptMessage(rawText);
 
@@ -114,6 +160,7 @@ async function submitVideoJob({
     if (startFramePath) await fs.unlink(startFramePath).catch(() => {});
     if (characterImagePath) await fs.unlink(characterImagePath).catch(() => {});
     for (const p of referenceImagePaths ?? []) await fs.unlink(p).catch(() => {});
+    for (const p of omniReferencePaths ?? []) await fs.unlink(p).catch(() => {});
     return;
   }
 
@@ -123,8 +170,12 @@ async function submitVideoJob({
       ? ` (kèm ${referenceImagePaths.length} ảnh tham chiếu)`
       : "";
   const characterNote = characterImagePath ? " (kèm ảnh nhân vật)" : "";
+  const omniNote =
+    omniReferencePaths && omniReferencePaths.length > 0
+      ? ` (kèm ${omniReferencePaths.length} file tham chiếu)`
+      : "";
   const statusMessage = await ctx.reply(
-    `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${startFrameNote}${refImageNote}${characterNote}`,
+    `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${startFrameNote}${refImageNote}${characterNote}${omniNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
     },
@@ -141,6 +192,7 @@ async function submitVideoJob({
     startFramePath,
     referenceImagePaths,
     characterImagePath,
+    omniReferencePaths,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
   });
@@ -303,6 +355,88 @@ async function handlePhotoBuffer(
   });
 }
 
+/** Cùng logic finalizeIfHasCaption nhưng cho buffer "omniRef". */
+function finalizeOmniRefIfHasCaption(userId: number): void {
+  const current = pendingOmniRefBuffers.get(userId);
+  if (!current) return;
+  if ((current.caption ?? "").trim()) {
+    pendingOmniRefBuffers.delete(userId);
+    void handleOmniRefBuffer(current, current.caption ?? "");
+  }
+}
+
+/** Cùng logic scheduleFinalize nhưng cho buffer "omniRef". */
+function scheduleOmniRefFinalize(userId: number): void {
+  const buffer = pendingOmniRefBuffers.get(userId);
+  if (!buffer) return;
+  clearTimeout(buffer.timer);
+  buffer.timer = setTimeout(
+    () => finalizeOmniRefIfHasCaption(userId),
+    PHOTO_BUFFER_DEBOUNCE_MS,
+  );
+}
+
+/** Thêm 1 item (ảnh/video/audio) vào buffer "omniRef", tạo buffer mới nếu chưa có. */
+function addOmniRefItem(
+  userId: number,
+  ctx: Context,
+  kind: OmniRefKind,
+  fileId: string,
+  caption: string | undefined,
+  promptMessageId: number,
+): void {
+  const existing = pendingOmniRefBuffers.get(userId);
+  if (existing) {
+    if (existing.items.length < MAX_OMNI_REFERENCE_ITEMS) {
+      existing.items.push({ kind, fileId });
+    }
+    if (caption) existing.caption = caption;
+    scheduleOmniRefFinalize(userId);
+  } else {
+    pendingOmniRefBuffers.set(userId, {
+      ctx,
+      items: [{ kind, fileId }],
+      caption,
+      promptMessageId,
+      timer: setTimeout(
+        () => finalizeOmniRefIfHasCaption(userId),
+        PHOTO_BUFFER_DEBOUNCE_MS,
+      ),
+    });
+  }
+}
+
+async function handleOmniRefBuffer(
+  buffer: PendingOmniRefBuffer,
+  rawText: string,
+): Promise<void> {
+  const { ctx, items, promptMessageId } = buffer;
+  if (!ctx.chat || !ctx.from) return;
+
+  const omniReferencePaths: string[] = [];
+  try {
+    for (const item of items) {
+      omniReferencePaths.push(
+        await downloadTelegramFile(ctx, item.fileId, omniRefExtension(item.kind)),
+      );
+    }
+  } catch (err) {
+    console.error("[bot] Tải file Telegram thất bại:", err);
+    await ctx.reply("Không tải được file từ Telegram, đã huỷ.", promptMenu);
+    for (const p of omniReferencePaths) await fs.unlink(p).catch(() => {});
+    return;
+  }
+
+  await submitVideoJob({
+    ctx,
+    groupChatId: ctx.chat.id,
+    promptMessageId,
+    userId: ctx.from.id,
+    rawText,
+    omniReferencePaths,
+  });
+}
+
 export function registerHandlers(bot: Telegraf): void {
   // bot.use(checkAdmin);
 
@@ -348,6 +482,15 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(OMNI_REF_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    waitingMode.set(ctx.from.id, "omniRef");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
+        `hoặc gửi kèm tối đa ${MAX_OMNI_REFERENCE_ITEMS} file tham chiếu (ảnh/video/audio, gửi trước rồi gõ prompt ở tin nhắn tiếp theo).`,
+    );
+  });
+
   bot.on(message("text"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
     if (
@@ -355,7 +498,8 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === PROMPT_BUTTON_LABEL ||
       ctx.message.text === IMAGE_BUTTON_LABEL ||
       ctx.message.text === VIDEO_REF_BUTTON_LABEL ||
-      ctx.message.text === CHARACTER_REF_BUTTON_LABEL
+      ctx.message.text === CHARACTER_REF_BUTTON_LABEL ||
+      ctx.message.text === OMNI_REF_BUTTON_LABEL
     ) {
       return next();
     }
@@ -373,6 +517,15 @@ export function registerHandlers(bot: Telegraf): void {
       return;
     }
 
+    const omniRefBuffer = pendingOmniRefBuffers.get(userId);
+    if (omniRefBuffer) {
+      clearTimeout(omniRefBuffer.timer);
+      pendingOmniRefBuffers.delete(userId);
+      waitingMode.delete(userId);
+      await handleOmniRefBuffer(omniRefBuffer, ctx.message.text);
+      return;
+    }
+
     const mode = waitingMode.get(userId);
     if (!mode) return next();
 
@@ -385,8 +538,8 @@ export function registerHandlers(bot: Telegraf): void {
         "Chế độ Video - Character Reference bắt buộc phải gửi kèm 1 ảnh nhân vật trước khi gõ prompt.",
         promptMenu,
       );
-    } else if (mode === "video" || mode === "videoRef") {
-      // "videoRef" không gửi ảnh nào, chỉ gõ text — hoạt động y hệt "Prompt" thường.
+    } else if (mode === "video" || mode === "videoRef" || mode === "omniRef") {
+      // "videoRef"/"omniRef" không gửi file nào, chỉ gõ text — hoạt động y hệt "Prompt" thường.
       await submitVideoJob({
         ctx,
         groupChatId: ctx.chat.id,
@@ -417,6 +570,25 @@ export function registerHandlers(bot: Telegraf): void {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
     const userId = ctx.from.id;
+
+    // "omniRef" chấp nhận ảnh/video/audio làm file tham chiếu — buffer riêng
+    // (pendingOmniRefBuffers) vì cần biết loại file, khác pendingPhotoBuffers.
+    if (
+      pendingOmniRefBuffers.has(userId) ||
+      waitingMode.get(userId) === "omniRef"
+    ) {
+      waitingMode.delete(userId);
+      addOmniRefItem(
+        userId,
+        ctx,
+        "photo",
+        ctx.message.photo[ctx.message.photo.length - 1].file_id,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
+      return;
+    }
+
     const existing = pendingPhotoBuffers.get(userId);
     const mode = existing?.mode ?? waitingMode.get(userId);
     console.log("🚀 ~ registerHandlers ~ mode:", mode)
@@ -443,5 +615,53 @@ export function registerHandlers(bot: Telegraf): void {
         ),
       });
     }
+  });
+
+  // Video làm file tham chiếu cho "Video - Omni Reference" — chỉ nhận khi
+  // đang ở mode "omniRef" hoặc đã có buffer omniRef đang chờ.
+  bot.on(message("video"), async (ctx, next) => {
+    if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
+
+    const userId = ctx.from.id;
+    if (
+      !pendingOmniRefBuffers.has(userId) &&
+      waitingMode.get(userId) !== "omniRef"
+    ) {
+      return next();
+    }
+
+    waitingMode.delete(userId);
+    addOmniRefItem(
+      userId,
+      ctx,
+      "video",
+      ctx.message.video.file_id,
+      ctx.message.caption,
+      ctx.message.message_id,
+    );
+  });
+
+  // Audio làm file tham chiếu cho "Video - Omni Reference" — chỉ nhận khi
+  // đang ở mode "omniRef" hoặc đã có buffer omniRef đang chờ.
+  bot.on(message("audio"), async (ctx, next) => {
+    if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
+
+    const userId = ctx.from.id;
+    if (
+      !pendingOmniRefBuffers.has(userId) &&
+      waitingMode.get(userId) !== "omniRef"
+    ) {
+      return next();
+    }
+
+    waitingMode.delete(userId);
+    addOmniRefItem(
+      userId,
+      ctx,
+      "audio",
+      ctx.message.audio.file_id,
+      ctx.message.caption,
+      ctx.message.message_id,
+    );
   });
 }

@@ -26,6 +26,8 @@ export interface VideoGenerationJob extends BaseJob {
   referenceImagePaths?: string[];
   /** Ảnh nhân vật (bắt buộc đúng 1 ảnh) — mode "Character Reference", loại trừ lẫn nhau với 2 field trên. */
   characterImagePath?: string;
+  /** File tham chiếu ảnh/video/audio (tuỳ chọn, tối đa 3) — mode "Omni Reference", loại trừ lẫn nhau với 3 field trên. */
+  omniReferencePaths?: string[];
 }
 
 export interface ImageGenerationJob extends BaseJob {
@@ -106,6 +108,7 @@ async function processQueue(): Promise<void> {
               startFramePath: job.startFramePath,
               referenceImagePaths: job.referenceImagePaths,
               characterImagePath: job.characterImagePath,
+              omniReferencePaths: job.omniReferencePaths,
             },
             jobId,
           );
@@ -127,6 +130,9 @@ async function processQueue(): Promise<void> {
           if (job.startFramePath) await fsp.unlink(job.startFramePath).catch(() => {});
           if (job.characterImagePath) await fsp.unlink(job.characterImagePath).catch(() => {});
           for (const p of job.referenceImagePaths ?? []) {
+            await fsp.unlink(p).catch(() => {});
+          }
+          for (const p of job.omniReferencePaths ?? []) {
             await fsp.unlink(p).catch(() => {});
           }
         }

@@ -5,9 +5,11 @@ import { config } from "../config";
 import { getBrowserContext } from "./browser";
 import {
   addCharacterRefButtonCandidates,
+  addOmniReferenceButtonCandidates,
   addReferenceImageButtonCandidates,
   antModalCloseButtonLocator,
   antModalWrapperLocator,
+  busyOmniReferenceThumbnailLocator,
   busyReferenceImageThumbnailLocator,
   characterDetectionFailedCandidates,
   confirmCharacterButtonCandidates,
@@ -16,6 +18,7 @@ import {
   errorIndicatorCandidates,
   firstVisible,
   generateButtonCandidates,
+  getOmniReferenceCount,
   getReferenceImageCount,
   historyVideoLocator,
   modelChipCandidates,
@@ -29,6 +32,8 @@ import {
 export class GenerationError extends Error {}
 
 export const MAX_VIDEO_REF_IMAGES = 3;
+// DOM thật xác nhận aria-label="Upload Refs (0/12)" — giới hạn thật là 12.
+export const MAX_OMNI_REFERENCE_ITEMS = 12;
 
 export interface GenerateVideoOptions {
   resolution?: string;
@@ -39,6 +44,8 @@ export interface GenerateVideoOptions {
   referenceImagePaths?: string[];
   /** Ảnh nhân vật (bắt buộc đúng 1 ảnh) — dùng mode "Character Reference". */
   characterImagePath?: string;
+  /** File tham chiếu ảnh/video/audio (tuỳ chọn, tối đa 3) — dùng mode "Omni Reference". */
+  omniReferencePaths?: string[];
 }
 
 export async function generateVideo(
@@ -49,6 +56,7 @@ export async function generateVideo(
     startFramePath,
     referenceImagePaths = [],
     characterImagePath,
+    omniReferencePaths = [],
   }: GenerateVideoOptions,
   jobId: string,
 ): Promise<string> {
@@ -57,18 +65,24 @@ export async function generateVideo(
       `Chỉ hỗ trợ tối đa ${MAX_VIDEO_REF_IMAGES} ảnh tham chiếu.`,
     );
   }
+  if (omniReferencePaths.length > MAX_OMNI_REFERENCE_ITEMS) {
+    throw new GenerationError(
+      `Chỉ hỗ trợ tối đa ${MAX_OMNI_REFERENCE_ITEMS} file tham chiếu.`,
+    );
+  }
 
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
     const usingReferenceImages = referenceImagePaths.length > 0;
     const usingCharacterReference = Boolean(characterImagePath);
-    // Chip mode "Start/End Frame" chỉ mở popover Image/Character Reference
-    // trên trang hailuoCreateVideoRefPath — xác nhận qua debug HTML: trên
-    // hailuoCreateVideoPath (trang tạo video thường), click chip đó KHÔNG
-    // mở popover mode nào (đã thử hụt do 2 URL từng bị gộp chung).
+    const usingOmniReference = omniReferencePaths.length > 0;
+    // Chip mode "Start/End Frame" chỉ mở popover Image/Character/Omni
+    // Reference trên trang hailuoCreateVideoRefPath — xác nhận qua debug
+    // HTML: trên hailuoCreateVideoPath (trang tạo video thường), click chip
+    // đó KHÔNG mở popover mode nào (đã thử hụt do 2 URL từng bị gộp chung).
     const url = new URL(
-      usingReferenceImages || usingCharacterReference
+      usingReferenceImages || usingCharacterReference || usingOmniReference
         ? config.hailuoCreateVideoRefPath
         : config.hailuoCreateVideoPath,
       config.hailuoBaseUrl,
@@ -106,6 +120,15 @@ export async function generateVideo(
       await switchVideoInputMode(page, "Character Reference", jobId);
       await uploadCharacterImage(page, characterImagePath!);
       await waitForCharacterDetection(page);
+    } else if (usingOmniReference) {
+      // Cùng cơ chế chuyển mode như Image Reference, nhưng chọn "Omni
+      // Reference" — do người dùng yêu cầu, chấp nhận ảnh/video/audio làm
+      // file tham chiếu (khác Image Reference chỉ nhận ảnh).
+      await switchVideoInputMode(page, "Omni Reference", jobId);
+      for (let i = 0; i < omniReferencePaths.length; i++) {
+        await uploadOmniReferenceFile(page, omniReferencePaths[i], i + 1);
+      }
+      await waitForOmniReferenceUploadsToSettle(page);
     }
 
     await dismissBlockingOverlays(page);
@@ -124,11 +147,11 @@ export async function generateVideo(
     //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
     // }
 
-    // await captureSnapshot(
-    //   page,
-    //   jobId + "-before-generate-click",
-    //   "before-generate-click",
-    // );
+    await captureSnapshot(
+      page,
+      jobId + "-before-generate-click",
+      "before-generate-click",
+    );
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác video
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).
@@ -137,11 +160,11 @@ export async function generateVideo(
     await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    // await captureSnapshot(
-    //   page,
-    //   jobId + "-after-generate-click",
-    //   "after-generate-click",
-    // );
+    await captureSnapshot(
+      page,
+      jobId + "-after-generate-click",
+      "after-generate-click",
+    );
 
     const newVideo = await waitForNewVideo(
       page,
@@ -469,6 +492,91 @@ async function waitForVideoRefImageUploadsToSettle(page: Page): Promise<void> {
     if (stillBusy > 0) {
       throw new GenerationError(
         `Còn ${stillBusy} ảnh tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng ảnh chưa load xong.`,
+      );
+    }
+  }
+}
+
+/**
+ * Upload 1 file tham chiếu (ảnh/video/audio) cho mode "Omni Reference" —
+ * cùng cơ chế OS file-picker với Image/Character Reference. Retry 1 lần nếu
+ * lần đầu thất bại (có thể do popup quảng cáo bật ra đúng lúc).
+ */
+async function uploadOmniReferenceFile(
+  page: Page,
+  filePath: string,
+  expectedCountAfter: number,
+): Promise<void> {
+  await dismissBlockingOverlays(page);
+  try {
+    await attemptUploadOmniReferenceFile(page, filePath, expectedCountAfter);
+  } catch (err) {
+    console.warn(
+      "[hailuo] Upload file tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
+      err,
+    );
+    await dismissBlockingOverlays(page);
+    await attemptUploadOmniReferenceFile(page, filePath, expectedCountAfter);
+  }
+}
+
+async function attemptUploadOmniReferenceFile(
+  page: Page,
+  filePath: string,
+  expectedCountAfter: number,
+): Promise<void> {
+  try {
+    const addButton = await firstVisible(
+      addOmniReferenceButtonCandidates(page),
+      8000,
+    );
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent("filechooser", { timeout: 10_000 }),
+      clickDismissingModals(page, addButton),
+    ]);
+    await fileChooser.setFiles(filePath);
+    await page.waitForTimeout(1500);
+
+    // Cùng quy ước aria-label "(N/M)" đã xác nhận với ảnh tham chiếu — best
+    // effort, chỉ so sánh nếu đọc được số (không throw nếu format khác).
+    const currentCount = await getOmniReferenceCount(page);
+    if (currentCount !== null && currentCount < expectedCountAfter) {
+      throw new Error(
+        `Site chưa ghi nhận file vừa upload (đếm hiện tại: ${currentCount}/${expectedCountAfter} kỳ vọng)`,
+      );
+    }
+  } catch (err) {
+    throw new GenerationError(
+      `Không tải được file tham chiếu lên — site có thể đã đổi giao diện upload: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/**
+ * Cùng lý do đã sửa cho start frame/Image Reference: thumbnail file tham
+ * chiếu (ảnh/video/audio) nhiều khả năng vẫn còn "aria-busy" một lúc sau khi
+ * upload — đợi hết busy trước khi bấm Generate.
+ */
+async function waitForOmniReferenceUploadsToSettle(page: Page): Promise<void> {
+  await page
+    .waitForLoadState("networkidle", { timeout: 15_000 })
+    .catch(() => {});
+
+  try {
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(
+          '[aria-label^="Uploaded"][aria-label$="click to preview"][aria-busy="true"]',
+        ).length === 0,
+      { timeout: 60_000 },
+    );
+  } catch {
+    const stillBusy = await busyOmniReferenceThumbnailLocator(page).count();
+    if (stillBusy > 0) {
+      throw new GenerationError(
+        `Còn ${stillBusy} file tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng file chưa load xong.`,
       );
     }
   }
