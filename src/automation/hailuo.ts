@@ -160,6 +160,12 @@ export async function generateVideo(
     await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
+    // Một số mode (đã xác nhận với "Character Reference") hiện popup Terms
+    // of Use CẦN xác nhận (Confirm) mới thực sự bắt đầu generate — nghi vấn
+    // "Omni Reference" cũng vậy: bấm Generate không lỗi gì nhưng không có
+    // gì xảy ra (không "Creating...", không video mới) sau khi chờ hết
+    // timeout. Thử xác nhận popup này (best-effort, không lỗi nếu không có).
+    await confirmTermsPopupIfPresent(page);
     await captureSnapshot(
       page,
       jobId + "-after-generate-click",
