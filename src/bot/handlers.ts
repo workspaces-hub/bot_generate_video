@@ -566,7 +566,6 @@ export function registerHandlers(bot: Telegraf): void {
   // chờ (giữ nguyên mode đã chọn từ ảnh đầu tiên). Số ảnh tối đa gom được
   // tuỳ theo mode, xem maxPhotosForMode().
   bot.on(message("photo"), async (ctx, next) => {
-    console.log("🚀 ~ registerHandlers ~ ctx.from, !isAllowedGroup(ctx.chat.id:", ctx.from, !isAllowedGroup(ctx.chat.id))
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
     const userId = ctx.from.id;
@@ -591,7 +590,6 @@ export function registerHandlers(bot: Telegraf): void {
 
     const existing = pendingPhotoBuffers.get(userId);
     const mode = existing?.mode ?? waitingMode.get(userId);
-    console.log("🚀 ~ registerHandlers ~ mode:", mode)
     if (mode !== "image" && mode !== "video" && mode !== "videoRef" && mode !== "characterRef") return next();
 
     waitingMode.delete(userId);

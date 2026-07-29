@@ -565,30 +565,53 @@ async function attemptUploadOmniReferenceFile(
  * chiếu (ảnh/video/audio) nhiều khả năng vẫn còn "aria-busy" một lúc sau khi
  * upload — đợi hết busy trước khi bấm Generate.
  */
-async function waitForOmniReferenceUploadsToSettle(page: Page): Promise<void> {
+/**
+ * Thumbnail chỉ có tín hiệu nhị phân (aria-busy true/false), không có %
+ * tiến độ như lúc generate video — nên không thể biết "đang xử lý bình
+ * thường, chỉ chậm" hay "đã kẹt hẳn" chỉ bằng 1 lần chờ dài. Poll định kỳ,
+ * theo dõi SỐ FILE còn busy: nếu con số này KHÔNG đổi trong
+ * stuckThresholdMs liên tiếp (thực tế xác nhận: 1 video kẹt "aria-busy"
+ * suốt 600s không hề nhúc nhích), coi là kẹt thật và báo lỗi ngay — thay vì
+ * luôn chờ hết nguyên timeoutMs dù rõ ràng không còn tiến triển gì. Nếu số
+ * file busy có giảm dần theo thời gian (nhiều file, xong dần từng cái) thì
+ * vẫn tiếp tục chờ bình thường tới hết timeoutMs.
+ */
+async function waitForOmniReferenceUploadsToSettle(
+  page: Page,
+  timeoutMs = 600_000,
+  stuckThresholdMs = 240_000,
+): Promise<void> {
   await page
     .waitForLoadState("networkidle", { timeout: 15_000 })
     .catch(() => {});
 
-  try {
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(
-          '[aria-label^="Uploaded"][aria-busy="true"]',
-        ).length === 0,
-      // File video/audio nặng hơn ảnh nhiều, xử lý lâu hơn — thực tế xác
-      // nhận qua debug screenshot: video vẫn còn "aria-busy" sau 60s (không
-      // phải false positive). Tăng lên 600s giống lần đã sửa cho ảnh tham
-      // chiếu trước đây.
-      { timeout: 600_000 },
-    );
-  } catch {
-    const stillBusy = await busyOmniReferenceThumbnailLocator(page).count();
-    if (stillBusy > 0) {
+  const pollIntervalMs = 15_000;
+  const start = Date.now();
+  let lastBusyCount = await busyOmniReferenceThumbnailLocator(page).count();
+  let lastChangeAt = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    if (lastBusyCount === 0) return;
+
+    if (Date.now() - lastChangeAt >= stuckThresholdMs) {
       throw new GenerationError(
-        `Còn ${stillBusy} file tham chiếu vẫn đang xử lý (aria-busy) sau 600s chờ — không bấm Generate để tránh dùng file chưa load xong.`,
+        `Còn ${lastBusyCount} file tham chiếu vẫn đang xử lý (aria-busy) và KHÔNG có tiến triển gì trong ${Math.round(stuckThresholdMs / 60_000)} phút liên tiếp — site có thể đã kẹt khi xử lý file này, không bấm Generate để tránh dùng file chưa load xong.`,
       );
     }
+
+    await page.waitForTimeout(pollIntervalMs);
+    const currentBusyCount = await busyOmniReferenceThumbnailLocator(page).count();
+    if (currentBusyCount !== lastBusyCount) {
+      lastBusyCount = currentBusyCount;
+      lastChangeAt = Date.now();
+    }
+  }
+
+  const stillBusy = await busyOmniReferenceThumbnailLocator(page).count();
+  if (stillBusy > 0) {
+    throw new GenerationError(
+      `Còn ${stillBusy} file tham chiếu vẫn đang xử lý (aria-busy) sau ${Math.round(timeoutMs / 60_000)} phút chờ — không bấm Generate để tránh dùng file chưa load xong.`,
+    );
   }
 }
 
