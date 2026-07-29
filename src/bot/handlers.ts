@@ -664,4 +664,47 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.message_id,
     );
   });
+
+  // File gửi qua nút đính kèm (📎, KHÔNG qua trình quay/chọn video-audio nén
+  // sẵn của Telegram) được Telegram gửi dưới dạng "document" — thực tế xác
+  // nhận: video gửi kiểu này KHÔNG khớp message("video") ở trên, rơi mất
+  // âm thầm nếu không xử lý riêng. Suy ra loại file (ảnh/video/audio) từ
+  // mime_type; bỏ qua (báo lại cho user) nếu không phải 1 trong 3 loại này.
+  bot.on(message("document"), async (ctx, next) => {
+    if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
+
+    const userId = ctx.from.id;
+    if (
+      !pendingOmniRefBuffers.has(userId) &&
+      waitingMode.get(userId) !== "omniRef"
+    ) {
+      return next();
+    }
+
+    const mimeType = ctx.message.document.mime_type ?? "";
+    const kind: OmniRefKind | null = mimeType.startsWith("image/")
+      ? "photo"
+      : mimeType.startsWith("video/")
+        ? "video"
+        : mimeType.startsWith("audio/")
+          ? "audio"
+          : null;
+
+    if (!kind) {
+      await ctx.reply(
+        "File này không phải ảnh/video/audio nên bot đã bỏ qua. Gửi đúng loại file tham chiếu hoặc gõ prompt để tiếp tục.",
+      );
+      return;
+    }
+
+    waitingMode.delete(userId);
+    addOmniRefItem(
+      userId,
+      ctx,
+      kind,
+      ctx.message.document.file_id,
+      ctx.message.caption,
+      ctx.message.message_id,
+    );
+  });
 }
