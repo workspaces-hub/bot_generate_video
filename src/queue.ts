@@ -32,6 +32,7 @@ export interface VideoGenerationJob extends BaseJob {
 
 export interface ImageGenerationJob extends BaseJob {
   type: "image";
+  model?: string;
   referenceImagePaths?: string[];
 }
 
@@ -115,7 +116,11 @@ async function processQueue(): Promise<void> {
           await notifyVideoSuccess(job, filePath);
           await fsp.unlink(filePath).catch(() => {});
         } else {
-          const filePaths = await generateImage(job.prompt, { referenceImagePaths: job.referenceImagePaths }, jobId);
+          const filePaths = await generateImage(
+            job.prompt,
+            { model: job.model, referenceImagePaths: job.referenceImagePaths },
+            jobId,
+          );
           await notifyImageSuccess(job, filePaths);
           for (const p of filePaths) await fsp.unlink(p).catch(() => {});
         }

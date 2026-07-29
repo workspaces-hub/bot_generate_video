@@ -188,7 +188,7 @@ async function submitVideoJob({
     chatId: groupChatId,
     prompt,
     resolution,
-    model: model, //isAdmin(userId) ? model : DEFAULT_MODEL,
+    model: isAdmin(userId) ? model : DEFAULT_MODEL,
     startFramePath,
     referenceImagePaths,
     characterImagePath,
@@ -202,6 +202,7 @@ interface SubmitImageParams {
   ctx: Context;
   groupChatId: number;
   promptMessageId: number;
+  userId: number;
   rawText: string;
   referenceImagePaths: string[];
 }
@@ -210,10 +211,11 @@ async function submitImageJob({
   ctx,
   groupChatId,
   promptMessageId,
+  userId,
   rawText,
   referenceImagePaths,
 }: SubmitImageParams): Promise<void> {
-  const { text: prompt } = parsePromptMessage(rawText);
+  const { text: prompt, model } = parsePromptMessage(rawText);
 
   if (!prompt) {
     await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
@@ -236,6 +238,7 @@ async function submitImageJob({
     type: "image",
     chatId: groupChatId,
     prompt,
+    model: isAdmin(userId) ? model : DEFAULT_MODEL,
     referenceImagePaths,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
@@ -350,6 +353,7 @@ async function handlePhotoBuffer(
     ctx,
     groupChatId: ctx.chat.id,
     promptMessageId,
+    userId: ctx.from.id,
     rawText,
     referenceImagePaths,
   });
@@ -552,6 +556,7 @@ export function registerHandlers(bot: Telegraf): void {
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
+        userId,
         rawText: ctx.message.text,
         referenceImagePaths: [],
       });

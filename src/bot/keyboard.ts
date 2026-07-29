@@ -1,10 +1,10 @@
 import { Markup } from "telegraf";
 
-export const PROMPT_BUTTON_LABEL = "Video - Start Frame";
+export const PROMPT_BUTTON_LABEL = "Video - frame bắt đầu";
 export const IMAGE_BUTTON_LABEL = "Image";
-export const VIDEO_REF_BUTTON_LABEL = "Video - Image Reference";
-export const CHARACTER_REF_BUTTON_LABEL = "Video - Character Reference";
-export const OMNI_REF_BUTTON_LABEL = "Video - Omni Reference";
+export const VIDEO_REF_BUTTON_LABEL = "Video - Tham chiếu ảnh";
+export const CHARACTER_REF_BUTTON_LABEL = "Video - Tham chiếu nhân vật";
+export const OMNI_REF_BUTTON_LABEL = "Video - Tham chiếu toàn diện";
 
 export const promptMenu = Markup.keyboard([
   [IMAGE_BUTTON_LABEL, PROMPT_BUTTON_LABEL],

@@ -6,7 +6,7 @@ export interface ParsedPrompt {
 
 const RESOLUTION_LINE = /^resolution\s*:\s*(.+)$/i;
 const MODEL_LINE = /^model\s*:\s*(.+)$/i;
-export const DEFAULT_MODEL = "Hailuo 2.0"
+export const DEFAULT_MODEL = ""
 
 /**
  * Tách nội dung prompt user gửi thành phần text + tuỳ chọn Resolution/Model,

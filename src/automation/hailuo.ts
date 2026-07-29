@@ -620,8 +620,9 @@ async function waitForOmniReferenceUploadsToSettle(
  * khớp với giá trị mong muốn. Không throw nếu không tìm thấy — chỉ log
  * cảnh báo và giữ nguyên lựa chọn mặc định của site, để 1 chip lỗi không
  * làm hỏng cả job (video vẫn tạo được, chỉ sai model/resolution).
+ * Xuất ra để hailuoImage.ts (tạo ảnh) dùng lại — cùng cơ chế chip/dropdown.
  */
-async function selectChipOption(
+export async function selectChipOption(
   page: Page,
   chipCandidates: Array<() => Locator>,
   targetText: string,

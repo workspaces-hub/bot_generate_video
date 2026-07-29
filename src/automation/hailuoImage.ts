@@ -13,6 +13,7 @@ import {
   ensureLoggedIn,
   fetchWithRetry,
   gotoWithRetry,
+  selectChipOption,
 } from "./hailuo";
 import {
   addReferenceImageButtonCandidates,
@@ -26,12 +27,14 @@ import {
   getReferenceImageCount,
   historyImageEntryLocator,
   imageModeTabCandidates,
+  modelChipCandidates,
   promptInputCandidates,
 } from "./selectors";
 
 export const MAX_REFERENCE_IMAGES = 16;
 
 export interface GenerateImageOptions {
+  model?: string;
   referenceImagePaths?: string[];
 }
 
@@ -42,7 +45,7 @@ export interface GenerateImageOptions {
  */
 export async function generateImage(
   prompt: string,
-  { referenceImagePaths = [] }: GenerateImageOptions,
+  { model, referenceImagePaths = [] }: GenerateImageOptions,
   jobId: string,
 ): Promise<string[]> {
   if (referenceImagePaths.length > MAX_REFERENCE_IMAGES) {
@@ -90,6 +93,12 @@ export async function generateImage(
     const promptInput = await firstVisible(promptInputCandidates(page), 10_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
+
+    // Cùng chip model dùng chung với trang tạo video (toolbar khung nhập
+    // prompt) — xem chú thích selectChipOption trong hailuo.ts.
+    if (model) {
+      await selectChipOption(page, modelChipCandidates(page), model, "model");
+    }
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác ảnh
     // nào là MỚI (không phải ảnh cũ nhất trong lịch sử) — cùng cách tiếp
