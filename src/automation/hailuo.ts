@@ -578,15 +578,15 @@ async function waitForOmniReferenceUploadsToSettle(page: Page): Promise<void> {
         ).length === 0,
       // File video/audio nặng hơn ảnh nhiều, xử lý lâu hơn — thực tế xác
       // nhận qua debug screenshot: video vẫn còn "aria-busy" sau 60s (không
-      // phải false positive). Tăng lên 180s giống lần đã sửa cho ảnh tham
+      // phải false positive). Tăng lên 600s giống lần đã sửa cho ảnh tham
       // chiếu trước đây.
-      { timeout: 180_000 },
+      { timeout: 600_000 },
     );
   } catch {
     const stillBusy = await busyOmniReferenceThumbnailLocator(page).count();
     if (stillBusy > 0) {
       throw new GenerationError(
-        `Còn ${stillBusy} file tham chiếu vẫn đang xử lý (aria-busy) sau 180s chờ — không bấm Generate để tránh dùng file chưa load xong.`,
+        `Còn ${stillBusy} file tham chiếu vẫn đang xử lý (aria-busy) sau 600s chờ — không bấm Generate để tránh dùng file chưa load xong.`,
       );
     }
   }
