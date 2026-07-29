@@ -10,7 +10,6 @@ import {
   creditPaywallModalCandidates,
   dropdownOptionCandidates,
   errorIndicatorCandidates,
-  failedGenerationCardLocator,
   firstVisible,
   generateButtonCandidates,
   historyVideoLocator,
@@ -303,7 +302,6 @@ interface VideoBaseline {
   count: number;
   firstSrc: string | null;
   lastSrc: string | null;
-  failedCount: number;
 }
 
 async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
@@ -313,7 +311,6 @@ async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
     count,
     firstSrc: count > 0 ? await videos.first().getAttribute("src") : null,
     lastSrc: count > 0 ? await videos.last().getAttribute("src") : null,
-    failedCount: await failedGenerationCardLocator(page).count(),
   };
 }
 
@@ -351,15 +348,6 @@ async function waitForNewVideo(page: Page, baseline: VideoBaseline, timeoutMs: n
       .catch(() => false);
     if (failed) {
       throw new GenerationError("Website báo lỗi khi tạo video");
-    }
-
-    // Site có thể chỉ âm thầm đánh dấu card lỗi (data-batch-disabled, không
-    // có <video>/<img> thật) trong lịch sử mà không hiện toast lỗi nào —
-    // marker đã xác nhận thật qua tính năng ảnh. Phát hiện ngay để báo lỗi
-    // rõ ràng, thay vì chờ hết timeout rồi mới báo "hết thời gian chờ".
-    const currentFailedCount = await failedGenerationCardLocator(page).count();
-    if (currentFailedCount > baseline.failedCount) {
-      throw new GenerationError("Không tạo được video — site báo lỗi generation này");
     }
 
     await page.waitForTimeout(pollIntervalMs);

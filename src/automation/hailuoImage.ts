@@ -17,6 +17,7 @@ import {
   addReferenceImageButtonCandidates,
   busyReferenceImageThumbnailLocator,
   creditPaywallModalCandidates,
+  entryImagesLocator,
   errorIndicatorCandidates,
   firstVisible,
   generateButtonCandidates,
@@ -262,42 +263,34 @@ async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeout
  * Entry mới xuất hiện trong lịch sử KHÔNG có nghĩa cả 4 ảnh đã render xong —
  * site có thể thêm khối entry trước rồi lấp dần từng ảnh vào sau (giống
  * cách reference-image thumbnail vẫn "aria-busy" một lúc sau khi đã upload
- * xong). Vì vậy chờ số lượng card đã NGÃ NGŨ (thành công có <img> HOẶC lỗi
- * thật) ỔN ĐỊNH (không đổi thêm trong 1 lúc) trước khi coi là "đã xong",
- * thay vì đọc số lượng ngay lúc entry vừa xuất hiện — tránh chỉ tải được
- * 1-2/4 ảnh.
+ * xong). Vì vậy chờ số lượng ảnh THÀNH CÔNG (<img> thật) ỔN ĐỊNH (không tăng
+ * thêm trong vài giây liên tiếp) trước khi coi là "đã đủ", thay vì đọc số
+ * lượng ngay lúc entry vừa xuất hiện — tránh chỉ tải được 1-2/4 ảnh.
  *
- * Đếm theo card THÀNH CÔNG hay LỖI THẬT đều tính là "đã ngã ngũ" (khác bản
- * trước chỉ đếm ảnh thành công, lastCount>0) — để xử lý đúng cả trường hợp
- * CẢ 4 ẢNH ĐỀU LỖI: nếu chỉ đợi ảnh thành công > 0 thì sẽ không bao giờ
- * đúng, khiến hàm này chờ hết nguyên timeoutMs (10 phút) một cách vô ích
- * trước khi downloadImagesInEntry mới báo lỗi "không có ảnh nào".
- *
- * SỬA LỖI: "data-batch-disabled" KHÔNG có nghĩa là lỗi — card đang xử lý
- * bình thường (spinner tròn HOẶC progress ring dạng %, "Optimizing
- * prompt..."/"11% Generating...") cũng mang thuộc tính này (xác nhận qua
- * debug HTML thực tế của video, gặp CẢ 2 kiểu UI xử lý khác nhau). Loại trừ
- * card còn nút "Cancel" (job còn huỷ được = đang xử lý, bất kể hiện kiểu
- * spinner nào) mới đúng là card đã NGÃ NGŨ thành lỗi thật — nếu không sẽ coi
- * "đang xử lý" là "đã xong" ngay từ đầu → trả kết quả quá sớm.
+ * BỎ HẲN cách dùng "data-batch-disabled" để phát hiện sớm case "cả 4 ảnh
+ * đều lỗi" (từng thử 2 lần, cả 2 đều sai): marker này được site dùng cho
+ * NHIỀU trạng thái "chưa phải asset hoàn chỉnh" khác nhau — không chỉ lỗi
+ * thật mà cả đang xử lý (đã gặp ít nhất 3 kiểu UI khác nhau: spinner tròn,
+ * progress ring %, và cả trạng thái % không có nút Cancel/Recreate nào) —
+ * không có tín hiệu phủ định nào đủ tin cậy để loại trừ hết. Chấp nhận đánh
+ * đổi: case "cả 4 đều lỗi" sẽ chờ hết timeoutMs (10 phút) mới báo lỗi, đổi
+ * lấy việc không bao giờ cắt ngang 1 job đang generate bình thường.
  */
 async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs = 600_000): Promise<void> {
-  const resolvedCards = entry.locator(
-    'div[data-feed-id]:has(img[src]), div[data-feed-id][data-batch-disabled]:not(:has(button:has-text("Cancel")))',
-  );
+  const images = entryImagesLocator(entry);
   const start = Date.now();
   const pollIntervalMs = 15000;
   const requiredStableMs = 120000;
 
-  let lastCount = await resolvedCards.count();
+  let lastCount = await images.count();
   let stableSince = Date.now();
 
   while (Date.now() - start < timeoutMs) {
-    if (Date.now() - stableSince >= requiredStableMs) {
+    if (Date.now() - stableSince >= requiredStableMs && lastCount > 0) {
       return;
     }
     await page.waitForTimeout(pollIntervalMs);
-    const count = await resolvedCards.count();
+    const count = await images.count();
     if (count !== lastCount) {
       lastCount = count;
       stableSince = Date.now();

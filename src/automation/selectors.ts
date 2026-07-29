@@ -124,6 +124,15 @@ export const errorIndicatorCandidates = (page: Page): Array<() => Locator> => [
   // (chưa xử lý xong) — đã sửa gốc bằng cách đợi hết busy trước khi bấm,
   // giữ lại đây làm lớp phòng vệ thứ 2 nếu race lại xảy ra.
   () => page.getByText(/wait until picture upload completes/i),
+  // Text lỗi THẬT của card generate — tra được nguyên văn từ chính locale
+  // strings nhúng trong trang (key "bk_hard_moss_video_failed": "The content
+  // generation has failed. Please try again."). KHÔNG khớp regex
+  // /generation failed/i ở trên vì có chữ "has" chen giữa ("generation HAS
+  // failed") — cần khai báo riêng. Đáng tin cậy hơn nhiều so với đoán cấu
+  // trúc DOM (data-batch-disabled, spinner, nút Cancel...) — những cách đó
+  // đã thử và đều gây false positive vì site dùng chung marker cấu trúc cho
+  // cả trạng thái "đang xử lý" lẫn "lỗi thật".
+  () => page.getByText(/content generation has failed/i),
 ];
 
 /**
@@ -175,28 +184,14 @@ export const videoElementCandidates = (page: Page): Array<() => Locator> => [
 export const historyVideoLocator = (page: Page): Locator =>
   page.locator("#create-new-scroll-container video[src]:visible");
 
-/**
- * Card lịch sử bị lỗi (generate thất bại) mang data-batch-disabled +
- * aria-disabled="true", KHÔNG có nội dung thật (<video>/<img>) bên trong.
- *
- * SỬA LỖI (lần 1): lúc đầu tưởng data-batch-disabled = "lỗi", nhưng thực tế
- * xác nhận qua debug HTML là SAI — card đang generate bình thường ("Optimizing
- * prompt...", có spinner .animate-spin) CŨNG mang data-batch-disabled (ý
- * nghĩa thật: "chưa phải asset hoàn chỉnh/có thể chọn", áp dụng cho CẢ đang
- * xử lý LẪN lỗi thật).
- *
- * SỬA LỖI (lần 2): loại trừ ".animate-spin" vẫn CHƯA ĐỦ — site còn 1 kiểu
- * "đang xử lý" khác dùng progress ring dạng % (Ant Design ".ant-progress-
- * circle", vd "11% Generating...") KHÔNG có class "animate-spin", vẫn lọt
- * qua và gây false positive y hệt. Thay vì liệt kê thêm từng kiểu spinner
- * (dễ tiếp tục thiếu kiểu mới), dùng tín hiệu TỔNG QUÁT hơn: card đang xử lý
- * (bất kể hiện spinner tròn hay progress ring %) LUÔN có nút "Cancel" (job
- * còn huỷ được); card lỗi thật thì không còn nút này (chỉ còn icon tĩnh +
- * nút info, xác nhận qua DOM ảnh lỗi thật trước đó) — dùng
- * ":not(:has(button:has-text(\"Cancel\")))" để chỉ khớp card đã NGÃ NGŨ.
- */
-export const failedGenerationCardLocator = (page: Page): Locator =>
-  page.locator('#create-new-scroll-container [data-batch-disabled]:not(:has(button:has-text("Cancel")))');
+// data-batch-disabled KHÔNG dùng được để phát hiện lỗi generation — đã thử
+// 2 cách loại trừ khác nhau (:not(:has(.animate-spin)), rồi :not(:has(button
+// :has-text("Cancel")))) và cả 2 đều gây false positive thật (chặn nhầm job
+// đang generate bình thường), vì site dùng marker này cho RẤT NHIỀU trạng
+// thái "chưa phải asset hoàn chỉnh" khác nhau (ít nhất 3 kiểu UI "đang xử
+// lý" đã gặp: spinner tròn, progress ring %, và % không kèm nút nào) — bỏ
+// hẳn, không dùng lại cách này nữa. Chỉ dựa vào errorIndicatorCandidates
+// (toast lỗi) + timeout để phát hiện lỗi generation.
 
 /**
  * CHƯA CÓ DOM THẬT — đây là phỏng đoán ban đầu cho tính năng tạo ẢNH (mới
