@@ -292,8 +292,11 @@ async function switchVideoInputMode(
 
     // Chụp debug ngay khi popover vừa mở (TRƯỚC khi chọn option) — nếu bước
     // sau vẫn lỗi, đây là bằng chứng trực tiếp để biết text option thật là
-    // gì, thay vì đoán mò.
-    // await captureSnapshot(page, jobId + "-mode-popover-open", "mode-popover-open");
+    // gì, thay vì đoán mò. Bật lại (không comment) vì lần đổi mode NGƯỢC (từ
+    // 1 mode tham chiếu về lại "Start/End Frame") đang lỗi không tìm thấy
+    // option trong popover — cần bằng chứng thật để biết popover lúc đó có
+    // mở không, và nếu có thì thật sự chứa những option gì.
+    await captureSnapshot(page, jobId + "-mode-popover-open", "mode-popover-open");
 
     const option = await firstVisible(
       dropdownOptionCandidates(page, modeName),
