@@ -283,6 +283,61 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
  * hiện nhãn nào; (2) bỏ qua ngay (no-op) nếu trang đã sẵn đúng modeName cần
  * dùng, tránh mở popover rồi lỡ chọn nhầm option khác.
  */
+/**
+ * page.getByText(...)/getByRole(...) khớp CẢ 1 bản sao ẩn NGOÀI VIEWPORT của
+ * chip mode — xác nhận qua log boundingBox() thật: y luôn = -6078.125 GIỐNG
+ * HỆT nhau ở NHIỀU job/lần chạy khác nhau (đã thử cả ép scrollTop=0 vẫn y
+ * hệt), tức đây KHÔNG phải do cuộn/scroll mà là 1 phần tử cố định nằm ngoài
+ * màn hình do CSS (nghi vấn: bản sao dùng để ĐO độ rộng text trước khi định
+ * vị chip thật — kỹ thuật phổ biến ở component tự co giãn theo nội dung).
+ * .first() trong firstVisible() luôn khớp trúng bản sao ẩn này thay vì chip
+ * thật đang hiện cho user thấy. Duyệt HẾT các phần tử khớp text, chỉ lấy
+ * phần tử có boundingBox thực sự nằm trong viewport.
+ */
+async function findOnscreenLocator(
+  candidates: Array<() => Locator>,
+  page: Page,
+): Promise<Locator | null> {
+  const viewport = page.viewportSize();
+  const maxWidth = viewport?.width ?? 2000;
+  const maxHeight = viewport?.height ?? 2000;
+  for (const make of candidates) {
+    const locator = make();
+    const count = await locator.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const candidate = locator.nth(i);
+      const box = await candidate.boundingBox().catch(() => null);
+      if (
+        box &&
+        box.width > 0 &&
+        box.height > 0 &&
+        box.x >= 0 &&
+        box.x < maxWidth &&
+        box.y >= 0 &&
+        box.y < maxHeight
+      ) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+/** Poll findOnscreenLocator tới khi tìm được hoặc hết timeoutMs. */
+async function pollForOnscreenLocator(
+  candidates: Array<() => Locator>,
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  const start = Date.now();
+  do {
+    const found = await findOnscreenLocator(candidates, page);
+    if (found) return found;
+    await page.waitForTimeout(300);
+  } while (Date.now() - start < timeoutMs);
+  return null;
+}
+
 async function switchVideoInputMode(
   page: Page,
   modeName: string,
@@ -290,12 +345,13 @@ async function switchVideoInputMode(
 ): Promise<void> {
   await dismissBlockingOverlays(page);
   try {
-    const alreadyInTargetMode = await firstVisible(
-      exactVideoInputModeChipCandidates(page, modeName),
-      2000,
-    )
-      .then(() => true)
-      .catch(() => false);
+    const alreadyInTargetMode = Boolean(
+      await pollForOnscreenLocator(
+        exactVideoInputModeChipCandidates(page, modeName),
+        page,
+        2000,
+      ),
+    );
     if (alreadyInTargetMode) return;
 
     // Bấm chip đôi khi KHÔNG mở popover (đã xác nhận qua debug HTML thực tế
@@ -314,7 +370,16 @@ async function switchVideoInputMode(
     const maxClickAttempts = 3;
     let popoverOpened = false;
     for (let attempt = 1; attempt <= maxClickAttempts && !popoverOpened; attempt++) {
-      const chip = await firstVisible(anyVideoInputModeChipCandidates(page), 8000);
+      const chip = await pollForOnscreenLocator(
+        anyVideoInputModeChipCandidates(page),
+        page,
+        8000,
+      );
+      if (!chip) {
+        throw new Error(
+          `Không tìm thấy chip đổi mode nào đang hiển thị trong viewport (lần thử ${attempt})`,
+        );
+      }
       await captureSnapshot(
         page,
         jobId + `-mode-before-click-${attempt}`,
@@ -377,12 +442,13 @@ async function switchVideoInputMode(
     // quan mà không báo lỗi gì, trong khi mode thực ra KHÔNG đổi. Xác nhận
     // lại chip đã thực sự đổi sang ĐÚNG modeName mong muốn, báo lỗi rõ ràng
     // nếu không, thay vì để lộ ra thành lỗi khó hiểu ở bước upload sau đó.
-    const switchedOk = await firstVisible(
-      exactVideoInputModeChipCandidates(page, modeName),
-      5000,
-    )
-      .then(() => true)
-      .catch(() => false);
+    const switchedOk = Boolean(
+      await pollForOnscreenLocator(
+        exactVideoInputModeChipCandidates(page, modeName),
+        page,
+        5000,
+      ),
+    );
     if (!switchedOk) {
       throw new Error(
         `Đã bấm option "${modeName}" nhưng chip vẫn chưa đổi sang đúng nhãn này — có thể chưa khớp đúng text option thật`,
