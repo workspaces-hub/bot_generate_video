@@ -320,6 +320,20 @@ async function switchVideoInputMode(
         jobId + `-mode-before-click-${attempt}`,
         `mode-before-click-${attempt}`,
       );
+      // Log toạ độ thật của chip lúc click — nếu boundingBox null/lệch bất
+      // thường (vd bị 0 width/height do 1 layout race chưa lộ ra trong
+      // screenshot tĩnh chụp cùng lúc), đây là bằng chứng trực tiếp thay vì
+      // đoán mò tiếp qua ảnh chụp (vốn luôn "trông bình thường" các lần trước).
+      const box = await chip.boundingBox().catch(() => null);
+      console.warn(
+        `[hailuo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
+        box,
+      );
+      // Rê chuột qua trước rồi mới bấm (tách riêng, không chỉ để .click() tự
+      // làm) — 1 số popover chỉ "arm" sau mousemove/mouseenter thật, và click
+      // ngay sau khi vừa hydrate có thể bị bỏ lỡ nếu chưa có bước hover riêng.
+      await chip.hover().catch(() => {});
+      await page.waitForTimeout(200);
       await clickDismissingModals(page, chip);
       popoverOpened = await firstVisible([() => openPopoverLocator(page)], 6000)
         .then(() => true)
