@@ -390,9 +390,14 @@ async function switchVideoInputMode(
       // screenshot tĩnh chụp cùng lúc), đây là bằng chứng trực tiếp thay vì
       // đoán mò tiếp qua ảnh chụp (vốn luôn "trông bình thường" các lần trước).
       const box = await chip.boundingBox().catch(() => null);
+      const outerHtml = await chip
+        .evaluate((el) => el.outerHTML.slice(0, 500))
+        .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
       console.warn(
         `[hailuo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
         box,
+        "outerHTML=",
+        outerHtml,
       );
       // Rê chuột qua trước rồi mới bấm (tách riêng, không chỉ để .click() tự
       // làm) — 1 số popover chỉ "arm" sau mousemove/mouseenter thật, và click
@@ -442,13 +447,21 @@ async function switchVideoInputMode(
     // quan mà không báo lỗi gì, trong khi mode thực ra KHÔNG đổi. Xác nhận
     // lại chip đã thực sự đổi sang ĐÚNG modeName mong muốn, báo lỗi rõ ràng
     // nếu không, thay vì để lộ ra thành lỗi khó hiểu ở bước upload sau đó.
-    const switchedOk = Boolean(
-      await pollForOnscreenLocator(
-        exactVideoInputModeChipCandidates(page, modeName),
-        page,
-        5000,
-      ),
+    const switchedChip = await pollForOnscreenLocator(
+      exactVideoInputModeChipCandidates(page, modeName),
+      page,
+      5000,
     );
+    if (switchedChip) {
+      const outerHtml = await switchedChip
+        .evaluate((el) => el.outerHTML.slice(0, 500))
+        .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
+      console.warn(
+        `[hailuo] switchVideoInputMode(${modeName}): switchedOk=true, phần tử khớp outerHTML=`,
+        outerHtml,
+      );
+    }
+    const switchedOk = Boolean(switchedChip);
     if (!switchedOk) {
       throw new Error(
         `Đã bấm option "${modeName}" nhưng chip vẫn chưa đổi sang đúng nhãn này — có thể chưa khớp đúng text option thật`,
