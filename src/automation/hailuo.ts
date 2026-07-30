@@ -78,14 +78,20 @@ export async function generateVideo(
     const usingReferenceImages = referenceImagePaths.length > 0;
     const usingCharacterReference = Boolean(characterImagePath);
     const usingOmniReference = omniReferencePaths.length > 0;
-    // Chip mode "Start/End Frame" chỉ mở popover Image/Character/Omni
-    // Reference trên trang hailuoCreateVideoRefPath — xác nhận qua debug
-    // HTML: trên hailuoCreateVideoPath (trang tạo video thường), click chip
-    // đó KHÔNG mở popover mode nào (đã thử hụt do 2 URL từng bị gộp chung).
+    // LUÔN dùng hailuoCreateVideoRefPath, kể cả cho job "Start/End Frame"
+    // thường (không có ảnh/video/audio tham chiếu nào) — 2 lần xác nhận qua
+    // debug HTML thật: (1) trang hailuoCreateVideoPath (trang tạo video
+    // thường) — bấm chip mode KHÔNG mở popover chọn mode nào cả (chỉ có
+    // .ant-popover-content rỗng từ CSS, không có option nào để chọn); (2) mode
+    // là trạng thái STICKY theo tài khoản, không reset khi đổi URL — 1 job
+    // Start/End Frame thường vẫn load ra trang hailuoCreateVideoPath đang kẹt
+    // ở mode "Image Reference" còn sót từ job trước, và trên trang đó KHÔNG
+    // có cách nào bấm quay lại "Start/End Frame" được. Trang
+    // hailuoCreateVideoRefPath hỗ trợ đủ cả 4 mode (kể cả "Start/End Frame"
+    // — mode mặc định của chính trang này), nên dùng trang này cho MỌI job
+    // video, không phân biệt có dùng mode tham chiếu hay không.
     const url = new URL(
-      usingReferenceImages || usingCharacterReference || usingOmniReference
-        ? config.hailuoCreateVideoRefPath
-        : config.hailuoCreateVideoPath,
+      config.hailuoCreateVideoRefPath,
       config.hailuoBaseUrl,
     ).toString();
     await gotoWithRetry(page, url);
@@ -131,12 +137,15 @@ export async function generateVideo(
       }
       await waitForOmniReferenceUploadsToSettle(page);
     } else {
-      // Site NHỚ mode đã chọn ở lần trước (sticky qua account, xác nhận qua
-      // debug HTML thực tế: 1 job không dùng mode tham chiếu nào vẫn load ra
-      // trang /create/video ở mode "Image Reference" còn sót từ job trước —
-      // khiến không tìm thấy nút upload start frame vì nút đó chỉ có ở mode
-      // "Start/End Frame"). Chủ động ép về đúng mode mặc định trước khi làm
-      // gì khác — switchVideoInputMode tự bỏ qua (no-op) nếu đã đúng mode.
+      // Mode là trạng thái STICKY theo tài khoản (không reset khi vào lại
+      // trang) — 1 job không dùng mode tham chiếu nào vẫn có thể load ra
+      // trang đang kẹt ở mode "Image/Character/Omni Reference" còn sót từ
+      // job trước, khiến không tìm thấy nút upload start frame (nút đó chỉ
+      // có ở mode "Start/End Frame"). Chủ động ép về đúng mode mặc định
+      // trước khi làm gì khác — switchVideoInputMode tự bỏ qua (no-op) nếu
+      // đã đúng mode. Chỉ hoạt động đúng vì giờ MỌI job video đều dùng
+      // hailuoCreateVideoRefPath (trang duy nhất mode-switch thật sự hoạt
+      // động, xem chú thích chọn url phía trên).
       await switchVideoInputMode(page, "Start/End Frame", jobId);
     }
 
@@ -287,7 +296,10 @@ async function switchVideoInputMode(
       .catch(() => false);
     if (alreadyInTargetMode) return;
 
-    const chip = await firstVisible(anyVideoInputModeChipCandidates(page), 8000);
+    const chip = await firstVisible(
+      anyVideoInputModeChipCandidates(page),
+      8000,
+    );
     await clickDismissingModals(page, chip);
 
     // Chụp debug ngay khi popover vừa mở (TRƯỚC khi chọn option) — nếu bước
@@ -296,7 +308,11 @@ async function switchVideoInputMode(
     // 1 mode tham chiếu về lại "Start/End Frame") đang lỗi không tìm thấy
     // option trong popover — cần bằng chứng thật để biết popover lúc đó có
     // mở không, và nếu có thì thật sự chứa những option gì.
-    await captureSnapshot(page, jobId + "-mode-popover-open", "mode-popover-open");
+    await captureSnapshot(
+      page,
+      jobId + "-mode-popover-open",
+      "mode-popover-open",
+    );
 
     const option = await firstVisible(
       dropdownOptionCandidates(page, modeName),
@@ -393,8 +409,14 @@ async function attemptUploadCharacterImage(
  * ở đây). Best-effort: không coi là lỗi nếu không thấy (popup có thể không
  * phải lúc nào cũng xuất hiện, vd với "Image Reference").
  */
-async function confirmTermsPopupIfPresent(page: Page, timeoutMs = 15_000): Promise<void> {
-  const confirmButton = await firstVisible(confirmCharacterButtonCandidates(page), timeoutMs).catch(() => null);
+async function confirmTermsPopupIfPresent(
+  page: Page,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const confirmButton = await firstVisible(
+    confirmCharacterButtonCandidates(page),
+    timeoutMs,
+  ).catch(() => null);
   if (!confirmButton) return;
 
   const isEnabled = await confirmButton.isEnabled().catch(() => false);
@@ -636,7 +658,8 @@ async function waitForOmniReferenceUploadsToSettle(
     }
 
     await page.waitForTimeout(pollIntervalMs);
-    const currentBusyCount = await busyOmniReferenceThumbnailLocator(page).count();
+    const currentBusyCount =
+      await busyOmniReferenceThumbnailLocator(page).count();
     if (currentBusyCount !== lastBusyCount) {
       lastBusyCount = currentBusyCount;
       lastChangeAt = Date.now();

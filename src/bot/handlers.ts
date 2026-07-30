@@ -3,7 +3,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Context, Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
-import { MAX_OMNI_REFERENCE_ITEMS, MAX_VIDEO_REF_IMAGES } from "../automation/hailuo";
+import {
+  MAX_OMNI_REFERENCE_ITEMS,
+  MAX_VIDEO_REF_IMAGES,
+} from "../automation/hailuo";
 import { MAX_REFERENCE_IMAGES } from "../automation/hailuoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import { config } from "../config";
@@ -64,6 +67,33 @@ interface PendingOmniRefBuffer {
   timer: ReturnType<typeof setTimeout>;
 }
 const pendingOmniRefBuffers = new Map<number, PendingOmniRefBuffer>();
+
+/**
+ * Bấm lại bất kỳ nút menu nào (kể cả bấm lại đúng nút cũ) TRƯỚC khi gõ prompt
+ * nghĩa là user muốn bắt đầu lại — huỷ hết ảnh/video/audio đã gửi dở dang
+ * (chưa có prompt nên chưa tải file thật nào về, chỉ đang giữ file_id nên
+ * không cần dọn file trên đĩa) để tránh lẫn vào batch tiếp theo. Trả về true
+ * nếu có gì đó thực sự bị xoá (để báo cho user biết).
+ */
+function clearPendingUploads(userId: number): boolean {
+  let hadSomething = false;
+
+  const photoBuffer = pendingPhotoBuffers.get(userId);
+  if (photoBuffer) {
+    clearTimeout(photoBuffer.timer);
+    pendingPhotoBuffers.delete(userId);
+    hadSomething = true;
+  }
+
+  const omniRefBuffer = pendingOmniRefBuffers.get(userId);
+  if (omniRefBuffer) {
+    clearTimeout(omniRefBuffer.timer);
+    pendingOmniRefBuffers.delete(userId);
+    hadSomething = true;
+  }
+
+  return hadSomething;
+}
 
 function omniRefExtension(kind: OmniRefKind): string {
   if (kind === "photo") return ".jpg";
@@ -159,8 +189,10 @@ async function submitVideoJob({
     await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
     if (startFramePath) await fs.unlink(startFramePath).catch(() => {});
     if (characterImagePath) await fs.unlink(characterImagePath).catch(() => {});
-    for (const p of referenceImagePaths ?? []) await fs.unlink(p).catch(() => {});
-    for (const p of omniReferencePaths ?? []) await fs.unlink(p).catch(() => {});
+    for (const p of referenceImagePaths ?? [])
+      await fs.unlink(p).catch(() => {});
+    for (const p of omniReferencePaths ?? [])
+      await fs.unlink(p).catch(() => {});
     return;
   }
 
@@ -175,7 +207,7 @@ async function submitVideoJob({
       ? ` (kèm ${omniReferencePaths.length} file tham chiếu)`
       : "";
   const statusMessage = await ctx.reply(
-    `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${startFrameNote}${refImageNote}${characterNote}${omniNote}`,
+    `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0, 20).join(" ")}"${startFrameNote}${refImageNote}${characterNote}${omniNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
     },
@@ -228,7 +260,7 @@ async function submitImageJob({
       ? ` (kèm ${referenceImagePaths.length} ảnh tham chiếu)`
       : "";
   const statusMessage = await ctx.reply(
-    `⏳ Đang tạo ảnh cho prompt:\n"${prompt.split(" ").slice(0,20).join(" ")}"${refNote}`,
+    `⏳ Đang tạo ảnh cho prompt:\n"${prompt.split(" ").slice(0, 20).join(" ")}"${refNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
     },
@@ -282,7 +314,10 @@ async function handlePhotoBuffer(
     // bị bỏ qua, không cần tải về.
     let startFramePath: string;
     try {
-      startFramePath = await downloadTelegramPhoto(ctx, photoArrays[photoArrays.length - 1]);
+      startFramePath = await downloadTelegramPhoto(
+        ctx,
+        photoArrays[photoArrays.length - 1],
+      );
     } catch (err) {
       console.error("[bot] Tải ảnh Telegram thất bại:", err);
       await ctx.reply("Không tải được ảnh từ Telegram, đã huỷ.", promptMenu);
@@ -304,7 +339,10 @@ async function handlePhotoBuffer(
     // Bắt buộc đúng 1 ảnh nhân vật — chỉ lấy ảnh GẦN NHẤT nếu gửi nhiều.
     let characterImagePath: string;
     try {
-      characterImagePath = await downloadTelegramPhoto(ctx, photoArrays[photoArrays.length - 1]);
+      characterImagePath = await downloadTelegramPhoto(
+        ctx,
+        photoArrays[photoArrays.length - 1],
+      );
     } catch (err) {
       console.error("[bot] Tải ảnh Telegram thất bại:", err);
       await ctx.reply("Không tải được ảnh từ Telegram, đã huỷ.", promptMenu);
@@ -421,7 +459,11 @@ async function handleOmniRefBuffer(
   try {
     for (const item of items) {
       omniReferencePaths.push(
-        await downloadTelegramFile(ctx, item.fileId, omniRefExtension(item.kind)),
+        await downloadTelegramFile(
+          ctx,
+          item.fileId,
+          omniRefExtension(item.kind),
+        ),
       );
     }
   } catch (err) {
@@ -451,6 +493,7 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(PROMPT_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "video");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
@@ -461,6 +504,7 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(IMAGE_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "image");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi prompt tạo ảnh (chỉ cần gõ text), ` +
@@ -470,6 +514,7 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(VIDEO_REF_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "videoRef");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
@@ -479,6 +524,7 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(CHARACTER_REF_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "characterRef");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi 1 ảnh nhân vật (bắt buộc — nếu gửi nhiều ảnh, ảnh gửi gần nhất sẽ được dùng), ` +
@@ -488,6 +534,7 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(OMNI_REF_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "omniRef");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
@@ -595,7 +642,13 @@ export function registerHandlers(bot: Telegraf): void {
 
     const existing = pendingPhotoBuffers.get(userId);
     const mode = existing?.mode ?? waitingMode.get(userId);
-    if (mode !== "image" && mode !== "video" && mode !== "videoRef" && mode !== "characterRef") return next();
+    if (
+      mode !== "image" &&
+      mode !== "video" &&
+      mode !== "videoRef" &&
+      mode !== "characterRef"
+    )
+      return next();
 
     waitingMode.delete(userId);
 
