@@ -62,9 +62,31 @@ const VIDEO_INPUT_MODE_NAMES = [
  * định — cần match cả 4 để luôn bấm mở được popover đổi mode, bất kể trang
  * đang ở mode nào lúc load.
  */
+/**
+ * DOM thật xác nhận: mỗi tag video trong lịch sử (dưới mỗi entry) hiện y hệt
+ * tên mode làm nhãn tĩnh, KHÔNG phải chip — vd
+ * `<div class="text-hl_text_03 bg-hl_bg_05 rounded-[6px] px-2 py-1 cl_hl_H9_R">Omni Reference</div>`,
+ * không có "cursor-pointer", không border, không icon svg bên trong. Chip
+ * mode THẬT trong composer luôn có "cursor-pointer" + 1 icon <svg> con (xem
+ * class thật: "... flex h-8 cursor-pointer items-center gap-1 ... rounded-
+ * [10px] border ..."). Nếu chỉ match theo text (getByText/getByRole) sẽ khớp
+ * NHẦM cả 2 loại — đã xác nhận gây 2 lỗi khác nhau: false NEGATIVE khi khớp
+ * trúng 1 bản sao ẩn ngoài viewport (xem findOnscreenLocator ở hailuo.ts),
+ * và false POSITIVE khi khớp trúng tag lịch sử (khiến verify "đã đổi mode
+ * đúng chưa" báo sai đã thành công dù chip thật chưa hề đổi). Scope theo
+ * cấu trúc div.cursor-pointer có chứa svg để loại tag lịch sử ngay từ đầu.
+ */
+function chipStructureLocator(page: Page, pattern: RegExp): Locator {
+  return page
+    .locator("div.cursor-pointer")
+    .filter({ has: page.locator("svg") })
+    .filter({ hasText: pattern });
+}
+
 export const anyVideoInputModeChipCandidates = (page: Page): Array<() => Locator> => {
   const pattern = new RegExp(`^(${VIDEO_INPUT_MODE_NAMES.join("|").replace(/\//g, "\\/")})$`, "i");
   return [
+    () => chipStructureLocator(page, pattern),
     () => page.getByText(pattern),
     () => page.getByRole("button", { name: pattern }),
   ];
@@ -74,6 +96,7 @@ export const anyVideoInputModeChipCandidates = (page: Page): Array<() => Locator
 export const exactVideoInputModeChipCandidates = (page: Page, modeName: string): Array<() => Locator> => {
   const pattern = new RegExp(`^${modeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
   return [
+    () => chipStructureLocator(page, pattern),
     () => page.getByText(pattern),
     () => page.getByRole("button", { name: pattern }),
   ];
