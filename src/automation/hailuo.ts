@@ -24,6 +24,7 @@ import {
   getReferenceImageCount,
   historyVideoLocator,
   modelChipCandidates,
+  openPopoverLocator,
   promptInputCandidates,
   resolutionChipCandidates,
   signInIndicatorCandidates,
@@ -296,23 +297,40 @@ async function switchVideoInputMode(
       .catch(() => false);
     if (alreadyInTargetMode) return;
 
-    const chip = await firstVisible(
-      anyVideoInputModeChipCandidates(page),
-      8000,
-    );
-    await clickDismissingModals(page, chip);
+    // Bấm chip đôi khi KHÔNG mở popover (đã xác nhận qua debug HTML thực tế:
+    // click chạy xong không lỗi gì, nhưng .ant-popover-content không hề xuất
+    // hiện trong DOM dù chờ tới 25s sau đó tìm option — click rơi vào 1 khung
+    // hình đang chuyển động/animation hoặc bị 1 lớp overlay thoáng qua nuốt
+    // mất). Xác nhận CHỦ ĐỘNG popover đã mở trước khi tìm option, thử bấm lại
+    // 1 lần nếu chưa — để báo lỗi đúng nguyên nhân (popover không mở) thay vì
+    // lỗi gây hiểu lầm là "option sai text".
+    const maxClickAttempts = 2;
+    let popoverOpened = false;
+    for (let attempt = 1; attempt <= maxClickAttempts && !popoverOpened; attempt++) {
+      const chip = await firstVisible(anyVideoInputModeChipCandidates(page), 8000);
+      await clickDismissingModals(page, chip);
+      popoverOpened = await firstVisible([() => openPopoverLocator(page)], 3000)
+        .then(() => true)
+        .catch(() => false);
+      if (!popoverOpened) {
+        await dismissBlockingOverlays(page);
+      }
+    }
 
     // Chụp debug ngay khi popover vừa mở (TRƯỚC khi chọn option) — nếu bước
     // sau vẫn lỗi, đây là bằng chứng trực tiếp để biết text option thật là
-    // gì, thay vì đoán mò. Bật lại (không comment) vì lần đổi mode NGƯỢC (từ
-    // 1 mode tham chiếu về lại "Start/End Frame") đang lỗi không tìm thấy
-    // option trong popover — cần bằng chứng thật để biết popover lúc đó có
-    // mở không, và nếu có thì thật sự chứa những option gì.
+    // gì, thay vì đoán mò.
     await captureSnapshot(
       page,
       jobId + "-mode-popover-open",
       "mode-popover-open",
     );
+
+    if (!popoverOpened) {
+      throw new Error(
+        `Đã bấm chip đổi mode (thử ${maxClickAttempts} lần) nhưng popover không mở ra — có thể click bị lỡ nhịp do site đang animation`,
+      );
+    }
 
     const option = await firstVisible(
       dropdownOptionCandidates(page, modeName),
