@@ -46,16 +46,38 @@ export const resolutionChipCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/^\d{3,4}p$/i),
 ];
 
-/**
- * Chip chuyển chế độ nhập liệu cho video, mặc định hiện nhãn "Start/End
- * Frame" trên trang /create/subject-reference-to-video — bấm vào mở popover
- * chọn mode khác (vd "Image Reference"), do người dùng xác nhận trực tiếp
- * qua thao tác thủ công trên site (không phải phỏng đoán).
- */
-export const videoInputModeChipCandidates = (page: Page): Array<() => Locator> => [
-  () => page.getByText(/^Start\/End Frame$/i),
-  () => page.getByRole("button", { name: /^Start\/End Frame$/i }),
+const VIDEO_INPUT_MODE_NAMES = [
+  "Start/End Frame",
+  "Image Reference",
+  "Character Reference",
+  "Omni Reference",
 ];
+
+/**
+ * Site NHỚ mode nhập liệu đã chọn ở lần trước (sticky qua account, không
+ * reset khi vào lại trang) — thực tế xác nhận: 1 job chỉ dùng start frame
+ * (không yêu cầu mode tham chiếu nào) vẫn load ra trang đang ở mode "Image
+ * Reference" còn sót lại từ job trước đó. Vì vậy chip hiện tại có thể mang
+ * BẤT KỲ nhãn nào trong 4 nhãn có thể có, không chỉ "Start/End Frame" mặc
+ * định — cần match cả 4 để luôn bấm mở được popover đổi mode, bất kể trang
+ * đang ở mode nào lúc load.
+ */
+export const anyVideoInputModeChipCandidates = (page: Page): Array<() => Locator> => {
+  const pattern = new RegExp(`^(${VIDEO_INPUT_MODE_NAMES.join("|").replace(/\//g, "\\/")})$`, "i");
+  return [
+    () => page.getByText(pattern),
+    () => page.getByRole("button", { name: pattern }),
+  ];
+};
+
+/** Chip đang hiện ĐÚNG nhãn modeName (dùng để kiểm tra "đã ở đúng mode chưa"). */
+export const exactVideoInputModeChipCandidates = (page: Page, modeName: string): Array<() => Locator> => {
+  const pattern = new RegExp(`^${modeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+  return [
+    () => page.getByText(pattern),
+    () => page.getByRole("button", { name: pattern }),
+  ];
+};
 
 /**
  * Mode "Character Reference": sau khi upload ảnh nhân vật, site cần vài
@@ -82,12 +104,16 @@ export const confirmCharacterButtonCandidates = (page: Page): Array<() => Locato
 
 /**
  * Nút "Start Frame" (upload ảnh khởi đầu video) hiện trực tiếp trong khung
- * nhập prompt tạo video, cạnh "End Frame" — đã thấy qua screenshot debug
- * nhưng CHƯA CÓ DOM thật (chưa lấy được HTML lúc đó), nên đây là candidate
- * ban đầu, có thể cần chỉnh qua debug snapshot lần chạy thử đầu — cùng cách
- * các tính năng khác trong project này đã được tinh chỉnh dần.
+ * nhập prompt tạo video, cạnh "End Frame". Locale JSON nhúng sẵn trong trang
+ * xác nhận nhãn nút thật là "Start" (key "start_frame_upload_btn":"Start"),
+ * KHÔNG phải "Start Frame" ("Start Frame" chỉ là tên gọi field/label trong
+ * text khác, ví dụ "first_frame":"Start Frame") — đây là nguyên nhân job chỉ
+ * dùng start frame liên tục báo không tìm thấy nút dù mode đã đúng
+ * "Start/End Frame". Ưu tiên match "Start" trước, giữ lại 2 candidate cũ làm
+ * fallback phòng site đổi lại.
  */
 export const startFrameButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^start$/i }),
   () => page.getByRole("button", { name: /start frame/i }),
   () => page.getByText(/^start frame$/i),
 ];

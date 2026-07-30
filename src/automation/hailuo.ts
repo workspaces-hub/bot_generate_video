@@ -9,6 +9,7 @@ import {
   addReferenceImageButtonCandidates,
   antModalCloseButtonLocator,
   antModalWrapperLocator,
+  anyVideoInputModeChipCandidates,
   busyOmniReferenceThumbnailLocator,
   busyReferenceImageThumbnailLocator,
   characterDetectionFailedCandidates,
@@ -16,6 +17,7 @@ import {
   creditPaywallModalCandidates,
   dropdownOptionCandidates,
   errorIndicatorCandidates,
+  exactVideoInputModeChipCandidates,
   firstVisible,
   generateButtonCandidates,
   getOmniReferenceCount,
@@ -26,7 +28,6 @@ import {
   resolutionChipCandidates,
   signInIndicatorCandidates,
   startFrameButtonCandidates,
-  videoInputModeChipCandidates,
 } from "./selectors";
 
 export class GenerationError extends Error {}
@@ -129,6 +130,14 @@ export async function generateVideo(
         await uploadOmniReferenceFile(page, omniReferencePaths[i], i + 1);
       }
       await waitForOmniReferenceUploadsToSettle(page);
+    } else {
+      // Site NHỚ mode đã chọn ở lần trước (sticky qua account, xác nhận qua
+      // debug HTML thực tế: 1 job không dùng mode tham chiếu nào vẫn load ra
+      // trang /create/video ở mode "Image Reference" còn sót từ job trước —
+      // khiến không tìm thấy nút upload start frame vì nút đó chỉ có ở mode
+      // "Start/End Frame"). Chủ động ép về đúng mode mặc định trước khi làm
+      // gì khác — switchVideoInputMode tự bỏ qua (no-op) nếu đã đúng mode.
+      await switchVideoInputMode(page, "Start/End Frame", jobId);
     }
 
     await dismissBlockingOverlays(page);
@@ -158,6 +167,12 @@ export async function generateVideo(
     const baseline = await captureVideoBaseline(page);
 
     await dismissBlockingOverlays(page);
+
+    await captureSnapshot(
+      page,
+      jobId + "-before-generate-click",
+      "before-generate-click",
+    );
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
     // Một số mode (đã xác nhận với "Character Reference") hiện popup Terms
@@ -242,12 +257,20 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
 }
 
 /**
- * Chuyển mode nhập liệu video từ "Start/End Frame" (mặc định) sang mode khác
- * (vd "Image Reference", "Character Reference") — bấm chip mở popover rồi
- * chọn option, cùng cơ chế popover đã dùng cho model/resolution
+ * Chuyển mode nhập liệu video sang modeName (vd "Start/End Frame", "Image
+ * Reference", "Character Reference", "Omni Reference") — bấm chip mở popover
+ * rồi chọn option, cùng cơ chế popover đã dùng cho model/resolution
  * (dropdownOptionCandidates). Fail CỨNG nếu không chuyển được (khác
  * selectChipOption chỉ warn) vì bước upload ảnh ngay sau đó chắc chắn sai
  * nếu bỏ qua bước này.
+ *
+ * Site NHỚ mode đã chọn ở lần trước (sticky qua account, không reset khi vào
+ * lại trang) — thực tế xác nhận: 1 job không yêu cầu mode tham chiếu nào vẫn
+ * load ra trang đang ở mode "Image Reference" còn sót từ job trước đó. Vì
+ * vậy hàm này: (1) không giả định trạng thái ban đầu là "Start/End Frame" —
+ * dùng anyVideoInputModeChipCandidates để bấm mở popover bất kể chip đang
+ * hiện nhãn nào; (2) bỏ qua ngay (no-op) nếu trang đã sẵn đúng modeName cần
+ * dùng, tránh mở popover rồi lỡ chọn nhầm option khác.
  */
 async function switchVideoInputMode(
   page: Page,
@@ -256,7 +279,15 @@ async function switchVideoInputMode(
 ): Promise<void> {
   await dismissBlockingOverlays(page);
   try {
-    const chip = await firstVisible(videoInputModeChipCandidates(page), 8000);
+    const alreadyInTargetMode = await firstVisible(
+      exactVideoInputModeChipCandidates(page, modeName),
+      2000,
+    )
+      .then(() => true)
+      .catch(() => false);
+    if (alreadyInTargetMode) return;
+
+    const chip = await firstVisible(anyVideoInputModeChipCandidates(page), 8000);
     await clickDismissingModals(page, chip);
 
     // Chụp debug ngay khi popover vừa mở (TRƯỚC khi chọn option) — nếu bước
@@ -281,15 +312,17 @@ async function switchVideoInputMode(
     // dropdownOptionCandidates có candidate fallback KHÔNG scope vào popover
     // (tìm cả trang) — có thể "click thành công" vào phần tử không liên
     // quan mà không báo lỗi gì, trong khi mode thực ra KHÔNG đổi. Xác nhận
-    // lại: nếu chip vẫn còn hiện "Start/End Frame" (mặc định) sau khi chọn,
-    // nghĩa là chưa đổi mode thật — báo lỗi rõ ràng thay vì để lộ ra thành
-    // lỗi khó hiểu ở bước upload sau đó.
-    const stillDefaultMode = await firstVisible(videoInputModeChipCandidates(page), 2000)
+    // lại chip đã thực sự đổi sang ĐÚNG modeName mong muốn, báo lỗi rõ ràng
+    // nếu không, thay vì để lộ ra thành lỗi khó hiểu ở bước upload sau đó.
+    const switchedOk = await firstVisible(
+      exactVideoInputModeChipCandidates(page, modeName),
+      5000,
+    )
       .then(() => true)
       .catch(() => false);
-    if (stillDefaultMode) {
+    if (!switchedOk) {
       throw new Error(
-        `Đã bấm option "${modeName}" nhưng mode vẫn còn hiện "Start/End Frame" — có thể chưa khớp đúng text option thật`,
+        `Đã bấm option "${modeName}" nhưng chip vẫn chưa đổi sang đúng nhãn này — có thể chưa khớp đúng text option thật`,
       );
     }
   } catch (err) {
