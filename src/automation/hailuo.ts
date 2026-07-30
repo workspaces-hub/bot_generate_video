@@ -27,6 +27,7 @@ import {
   openPopoverLocator,
   promptInputCandidates,
   resolutionChipCandidates,
+  returnToLatestButtonCandidates,
   signInIndicatorCandidates,
   startFrameButtonCandidates,
 } from "./selectors";
@@ -843,6 +844,11 @@ export async function clickDismissingModals(
  * nút .ant-modal-close — dismissAntModalIfPresent) VÀ popup tuỳ biến không
  * theo chuẩn Ant Design (không có class trên, chỉ có nút mang tên "close"
  * chung hoặc lắng nghe phím Escape).
+ *
+ * Cũng bấm "Return to Latest" nếu đang hiện (best-effort) — nút này xuất
+ * hiện khi khung lịch sử đang bị cuộn lên xem entry cũ, nghi vấn khiến
+ * layout composer/chip mode phía dưới không ở trạng thái bình thường và ảnh
+ * hưởng độ tin cậy của các thao tác click sau đó.
  */
 export async function dismissBlockingOverlays(page: Page): Promise<void> {
   await dismissAntModalIfPresent(page);
@@ -853,6 +859,10 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
     await closeButton.click().catch(() => {});
     await page.waitForTimeout(500);
   }
+
+  await firstVisible(returnToLatestButtonCandidates(page), 500)
+    .then((btn) => clickDismissingModals(page, btn))
+    .catch(() => {});
 }
 
 /**

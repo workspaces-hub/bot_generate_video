@@ -126,6 +126,18 @@ export const startFrameButtonCandidates = (page: Page): Array<() => Locator> => 
 export const openPopoverLocator = (page: Page): Locator => page.locator(".ant-popover-content");
 
 /**
+ * Nút nổi "Return to Latest" xuất hiện khi khung lịch sử đang bị cuộn lên
+ * xem entry cũ — DOM thật do người dùng cung cấp trực tiếp. Lúc nút này còn
+ * hiện, layout trang có thể khác trạng thái mặc định (đã cuộn xuống cuối),
+ * nghi vấn ảnh hưởng tới độ tin cậy khi thao tác composer/chip mode phía
+ * dưới — nên bấm về lại "mới nhất" trước khi thao tác.
+ */
+export const returnToLatestButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^Return to Latest$/i }),
+  () => page.getByText(/^Return to Latest$/i),
+];
+
+/**
  * Các option trong popover model là <div class="... cursor-pointer"> THƯỜNG
  * (không có role option/menuitem/button nào cả) — nên getByRole không bao
  * giờ khớp được, phải dựa vào text. Dùng exact-match làm ưu tiên số 1 để
