@@ -316,7 +316,25 @@ async function findOnscreenLocator(
         box.y >= 0 &&
         box.y < maxHeight
       ) {
-        return candidate;
+        // boundingBox() khác 0 KHÔNG loại được trường hợp phần tử đang bị ẩn
+        // qua CSS visibility:hidden (vẫn chiếm layout, vẫn có toạ độ hợp lệ,
+        // chỉ không hiện ra) — kỹ thuật phổ biến khi 1 popover/option ĐÃ ĐÓNG
+        // nhưng còn animation fade-out nên chưa unmount khỏi DOM ngay. Đây là
+        // nghi vấn chính cho case "đang ở Start/End Frame nhưng vẫn khớp
+        // 'Omni Reference'" — rất có thể là 1 OPTION còn sót trong popover cũ
+        // đã đóng, không phải chip thật. isVisible() có kiểm tra visibility,
+        // boundingBox không kiểm tra, nên cần cả 2 điều kiện.
+        const isVisible = await candidate.isVisible().catch(() => false);
+        // Loại thẳng nếu phần tử nằm BÊN TRONG 1 popover (kể cả đã đóng
+        // nhưng chưa unmount) — option trong popover dùng đúng kiểu dáng
+        // cursor-pointer + icon giống hệt chip thật, nên đây là nghi vấn
+        // chính gây khớp nhầm.
+        const insidePopover = await candidate
+          .evaluate((el) => Boolean(el.closest(".ant-popover-content")))
+          .catch(() => false);
+        if (isVisible && !insidePopover) {
+          return candidate;
+        }
       }
     }
   }
@@ -345,14 +363,26 @@ async function switchVideoInputMode(
 ): Promise<void> {
   await dismissBlockingOverlays(page);
   try {
-    const alreadyInTargetMode = Boolean(
-      await pollForOnscreenLocator(
-        exactVideoInputModeChipCandidates(page, modeName),
-        page,
-        2000,
-      ),
+    const alreadyMatchedChip = await pollForOnscreenLocator(
+      exactVideoInputModeChipCandidates(page, modeName),
+      page,
+      2000,
     );
-    if (alreadyInTargetMode) return;
+    if (alreadyMatchedChip) {
+      // Log RÕ phần tử khớp — thực tế xác nhận (user báo trực tiếp): có lúc
+      // trang đang hiện "Start/End Frame" thật nhưng check alreadyInTargetMode
+      // cho mode "Omni Reference" vẫn trả về true, nghĩa là 1 phần tử KHÁC
+      // (không phải chip thật) cũng thoả structure div.cursor-pointer + có
+      // svg + đúng text. Log outerHTML để biết chính xác đó là phần tử gì.
+      const outerHtml = await alreadyMatchedChip
+        .evaluate((el) => el.outerHTML.slice(0, 500))
+        .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
+      console.warn(
+        `[hailuo] switchVideoInputMode(${modeName}): alreadyInTargetMode=true, phần tử khớp outerHTML=`,
+        outerHtml,
+      );
+      return;
+    }
 
     // Bấm chip đôi khi KHÔNG mở popover (đã xác nhận qua debug HTML thực tế
     // NHIỀU LẦN: click chạy xong không lỗi gì, nhưng .ant-popover-content
