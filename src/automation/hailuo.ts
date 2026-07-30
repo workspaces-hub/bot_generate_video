@@ -870,10 +870,16 @@ export async function clickDismissingModals(
  * theo chuẩn Ant Design (không có class trên, chỉ có nút mang tên "close"
  * chung hoặc lắng nghe phím Escape).
  *
- * Cũng bấm "Return to Latest" nếu đang hiện (best-effort) — nút này xuất
- * hiện khi khung lịch sử đang bị cuộn lên xem entry cũ, nghi vấn khiến
- * layout composer/chip mode phía dưới không ở trạng thái bình thường và ảnh
- * hưởng độ tin cậy của các thao tác click sau đó.
+ * Cũng ép khung lịch sử (#create-new-scroll-container) về đúng vị trí "mới
+ * nhất" — DOM thật xác nhận container này dùng flex-col-reverse (thứ tự DOM
+ * đảo ngược, "mới nhất" nằm ở scrollTop=0), và tài khoản test có RẤT NHIỀU
+ * lịch sử. Thực tế xác nhận qua log boundingBox() thật: chip mode có lúc
+ * boundingBox.y = -6078 (lệch khỏi viewport hơn 6000px, y hệt nhau qua cả 3
+ * lần thử) — nghĩa là trang đang cuộn sâu vào lịch sử cũ, và .click() của
+ * Playwright (vốn tự scrollIntoView) KHÔNG tự sửa được vị trí này (nghi do
+ * bug scrollIntoView với flex-col-reverse ở nhiều engine trình duyệt). Set
+ * thẳng scrollTop=0 bằng JS đáng tin cậy hơn nhiều so với chỉ bấm nút
+ * "Return to Latest" (nút này không phải lúc nào cũng hiện/tìm được).
  */
 export async function dismissBlockingOverlays(page: Page): Promise<void> {
   await dismissAntModalIfPresent(page);
@@ -886,6 +892,15 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
     await closeButton.click().catch(() => {});
     await page.waitForTimeout(500);
   }
+
+  await page
+    .evaluate(() => {
+      const container = document.querySelector<HTMLElement>(
+        "#create-new-scroll-container",
+      );
+      if (container) container.scrollTop = 0;
+    })
+    .catch(() => {});
 
   const returnToLatestButton = await firstVisible(
     returnToLatestButtonCandidates(page),
