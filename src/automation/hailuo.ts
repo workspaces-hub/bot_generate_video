@@ -305,7 +305,7 @@ async function switchVideoInputMode(
     // mất). Xác nhận CHỦ ĐỘNG popover đã mở trước khi tìm option, thử bấm lại
     // 1 lần nếu chưa — để báo lỗi đúng nguyên nhân (popover không mở) thay vì
     // lỗi gây hiểu lầm là "option sai text".
-    const maxClickAttempts = 2;
+    const maxClickAttempts = 3;
     let popoverOpened = false;
     for (let attempt = 1; attempt <= maxClickAttempts && !popoverOpened; attempt++) {
       const chip = await firstVisible(anyVideoInputModeChipCandidates(page), 8000);
@@ -854,15 +854,25 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
   await dismissAntModalIfPresent(page);
 
   await page.keyboard.press("Escape").catch(() => {});
-  const closeButton = page.getByRole("button", { name: /close/i }).first();
+  const closeButton = page
+    .getByRole("button", { name: /^(close|got it)$/i })
+    .first();
   if (await closeButton.isVisible({ timeout: 500 }).catch(() => false)) {
     await closeButton.click().catch(() => {});
     await page.waitForTimeout(500);
   }
 
-  await firstVisible(returnToLatestButtonCandidates(page), 500)
-    .then((btn) => clickDismissingModals(page, btn))
-    .catch(() => {});
+  const returnToLatestButton = await firstVisible(
+    returnToLatestButtonCandidates(page),
+    500,
+  ).catch(() => null);
+  if (returnToLatestButton) {
+    await clickDismissingModals(page, returnToLatestButton).catch(() => {});
+    // Bấm "Return to Latest" cuộn lịch sử về cuối có animation — chờ layout
+    // ổn định trước khi trả về, tránh thao tác NGAY SAU đó (vd bấm chip mode)
+    // nhắm vào toạ độ cũ lúc còn đang cuộn.
+    await page.waitForTimeout(800);
+  }
 }
 
 /**
