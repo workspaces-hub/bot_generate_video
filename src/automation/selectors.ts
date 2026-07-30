@@ -177,26 +177,6 @@ export const dropdownOptionCandidates = (page: Page, targetText: string): Array<
   ];
 };
 
-/**
- * Dành riêng cho option đổi MODE nhập liệu video (Start/End Frame, Image/
- * Character/Omni Reference) trong popover — thực tế xác nhận qua log lỗi
- * thật: `popover.getByText(targetText, {exact:true})` (candidate đầu của
- * dropdownOptionCandidates) resolve trúng <span>Omni Reference</span> (lá
- * text bên trong), rồi click thất bại với "Element is not visible" — nghi
- * vấn span này không phải phần tử THẬT SỰ nhận click (giống hệt lỗi từng
- * gặp ở chip mode: bấm vào <span> con thay vì <div class="cursor-pointer">
- * cha bọc ngoài, xem chipStructureLocator). Ưu tiên bấm thẳng vào div bọc
- * ngoài, chỉ fallback về candidate cũ nếu không có.
- */
-export const modeOptionCandidates = (page: Page, targetText: string): Array<() => Locator> => {
-  const pattern = new RegExp(`^${targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
-  const popover = openPopoverLocator(page);
-  return [
-    () => popover.locator("div.cursor-pointer").filter({ hasText: pattern }),
-    ...dropdownOptionCandidates(page, targetText),
-  ];
-};
-
 export const generateButtonCandidates = (page: Page): Array<() => Locator> => [
   // Nút generate thật của hailuoai.video không có chữ "Generate" — chỉ có
   // icon + số credit (vd "25"). Xác định qua class riêng của app.

@@ -24,7 +24,6 @@ import {
   getReferenceImageCount,
   historyVideoLocator,
   modelChipCandidates,
-  modeOptionCandidates,
   openPopoverLocator,
   promptInputCandidates,
   resolutionChipCandidates,
@@ -298,9 +297,7 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
 async function findOnscreenLocator(
   candidates: Array<() => Locator>,
   page: Page,
-  options: { excludePopover?: boolean } = {},
 ): Promise<Locator | null> {
-  const excludePopover = options.excludePopover ?? true;
   const viewport = page.viewportSize();
   const maxWidth = viewport?.width ?? 2000;
   const maxHeight = viewport?.height ?? 2000;
@@ -328,19 +325,16 @@ async function findOnscreenLocator(
         // đã đóng, không phải chip thật. isVisible() có kiểm tra visibility,
         // boundingBox không kiểm tra, nên cần cả 2 điều kiện.
         const isVisible = await candidate.isVisible().catch(() => false);
-        if (!isVisible) continue;
-        // Loại phần tử nằm BÊN TRONG 1 popover CŨ (kể cả đã đóng nhưng chưa
-        // unmount) khi tìm CHIP ngoài composer — option trong popover dùng
-        // đúng kiểu dáng cursor-pointer + icon giống hệt chip thật, nên đây
-        // là nghi vấn chính gây khớp nhầm. KHÔNG áp dụng khi chính ta đang
-        // tìm OPTION bên trong popover đang mở (excludePopover=false).
-        if (excludePopover) {
-          const insidePopover = await candidate
-            .evaluate((el) => Boolean(el.closest(".ant-popover-content")))
-            .catch(() => false);
-          if (insidePopover) continue;
+        // Loại thẳng nếu phần tử nằm BÊN TRONG 1 popover (kể cả đã đóng
+        // nhưng chưa unmount) — option trong popover dùng đúng kiểu dáng
+        // cursor-pointer + icon giống hệt chip thật, nên đây là nghi vấn
+        // chính gây khớp nhầm.
+        const insidePopover = await candidate
+          .evaluate((el) => Boolean(el.closest(".ant-popover-content")))
+          .catch(() => false);
+        if (isVisible && !insidePopover) {
+          return candidate;
         }
-        return candidate;
       }
     }
   }
@@ -352,11 +346,10 @@ async function pollForOnscreenLocator(
   candidates: Array<() => Locator>,
   page: Page,
   timeoutMs: number,
-  options: { excludePopover?: boolean } = {},
 ): Promise<Locator | null> {
   const start = Date.now();
   do {
-    const found = await findOnscreenLocator(candidates, page, options);
+    const found = await findOnscreenLocator(candidates, page);
     if (found) return found;
     await page.waitForTimeout(300);
   } while (Date.now() - start < timeoutMs);
@@ -465,21 +458,10 @@ async function switchVideoInputMode(
       );
     }
 
-    // Popover vừa mở còn animation vào — chờ ổn định trước khi tìm option,
-    // tránh lặp lại lỗi "Element is not visible" đã gặp khi bấm ngay lúc
-    // option vẫn đang trong quá trình xuất hiện.
-    await page.waitForTimeout(500);
-    const option = await pollForOnscreenLocator(
-      modeOptionCandidates(page, modeName),
-      page,
+    const option = await firstVisible(
+      dropdownOptionCandidates(page, modeName),
       5000,
-      { excludePopover: false },
     );
-    if (!option) {
-      throw new Error(
-        `Không tìm thấy option "${modeName}" nào đang hiển thị trong popover`,
-      );
-    }
     await clickWithForceFallback(option);
     await page.waitForTimeout(500);
 
@@ -860,15 +842,6 @@ export async function selectChipOption(
 ): Promise<void> {
   try {
     const chip = await firstVisible(chipCandidates, 3000);
-
-    // Nếu chip đã hiện đúng targetText rồi thì khỏi mở dropdown chọn lại —
-    // đỡ 1 lượt bấm/mở popover không cần thiết (cùng tinh thần với
-    // "alreadyInTargetMode" đã áp dụng cho switchVideoInputMode).
-    const currentText = (await chip.textContent().catch(() => null))?.trim();
-    if (currentText && currentText.toLowerCase() === targetText.trim().toLowerCase()) {
-      return;
-    }
-
     await clickDismissingModals(page, chip);
 
     const option = await firstVisible(
