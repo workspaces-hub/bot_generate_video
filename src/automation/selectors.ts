@@ -75,6 +75,13 @@ const VIDEO_INPUT_MODE_NAMES = [
  * và false POSITIVE khi khớp trúng tag lịch sử (khiến verify "đã đổi mode
  * đúng chưa" báo sai đã thành công dù chip thật chưa hề đổi). Scope theo
  * cấu trúc div.cursor-pointer có chứa svg để loại tag lịch sử ngay từ đầu.
+ *
+ * KHÔNG được thêm getByText/getByRole match-theo-text thuần làm fallback ở 2
+ * hàm dưới — đã xác nhận qua log thật: khi chipStructureLocator không tìm
+ * thấy gì (vd vì chip thật đang hiện mode KHÁC), findOnscreenLocator rơi
+ * xuống candidate fallback đó và khớp thẳng vào tag lịch sử (onscreen +
+ * visible + không nằm trong popover nên lọt qua hết các điều kiện lọc khác).
+ * Thà báo "không tìm thấy chip" còn hơn báo nhầm "đã đúng mode".
  */
 function chipStructureLocator(page: Page, pattern: RegExp): Locator {
   return page
@@ -85,21 +92,13 @@ function chipStructureLocator(page: Page, pattern: RegExp): Locator {
 
 export const anyVideoInputModeChipCandidates = (page: Page): Array<() => Locator> => {
   const pattern = new RegExp(`^(${VIDEO_INPUT_MODE_NAMES.join("|").replace(/\//g, "\\/")})$`, "i");
-  return [
-    () => chipStructureLocator(page, pattern),
-    () => page.getByText(pattern),
-    () => page.getByRole("button", { name: pattern }),
-  ];
+  return [() => chipStructureLocator(page, pattern)];
 };
 
 /** Chip đang hiện ĐÚNG nhãn modeName (dùng để kiểm tra "đã ở đúng mode chưa"). */
 export const exactVideoInputModeChipCandidates = (page: Page, modeName: string): Array<() => Locator> => {
   const pattern = new RegExp(`^${modeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
-  return [
-    () => chipStructureLocator(page, pattern),
-    () => page.getByText(pattern),
-    () => page.getByRole("button", { name: pattern }),
-  ];
+  return [() => chipStructureLocator(page, pattern)];
 };
 
 /**
