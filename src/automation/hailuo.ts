@@ -298,19 +298,30 @@ async function switchVideoInputMode(
       .catch(() => false);
     if (alreadyInTargetMode) return;
 
-    // Bấm chip đôi khi KHÔNG mở popover (đã xác nhận qua debug HTML thực tế:
-    // click chạy xong không lỗi gì, nhưng .ant-popover-content không hề xuất
-    // hiện trong DOM dù chờ tới 25s sau đó tìm option — click rơi vào 1 khung
-    // hình đang chuyển động/animation hoặc bị 1 lớp overlay thoáng qua nuốt
-    // mất). Xác nhận CHỦ ĐỘNG popover đã mở trước khi tìm option, thử bấm lại
-    // 1 lần nếu chưa — để báo lỗi đúng nguyên nhân (popover không mở) thay vì
-    // lỗi gây hiểu lầm là "option sai text".
+    // Bấm chip đôi khi KHÔNG mở popover (đã xác nhận qua debug HTML thực tế
+    // NHIỀU LẦN: click chạy xong không lỗi gì, nhưng .ant-popover-content
+    // không hề xuất hiện trong DOM — kể cả khi screenshot cho thấy trang
+    // đang ở trạng thái sạch, không popup/overlay nào che). Nghi vấn: trang
+    // vừa chuyển sang (SPA) nên phần tử đã RENDER (nhìn thấy) nhưng React
+    // chưa kịp HYDRATE xong (gắn xong event handler) tại đúng thời điểm
+    // click — chờ 1 chút TRƯỚC lần bấm đầu tiên để giảm khả năng đua với
+    // hydration, và chờ lâu hơn sau mỗi lần bấm trước khi kết luận popover
+    // không mở. Xác nhận CHỦ ĐỘNG popover đã mở trước khi tìm option, thử
+    // bấm lại vài lần nếu chưa — để báo lỗi đúng nguyên nhân (popover không
+    // mở) thay vì lỗi gây hiểu lầm là "option sai text".
+    await page.waitForTimeout(1500);
+
     const maxClickAttempts = 3;
     let popoverOpened = false;
     for (let attempt = 1; attempt <= maxClickAttempts && !popoverOpened; attempt++) {
       const chip = await firstVisible(anyVideoInputModeChipCandidates(page), 8000);
+      await captureSnapshot(
+        page,
+        jobId + `-mode-before-click-${attempt}`,
+        `mode-before-click-${attempt}`,
+      );
       await clickDismissingModals(page, chip);
-      popoverOpened = await firstVisible([() => openPopoverLocator(page)], 3000)
+      popoverOpened = await firstVisible([() => openPopoverLocator(page)], 6000)
         .then(() => true)
         .catch(() => false);
       if (!popoverOpened) {
