@@ -562,21 +562,24 @@ async function attemptUploadCharacterImage(
  * ở đây). Best-effort: không coi là lỗi nếu không thấy (popup có thể không
  * phải lúc nào cũng xuất hiện, vd với "Image Reference").
  */
+/** Trả về true nếu THỰC SỰ tìm thấy và bấm được nút Confirm (best-effort, không throw). */
 async function confirmTermsPopupIfPresent(
   page: Page,
   timeoutMs = 15_000,
-): Promise<void> {
+): Promise<boolean> {
   const confirmButton = await firstVisible(
     confirmCharacterButtonCandidates(page),
     timeoutMs,
   ).catch(() => null);
-  if (!confirmButton) return;
+  if (!confirmButton) return false;
 
   const isEnabled = await confirmButton.isEnabled().catch(() => false);
   if (isEnabled) {
     await confirmButton.click().catch(() => {});
     await page.waitForTimeout(500);
+    return true;
   }
+  return false;
 }
 
 /**
@@ -743,14 +746,44 @@ async function attemptUploadOmniReferenceFile(
   expectedCountAfter: number,
 ): Promise<void> {
   try {
+    // "Omni Reference Guide" (Terms of Use riêng cho mode này) dùng CHUNG 1
+    // cấu trúc Ant Design modal chuẩn với "Subject Reference Terms of Use"
+    // của Character Reference (ant-modal-wrap + nút Confirm) — xác nhận qua
+    // debug HTML thật, chỉ khác nội dung/tiêu đề. Khác Character Reference
+    // (popup hiện ngay sau khi CHỌN MODE, đã xử lý trong switchVideoInputMode),
+    // popup này hiện khi bấm nút "Upload Refs" — xác nhận CHỦ ĐỘNG trước
+    // (best-effort, không lỗi nếu không có) để tránh phí 10s chờ filechooser
+    // vô ích nếu modal đã che sẵn nút upload từ trước.
+    await confirmTermsPopupIfPresent(page, 2000);
+
     const addButton = await firstVisible(
       addOmniReferenceButtonCandidates(page),
       8000,
     );
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent("filechooser", { timeout: 10_000 }),
-      clickDismissingModals(page, addButton),
-    ]);
+
+    // Trường hợp popup CHỈ xuất hiện SAU khi bấm (chưa từng bấm lần nào nên
+    // check chủ động ở trên không thấy gì) — nếu chờ filechooser timeout,
+    // thử xác nhận popup rồi bấm lại nút upload 1 lần nữa.
+    let fileChooser;
+    try {
+      [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 10_000 }),
+        clickDismissingModals(page, addButton),
+      ]);
+    } catch (err) {
+      const confirmed = await confirmTermsPopupIfPresent(page, 3000);
+      if (!confirmed) throw err;
+
+      const addButtonAgain = await firstVisible(
+        addOmniReferenceButtonCandidates(page),
+        8000,
+      );
+      [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 10_000 }),
+        clickDismissingModals(page, addButtonAgain),
+      ]);
+    }
+
     await fileChooser.setFiles(filePath);
     await page.waitForTimeout(1500);
 
