@@ -6,6 +6,7 @@ import {
   ensureLoggedIn,
   extractDownloadUrlWithoutWatermark,
   fetchWithRetry,
+  getFlightDataText,
   gotoWithRetry,
 } from "../src/automation/hailuo";
 
@@ -41,8 +42,8 @@ async function main(): Promise<void> {
       )
       .catch(() => {});
 
-    const html = await page.content();
-    const noWatermarkUrl = extractDownloadUrlWithoutWatermark(html, feedId);
+    const flightData = await getFlightDataText(page);
+    const noWatermarkUrl = extractDownloadUrlWithoutWatermark(flightData, feedId);
     console.log(`Đã tìm thấy URL không watermark: ${noWatermarkUrl}`);
 
     const response = await fetchWithRetry(page, noWatermarkUrl);

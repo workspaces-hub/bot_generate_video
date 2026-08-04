@@ -13,6 +13,7 @@ import {
   ensureLoggedIn,
   extractDownloadUrlWithoutWatermark,
   fetchWithRetry,
+  getFlightDataText,
   gotoWithRetry,
   selectChipOption,
 } from "./hailuo";
@@ -362,8 +363,11 @@ async function downloadImageByFeedId(
     })
     .catch(() => {});
 
-  const html = await page.content();
-  const noWatermarkUrl = extractDownloadUrlWithoutWatermark(html, feedId);
+  // Đọc self.__next_f đã nối lại (KHÔNG dùng page.content() thô) — tránh bị
+  // cắt ngang URL do Next.js tách string qua nhiều thẻ <script>, xem chú
+  // thích getFlightDataText trong hailuo.ts.
+  const flightData = await getFlightDataText(page);
+  const noWatermarkUrl = extractDownloadUrlWithoutWatermark(flightData, feedId);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
 

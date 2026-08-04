@@ -1239,13 +1239,44 @@ export async function downloadVideo(
   // downloadURLWithoutWatermark — đáng tin cậy hơn nhiều so với hover/click
   // dropdown (site có thể đổi UI dropdown, nhưng field data này ổn định
   // hơn vì là dữ liệu thô, không phải giao diện).
-  const html = await page.content();
-  const noWatermarkUrl = extractDownloadUrlWithoutWatermark(html, feedId);
+  const flightData = await getFlightDataText(page);
+  const noWatermarkUrl = extractDownloadUrlWithoutWatermark(flightData, feedId);
   console.log(`Đã tìm thấy URL không watermark: ${noWatermarkUrl}`);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
   await fs.promises.writeFile(filePath, await response.body());
   return filePath;
+}
+
+/**
+ * Next.js stream flight data qua NHIỀU lần self.__next_f.push(...), mỗi lần
+ * nằm trong 1 thẻ <script> RIÊNG — page.content() (HTML source thô) giữ
+ * nguyên ranh giới các thẻ tách rời này, trong khi 1 giá trị string (vd URL)
+ * có thể bị CẮT NGANG giữa 2 lần push liên tiếp. Xác nhận qua debug HTML
+ * thật: 1 URL bị cắt còn "https://cdn.hailuoai.video/mo", phần còn lại
+ * "ss/prod/..." nằm ở <script> KẾ TIẾP — khiến regex trên page.content() bắt
+ * được 1 URL cụt, fetch 404 dù URL thật hoàn toàn hợp lệ. Đọc thẳng mảng
+ * self.__next_f trong browser rồi NỐI LẠI các đoạn string trước khi chạy
+ * regex — đúng như cách runtime Next.js tự ráp lại dữ liệu, tránh bị cắt
+ * ngang do ranh giới thẻ <script>. Fallback về page.content() nếu vì lý do
+ * gì đó không đọc được __next_f (vd site đổi tên biến global).
+ */
+export async function getFlightDataText(page: Page): Promise<string> {
+  const flightData = await page
+    .evaluate(() => {
+      const chunks = (window as unknown as { __next_f?: Array<[number, unknown]> })
+        .__next_f;
+      if (!Array.isArray(chunks)) return "";
+      return chunks
+        .map((chunk) => (typeof chunk[1] === "string" ? chunk[1] : ""))
+        .join("");
+    })
+    .catch(() => "");
+
+  if (flightData.includes("downloadURLWithoutWatermark")) {
+    return flightData;
+  }
+  return page.content();
 }
 
 /**
