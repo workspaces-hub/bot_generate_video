@@ -15,6 +15,7 @@ import {
   characterDetectionFailedCandidates,
   confirmCharacterButtonCandidates,
   creditPaywallModalCandidates,
+  deleteAllFailedButtonLocator,
   dropdownOptionCandidates,
   errorIndicatorCandidates,
   exactVideoInputModeChipCandidates,
@@ -1120,6 +1121,8 @@ interface VideoBaseline {
   count: number;
   firstSrc: string | null;
   lastSrc: string | null;
+  /** Số nút "Delete All Failed" đang hiện SẴN trong lịch sử (từ các job cũ) — dùng để phát hiện lỗi MỚI, xem waitForNewVideo. */
+  failedMarkerCount: number;
 }
 
 async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
@@ -1129,6 +1132,7 @@ async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
     count,
     firstSrc: count > 0 ? await videos.first().getAttribute("src") : null,
     lastSrc: count > 0 ? await videos.last().getAttribute("src") : null,
+    failedMarkerCount: await deleteAllFailedButtonLocator(page).count(),
   };
 }
 
@@ -1136,6 +1140,17 @@ async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
  * Chờ tới khi có video MỚI xuất hiện trong lịch sử (count tăng so với
  * baseline), rồi tự phát hiện video mới nằm ở đầu hay cuối danh sách bằng
  * cách so sánh src với baseline — không giả định cố định .first()/.last().
+ *
+ * Card generate LỖI KHÔNG bao giờ có thẻ <video> (chỉ icon placeholder
+ * chung) — nên count <video> KHÔNG BAO GIỜ tăng khi job thất bại, khiến
+ * trước đây phải đợi hết nguyên timeoutMs (vd 10 phút) mới báo lỗi, dù
+ * errorIndicatorCandidates (toast) có thể đã trôi qua mất trước khi bot kịp
+ * poll tới. DOM thật do người dùng cung cấp trực tiếp xác nhận: card lỗi
+ * luôn kèm nút "Delete All Failed" (deleteAllFailedButtonLocator) — đáng tin
+ * cậy hơn data-batch-disabled/aria-disabled (những marker đó dùng chung cho
+ * cả đang xử lý). So sánh SỐ LƯỢNG nút này với baseline (không phải chỉ
+ * "có tồn tại hay không") để tránh báo nhầm lỗi cũ có sẵn từ trước trong
+ * lịch sử — chỉ coi là lỗi MỚI khi số lượng TĂNG so với lúc bắt đầu job.
  */
 async function waitForNewVideo(
   page: Page,
@@ -1170,6 +1185,13 @@ async function waitForNewVideo(
       .catch(() => false);
     if (failed) {
       throw new GenerationError("Website báo lỗi khi tạo video");
+    }
+
+    const currentFailedMarkerCount = await deleteAllFailedButtonLocator(page).count();
+    if (currentFailedMarkerCount > baseline.failedMarkerCount) {
+      throw new GenerationError(
+        "Website báo lỗi khi tạo video (card mới xuất hiện với nút \"Delete All Failed\") — không cần đợi hết timeout",
+      );
     }
 
     await page.waitForTimeout(pollIntervalMs);

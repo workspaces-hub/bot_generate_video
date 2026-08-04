@@ -235,6 +235,21 @@ export const errorIndicatorCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
+ * Nút "Delete All Failed" chỉ xuất hiện (hover trên entry lịch sử) khi entry
+ * đó có card ĐÃ THẤT BẠI thật — DOM thật do người dùng cung cấp trực tiếp:
+ * media-card-wrapper mang data-batch-disabled/aria-disabled="true", card con
+ * chỉ có icon placeholder chung (không <video>/<img> nào), và ngay dưới có
+ * nút "Delete All Failed" cạnh "Recreate". Khác hẳn 2 trạng thái ĐANG XỬ LÝ
+ * đã từng gây false positive trước đây (spinner "Optimizing prompt...",
+ * progress ring "N% Generating...") — cả 2 trạng thái đó không có nút xoá
+ * này (chưa có gì để xoá). Đáng tin cậy hơn nhiều so với chỉ dựa vào
+ * data-batch-disabled/aria-disabled (những marker đó dùng chung cho cả
+ * đang-xử-lý lẫn lỗi thật, xem chú thích errorIndicatorCandidates).
+ */
+export const deleteAllFailedButtonLocator = (page: Page): Locator =>
+  page.getByText(/^Delete All Failed$/i);
+
+/**
  * Popup nâng cấp gói / hết credit (vd "Seedance 2.0 Full Lineup... Choose
  * Your Plan, Subscribe, Redeem a Code") có thể che kín trang khi tài khoản
  * không đủ credit để generate. Phát hiện riêng để báo lỗi rõ ràng thay vì
