@@ -410,11 +410,11 @@ async function switchVideoInputMode(
           `Không tìm thấy chip đổi mode nào đang hiển thị trong viewport (lần thử ${attempt})`,
         );
       }
-      await captureSnapshot(
-        page,
-        jobId + `-mode-before-click-${attempt}`,
-        `mode-before-click-${attempt}`,
-      );
+      // await captureSnapshot(
+      //   page,
+      //   jobId + `-mode-before-click-${attempt}`,
+      //   `mode-before-click-${attempt}`,
+      // );
       // Log toạ độ thật của chip lúc click — nếu boundingBox null/lệch bất
       // thường (vd bị 0 width/height do 1 layout race chưa lộ ra trong
       // screenshot tĩnh chụp cùng lúc), đây là bằng chứng trực tiếp thay vì
@@ -446,11 +446,11 @@ async function switchVideoInputMode(
     // Chụp debug ngay khi popover vừa mở (TRƯỚC khi chọn option) — nếu bước
     // sau vẫn lỗi, đây là bằng chứng trực tiếp để biết text option thật là
     // gì, thay vì đoán mò.
-    await captureSnapshot(
-      page,
-      jobId + "-mode-popover-open",
-      "mode-popover-open",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-mode-popover-open",
+    //   "mode-popover-open",
+    // );
 
     if (!popoverOpened) {
       throw new Error(
@@ -1229,7 +1229,7 @@ export async function downloadVideo(
           "downloadURLWithoutWatermark",
         ),
       {
-        timeout: 60_000,
+        timeout: 600_000,
       },
     )
     .catch(() => {});
@@ -1241,6 +1241,7 @@ export async function downloadVideo(
   // hơn vì là dữ liệu thô, không phải giao diện).
   const html = await page.content();
   const noWatermarkUrl = extractDownloadUrlWithoutWatermark(html, feedId);
+  console.log(`Đã tìm thấy URL không watermark: ${noWatermarkUrl}`);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
   await fs.promises.writeFile(filePath, await response.body());
@@ -1256,18 +1257,25 @@ export async function downloadVideo(
  * dữ liệu khai báo type, không phải data thật), khiến regex cũ "tràn" qua
  * dấu `"` rỗng đó và bắt nhầm cả đống code JS phía sau làm thành "URL" —
  * gây lỗi "Invalid URL" khi fetch. Dùng matchAll (global) để lấy HẾT các
- * khớp, chỉ giữ giá trị trông giống URL thật (bắt đầu bằng "http"), rồi ưu
- * tiên chọn khớp có chứa đúng feedId trong đường dẫn (trang chi tiết có thể
- * nhúng kèm dữ liệu của nhiều video/ảnh khác trong cùng flight data, không
- * chỉ riêng video/ảnh đang xem) — fallback về khớp CUỐI nếu không khớp
- * feedId nào (thường là data mới nhất được nhúng).
+ * khớp, chỉ giữ giá trị trông giống URL thật (bắt đầu bằng "http").
+ *
+ * Trang chi tiết 1 video/ảnh vẫn nhúng kèm data của NHIỀU video/ảnh khác
+ * trong cùng flight data (vd panel lịch sử bên cạnh) — "khớp cuối cùng"
+ * KHÔNG đáng tin cậy để biết đâu là video/ảnh ĐANG XEM (đã xác nhận thực tế:
+ * tải nhầm video cũ). feedId (data-feed-id, dạng số ~18 chữ số) KHÔNG xuất
+ * hiện trong chính giá trị downloadURLWithoutWatermark (hệ ID khác,
+ * "multi_chat_file/<id-khác>"), nhưng lại xuất hiện làm hậu tố filename
+ * trong "downloadURLWithWatermark"/"downloadURL" NẰM CHUNG 1 khối JSON với
+ * downloadURLWithoutWatermark của đúng video/ảnh đó (vd
+ * "..._540859288556474375.mp4") — xác nhận qua debug HTML thật. Vậy tìm vị
+ * trí ký tự của feedId trong html, rồi chọn khớp downloadURLWithoutWatermark
+ * GẦN vị trí đó NHẤT (cùng khối JSON, khoảng cách rất nhỏ so với data của
+ * video/ảnh khác) — đáng tin cậy hơn nhiều so với đoán theo thứ tự xuất hiện.
  */
 export function extractDownloadUrlWithoutWatermark(html: string, feedId: string): string {
-  const matches = [
-    ...html.matchAll(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/g),
-  ]
-    .map((m) => m[1])
-    .filter((url) => /^https?:\/\//i.test(url));
+  const matches = [...html.matchAll(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/g)]
+    .map((m) => ({ index: m.index ?? -1, url: m[1] }))
+    .filter((m) => /^https?:\/\//i.test(m.url));
 
   if (matches.length === 0) {
     throw new GenerationError(
@@ -1275,7 +1283,15 @@ export function extractDownloadUrlWithoutWatermark(html: string, feedId: string)
     );
   }
 
-  return matches.find((url) => url.includes(feedId)) ?? matches[matches.length - 1];
+  const feedIdIndex = html.indexOf(feedId);
+  if (feedIdIndex !== -1) {
+    const closest = matches.reduce((best, current) =>
+      Math.abs(current.index - feedIdIndex) < Math.abs(best.index - feedIdIndex) ? current : best,
+    );
+    return closest.url;
+  }
+
+  return matches[matches.length - 1].url;
 }
 
 async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {

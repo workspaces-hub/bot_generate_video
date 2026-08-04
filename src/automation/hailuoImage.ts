@@ -105,7 +105,7 @@ export async function generateImage(
     // nào là MỚI (không phải ảnh cũ nhất trong lịch sử) — cùng cách tiếp
     // cận đã dùng cho video (xem waitForNewVideo trong hailuo.ts).
     const baseline = await captureImageBaseline(page);
-    await captureSnapshot(page, jobId + "-before-generate-click", "before-generate-click");
+    // await captureSnapshot(page, jobId + "-before-generate-click", "before-generate-click");
 
     await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
@@ -358,7 +358,7 @@ async function downloadImageByFeedId(
   // hiện trong DOM trước khi trích xuất.
   await page
     .waitForFunction(() => document.documentElement.innerHTML.includes("downloadURLWithoutWatermark"), {
-      timeout: 120_000,
+      timeout: 600_000,
     })
     .catch(() => {});
 
