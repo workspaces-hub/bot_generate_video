@@ -11,6 +11,7 @@ import {
   dismissBlockingOverlays,
   dismissPaywallIfBlocking,
   ensureLoggedIn,
+  extractDownloadUrlWithoutWatermark,
   fetchWithRetry,
   gotoWithRetry,
   selectChipOption,
@@ -362,11 +363,7 @@ async function downloadImageByFeedId(
     .catch(() => {});
 
   const html = await page.content();
-  const match = html.match(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/);
-  if (!match) {
-    throw new GenerationError(`Không tìm thấy downloadURLWithoutWatermark trên trang chi tiết ảnh #${index + 1}`);
-  }
-  const noWatermarkUrl = match[1];
+  const noWatermarkUrl = extractDownloadUrlWithoutWatermark(html, feedId);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
 

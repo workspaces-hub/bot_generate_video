@@ -41,7 +41,7 @@ export const config = {
   debugDir: path.resolve("./storage/debug"),
 
   headless: (process.env.HEADLESS ?? "false").toLowerCase() === "true",
-  generationTimeoutMs: Number(process.env.GENERATION_TIMEOUT_MS ?? 600_000),
+  generationTimeoutMs: Number(process.env.GENERATION_TIMEOUT_MS ?? 10800_000),
 
   // Chrome thật (không phải Chromium bundled của Playwright) để Google OAuth
   // không chặn với lỗi "This browser or app may not be secure". Đặt thành

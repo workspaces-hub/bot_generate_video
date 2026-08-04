@@ -167,11 +167,11 @@ export async function generateVideo(
     //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
     // }
 
-    await captureSnapshot(
-      page,
-      jobId + "-before-generate-click",
-      "before-generate-click",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-before-generate-click",
+    //   "before-generate-click",
+    // );
 
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác video
     // nào là MỚI (không phải video cũ nhất trong lịch sử — xem waitForNewVideo).
@@ -179,11 +179,11 @@ export async function generateVideo(
 
     await dismissBlockingOverlays(page);
 
-    await captureSnapshot(
-      page,
-      jobId + "-before-generate-click",
-      "before-generate-click",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-before-generate-click",
+    //   "before-generate-click",
+    // );
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
     // Một số mode (đã xác nhận với "Character Reference") hiện popup Terms
@@ -1240,17 +1240,42 @@ export async function downloadVideo(
   // dropdown (site có thể đổi UI dropdown, nhưng field data này ổn định
   // hơn vì là dữ liệu thô, không phải giao diện).
   const html = await page.content();
-  const match = html.match(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/);
-  if (!match) {
-    throw new GenerationError(
-      "Không tìm thấy downloadURLWithoutWatermark trên trang chi tiết video",
-    );
-  }
-  const noWatermarkUrl = match[1];
+  const noWatermarkUrl = extractDownloadUrlWithoutWatermark(html, feedId);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
   await fs.promises.writeFile(filePath, await response.body());
   return filePath;
+}
+
+/**
+ * Trích downloadURLWithoutWatermark từ HTML trang chi tiết — dùng chung cho
+ * cả tải video (downloadVideo) và tải ảnh (downloadImageByFeedId trong
+ * hailuoImage.ts). html.match() (không có flag "g") chỉ lấy KHỚP ĐẦU TIÊN
+ * trong toàn trang — thực tế xác nhận: khớp đầu tiên có thể là 1 định nghĩa
+ * schema/placeholder rỗng (vd `"downloadURLWithoutWatermark":""` nằm trong
+ * dữ liệu khai báo type, không phải data thật), khiến regex cũ "tràn" qua
+ * dấu `"` rỗng đó và bắt nhầm cả đống code JS phía sau làm thành "URL" —
+ * gây lỗi "Invalid URL" khi fetch. Dùng matchAll (global) để lấy HẾT các
+ * khớp, chỉ giữ giá trị trông giống URL thật (bắt đầu bằng "http"), rồi ưu
+ * tiên chọn khớp có chứa đúng feedId trong đường dẫn (trang chi tiết có thể
+ * nhúng kèm dữ liệu của nhiều video/ảnh khác trong cùng flight data, không
+ * chỉ riêng video/ảnh đang xem) — fallback về khớp CUỐI nếu không khớp
+ * feedId nào (thường là data mới nhất được nhúng).
+ */
+export function extractDownloadUrlWithoutWatermark(html: string, feedId: string): string {
+  const matches = [
+    ...html.matchAll(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/g),
+  ]
+    .map((m) => m[1])
+    .filter((url) => /^https?:\/\//i.test(url));
+
+  if (matches.length === 0) {
+    throw new GenerationError(
+      "Không tìm thấy downloadURLWithoutWatermark hợp lệ trên trang chi tiết",
+    );
+  }
+
+  return matches.find((url) => url.includes(feedId)) ?? matches[matches.length - 1];
 }
 
 async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {

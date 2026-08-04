@@ -12,6 +12,7 @@
     "import-session": "tsx scripts/import-session.ts",
     "download-last-video": "tsx scripts/download-last-video.ts",
     "check-session": "tsx scripts/check-session.ts",
+    "check-credit": "tsx scripts/check-credit.ts",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {

@@ -403,6 +403,20 @@ export const historyImageEntryLocator = (page: Page): Locator =>
 export const entryImagesLocator = (entry: Locator): Locator =>
   entry.locator("div[data-feed-id] img[src]:visible");
 
+/**
+ * Số credit còn lại của tài khoản, hiện ở sidebar trái cạnh nhãn gói đang
+ * dùng (vd "Max") — DOM thật xác nhận:
+ * `<span class="text-hl_text_00 select-none text-[12px] font-medium leading-[22px] ">21,580</span>`.
+ * Không dùng class Tailwind có ngoặc vuông (vd "text-[12px]") trong CSS
+ * selector (cần escape phức tạp) — chỉ dùng 2 class thường + lọc thêm theo
+ * đúng định dạng số có dấu phẩy ngăn cách hàng nghìn để tránh khớp nhầm các
+ * text khác dùng chung 2 class này.
+ */
+export const creditBalanceLocator = (page: Page): Locator =>
+  page
+    .locator("span.text-hl_text_00.select-none")
+    .filter({ hasText: /^[\d,]+$/ });
+
 export async function getEntryFeedId(entry: Locator): Promise<string | null> {
   return entry.locator("div[data-feed-id]").first().getAttribute("data-feed-id").catch(() => null);
 }
