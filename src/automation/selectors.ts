@@ -114,14 +114,22 @@ export const characterDetectionFailedCandidates = (page: Page): Array<() => Loca
 ];
 
 /**
- * Nút "Confirm" xác nhận nhân vật sau khi detection xong (mode "Character
- * Reference") — DOM thật do người dùng cung cấp trực tiếp:
- * <button class="new-color-btn-bg ... disabled:cursor-not-allowed
- * disabled:opacity-50">Confirm</button>. Dùng exact text match, KHÔNG dùng
- * class (trùng class với nút Generate thường — button.new-color-btn-bg).
+ * Nút xác nhận popup Terms of Use — dùng chung cho nhiều mode nhưng NHÃN
+ * THẬT không giống nhau:
+ * - "Character Reference": DOM thật do người dùng cung cấp trực tiếp:
+ *   <button class="new-color-btn-bg ... disabled:cursor-not-allowed
+ *   disabled:opacity-50">Confirm</button> — nhãn đúng "Confirm".
+ * - "Omni Reference": locale JSON nhúng sẵn trong trang xác nhận nhãn thật là
+ *   "I confirm" (key "omni_reference_upload_info_ctn":"I confirm"), KHÔNG
+ *   phải "Confirm" — trước đây chỉ match "^confirm$" nên bỏ lỡ nút này, khiến
+ *   bấm Generate ở mode Omni Reference không lỗi gì nhưng không có gì xảy ra
+ *   (popup Terms vẫn còn che, generate chưa thực sự bắt đầu).
+ * Dùng exact text match cho từng biến thể, KHÔNG dùng class (trùng class với
+ * nút Generate thường — button.new-color-btn-bg).
  */
 export const confirmCharacterButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /^confirm$/i }),
+  () => page.getByRole("button", { name: /^i confirm$/i }),
 ];
 
 /**
