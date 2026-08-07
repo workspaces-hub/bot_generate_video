@@ -7,6 +7,12 @@ import { config } from "./config";
 import { generateVideo } from "./automation/hailuo";
 import { generateImage } from "./automation/hailuoImage";
 import { askChatGpt } from "./automation/chatgpt";
+import {
+  generateReferenceImagesForFile,
+  generateVideosForFile,
+  type FailedEntry,
+} from "./automation/storyboardPipeline";
+import { zipDirectory } from "./automation/zip";
 
 interface BaseJob {
   chatId: number;
@@ -210,7 +216,8 @@ async function processGptQueue(): Promise<void> {
       const jobId = randomUUID();
       try {
         const { downloadedFiles } = await askChatGpt(job.prompt, jobId);
-        await notifyGptSuccess(job, downloadedFiles);
+        const result = await runStoryboardPipeline(downloadedFiles);
+        await notifyGptSuccess(job, result);
       } catch (err) {
         await notifyError(job, err);
       } finally {
@@ -221,6 +228,63 @@ async function processGptQueue(): Promise<void> {
   } finally {
     gptProcessing = false;
   }
+}
+
+interface GptPipelineResult {
+  /** File tải về KHÔNG phải .json — gửi thẳng như cũ, không qua pipeline ảnh/video. */
+  otherFiles: string[];
+  /** 1 file .zip cho mỗi file JSON storyboard ĐÃ tạo video thành công (không có ảnh lỗi). */
+  zipFiles: string[];
+  failedImageEntries: FailedEntry[];
+  failedVideoEntries: FailedEntry[];
+}
+
+/**
+ * Với MỖI file JSON storyboard GPT tải về (thường chỉ 1, vd meta.json):
+ * 1. Tạo ảnh cho toàn bộ entry CHARACTER/LOCATION (generateReferenceImagesForFile)
+ *    — lưu vào reference-images/<tên file json>/characters|locations/.
+ * 2. Nếu CÓ entry ảnh lỗi: dừng lại, KHÔNG tạo video, KHÔNG nén/gửi file —
+ *    chỉ báo lỗi cho user (folder ảnh vẫn còn nguyên trên đĩa để kiểm tra/
+ *    chạy lại thủ công).
+ * 3. Nếu KHÔNG lỗi ảnh nào: tiếp tục tạo toàn bộ video (generateVideosForFile)
+ *    — lưu vào reference-images/<tên file json>/videos/, rồi nén CẢ folder
+ *    thành 1 file .zip để gửi.
+ * File KHÔNG phải .json (hiếm khi xảy ra) gửi thẳng như trước, không qua các
+ * bước trên.
+ */
+async function runStoryboardPipeline(downloadedFiles: string[]): Promise<GptPipelineResult> {
+  const otherFiles: string[] = [];
+  const zipFiles: string[] = [];
+  const failedImageEntries: FailedEntry[] = [];
+  const failedVideoEntries: FailedEntry[] = [];
+
+  for (const filePath of downloadedFiles) {
+    if (path.extname(filePath).toLowerCase() !== ".json") {
+      otherFiles.push(filePath);
+      continue;
+    }
+
+    const imagesResult = await generateReferenceImagesForFile(filePath);
+    failedImageEntries.push(...imagesResult.failedEntries);
+
+    // Chỉ nén + gửi kết quả khi KHÔNG có ảnh nào lỗi và đã tạo được video —
+    // có lỗi ảnh thì dừng ở bước báo lỗi, không gửi file zip dở dang (folder
+    // vẫn còn nguyên trên đĩa để kiểm tra/chạy lại thủ công nếu cần).
+    if (imagesResult.failed === 0) {
+      const videosResult = await generateVideosForFile(filePath);
+      failedVideoEntries.push(...videosResult.failedEntries);
+
+      const zipPath = `${imagesResult.outputDir}.zip`;
+      await zipDirectory(imagesResult.outputDir, zipPath);
+      zipFiles.push(zipPath);
+    }
+  }
+
+  return { otherFiles, zipFiles, failedImageEntries, failedVideoEntries };
+}
+
+function formatFailedEntries(entries: FailedEntry[]): string {
+  return entries.map((e) => `- [${e.type}] ${e.id}`).join("\n");
 }
 
 async function notifyVideoSuccess(job: VideoGenerationJob, filePath: string): Promise<void> {
@@ -298,32 +362,47 @@ async function sendGeneratedImage(job: ImageGenerationJob, filePath: string, cap
 }
 
 /**
- * Gửi lại mọi file GPT đính kèm (nếu có) đã tải về trong lúc hỏi đáp (xem
- * downloadAttachedFiles trong chatgpt.ts) — GPT tự tạo sẵn kết quả thành
- * file, không còn tự parse/merge code block JSON để tạo file result riêng
- * nữa. Không xoá các file sau khi gửi — giữ làm lưu trữ, khác video/ảnh chỉ
- * là file tạm.
+ * Báo lỗi (nếu có entry ảnh/video nào fail) rồi gửi lại file kết quả — file
+ * .zip cho mỗi file JSON storyboard (đã tạo ảnh/video, xem
+ * runStoryboardPipeline) cộng với các file KHÔNG phải JSON gửi thẳng như cũ.
+ * Không xoá các file sau khi gửi — giữ làm lưu trữ, khác video/ảnh chỉ là
+ * file tạm.
  */
 async function notifyGptSuccess(
   job: GptJob,
-  downloadedFiles: string[],
+  result: GptPipelineResult,
 ): Promise<void> {
-  console.log("🚀 ~ notifyGptSuccess ~ downloadedFiles:", downloadedFiles)
   if (!telegram) return;
   const promptPreview = job.prompt.split(" ").slice(0, 20).join(" ");
   try {
-    if (downloadedFiles.length === 0) {
+    if (result.failedImageEntries.length > 0) {
+      await telegram.sendMessage(
+        job.chatId,
+        `⚠️ Không tạo được ảnh cho ${result.failedImageEntries.length} entry (đã dừng, chưa tạo video):\n${formatFailedEntries(result.failedImageEntries)}`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    }
+    if (result.failedVideoEntries.length > 0) {
+      await telegram.sendMessage(
+        job.chatId,
+        `⚠️ Không tạo được video cho ${result.failedVideoEntries.length} entry:\n${formatFailedEntries(result.failedVideoEntries)}`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    }
+
+    const allFiles = [...result.otherFiles, ...result.zipFiles];
+    if (allFiles.length === 0) {
       // GPT trả lời xong nhưng không có file đính kèm nào — không coi là lỗi.
       await telegram.sendMessage(job.chatId, `✅ GPT đã trả lời xong cho prompt: "${promptPreview}" (không có file đính kèm).`, {
         reply_parameters: { message_id: job.promptMessageId },
       });
     }
-    for (const [i, downloadedFile] of downloadedFiles.entries()) {
-      await telegram.sendDocument(job.chatId, { source: downloadedFile }, {
+    for (const [i, filePath] of allFiles.entries()) {
+      await telegram.sendDocument(job.chatId, { source: filePath }, {
         caption:
           i === 0
             ? `✅ Kết quả GPT cho prompt: "${promptPreview}"`
-            : `📎 ${path.basename(downloadedFile)}`,
+            : `📎 ${path.basename(filePath)}`,
         reply_parameters: { message_id: job.promptMessageId },
       });
     }
