@@ -13,6 +13,7 @@ import { config } from "../config";
 import { enqueueJob } from "../queue";
 import {
   CHARACTER_REF_BUTTON_LABEL,
+  GPT_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
@@ -20,7 +21,7 @@ import {
   promptMenu,
 } from "./keyboard";
 
-type PendingMode = "video" | "image" | "videoRef" | "characterRef" | "omniRef";
+type PendingMode = "video" | "image" | "videoRef" | "characterRef" | "omniRef" | "gpt";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -160,6 +161,16 @@ async function downloadTelegramFile(
   return filePath;
 }
 
+/** Đọc thẳng nội dung text 1 file Telegram (dùng cho chế độ "GPT" khi user gửi prompt qua file .txt thay vì gõ trực tiếp) — không lưu ra đĩa. */
+async function downloadTelegramFileAsText(ctx: Context, fileId: string): Promise<string> {
+  const fileUrl = await ctx.telegram.getFileLink(fileId);
+  const response = await fetch(fileUrl);
+  if (!response.ok) {
+    throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
 interface SubmitVideoParams {
   ctx: Context;
   groupChatId: number;
@@ -272,6 +283,43 @@ async function submitImageJob({
     prompt,
     model: isAdmin(userId) ? model : DEFAULT_MODEL,
     referenceImagePaths,
+    promptMessageId,
+    statusMessageId: statusMessage.message_id,
+  });
+}
+
+interface SubmitGptParams {
+  ctx: Context;
+  groupChatId: number;
+  promptMessageId: number;
+  rawText: string;
+}
+
+/** Chế độ "GPT" chỉ nhận text thuần, không có ảnh/model/resolution nào — dùng thẳng rawText làm prompt, không qua parsePromptMessage. */
+async function submitGptJob({
+  ctx,
+  groupChatId,
+  promptMessageId,
+  rawText,
+}: SubmitGptParams): Promise<void> {
+  const prompt = rawText.trim();
+
+  if (!prompt) {
+    await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
+    return;
+  }
+
+  const statusMessage = await ctx.reply(
+    `⏳ Đang hỏi GPT cho prompt:\n"${prompt.split(" ").slice(0, 20).join(" ")}"`,
+    {
+      reply_parameters: { message_id: promptMessageId },
+    },
+  );
+
+  enqueueJob({
+    type: "gpt",
+    chatId: groupChatId,
+    prompt,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
   });
@@ -542,6 +590,16 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(GPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "gpt");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn hỏi GPT ở tin nhắn tiếp theo, ` +
+        `hoặc gửi 1 file .txt chứa prompt (dùng khi prompt quá dài).`,
+    );
+  });
+
   bot.on(message("text"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
     if (
@@ -550,7 +608,8 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === IMAGE_BUTTON_LABEL ||
       ctx.message.text === VIDEO_REF_BUTTON_LABEL ||
       ctx.message.text === CHARACTER_REF_BUTTON_LABEL ||
-      ctx.message.text === OMNI_REF_BUTTON_LABEL
+      ctx.message.text === OMNI_REF_BUTTON_LABEL ||
+      ctx.message.text === GPT_BUTTON_LABEL
     ) {
       return next();
     }
@@ -596,6 +655,13 @@ export function registerHandlers(bot: Telegraf): void {
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
         userId,
+        rawText: ctx.message.text,
+      });
+    } else if (mode === "gpt") {
+      await submitGptJob({
+        ctx,
+        groupChatId: ctx.chat.id,
+        promptMessageId: ctx.message.message_id,
         rawText: ctx.message.text,
       });
     } else {
@@ -730,6 +796,29 @@ export function registerHandlers(bot: Telegraf): void {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
     const userId = ctx.from.id;
+
+    // Chế độ "GPT": user gửi prompt qua file .txt thay vì gõ trực tiếp (dùng
+    // khi prompt quá dài) — đọc thẳng nội dung file làm prompt, không lưu
+    // buffer/ảnh gì cả.
+    if (waitingMode.get(userId) === "gpt") {
+      waitingMode.delete(userId);
+      let promptText: string;
+      try {
+        promptText = await downloadTelegramFileAsText(ctx, ctx.message.document.file_id);
+      } catch (err) {
+        console.error("[bot] Tải file prompt GPT thất bại:", err);
+        await ctx.reply("Không tải được file prompt từ Telegram, đã huỷ.", promptMenu);
+        return;
+      }
+      await submitGptJob({
+        ctx,
+        groupChatId: ctx.chat.id,
+        promptMessageId: ctx.message.message_id,
+        rawText: promptText,
+      });
+      return;
+    }
+
     if (
       !pendingOmniRefBuffers.has(userId) &&
       waitingMode.get(userId) !== "omniRef"

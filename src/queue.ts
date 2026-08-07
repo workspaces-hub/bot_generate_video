@@ -6,6 +6,7 @@ import type { Telegram } from "telegraf";
 import { config } from "./config";
 import { generateVideo } from "./automation/hailuo";
 import { generateImage } from "./automation/hailuoImage";
+import { askChatGpt } from "./automation/chatgpt";
 
 interface BaseJob {
   chatId: number;
@@ -36,35 +37,52 @@ export interface ImageGenerationJob extends BaseJob {
   referenceImagePaths?: string[];
 }
 
-export type GenerationJob = VideoGenerationJob | ImageGenerationJob;
+export interface GptJob extends BaseJob {
+  type: "gpt";
+}
+
+/** Job dùng chung 1 browser context (hailuoai.video) — video và ảnh cùng site nên phải xếp hàng tuần tự. */
+type HailuoJob = VideoGenerationJob | ImageGenerationJob;
+
+export type GenerationJob = HailuoJob | GptJob;
 
 const QUEUE_FILE = path.resolve("./storage/queue.json");
+const GPT_QUEUE_FILE = path.resolve("./storage/gpt-queue.json");
 
 // Chỉ dữ liệu thuần (không callback/ctx) nên ghi được ra file — sống sót
 // qua restart/crash. Job vẫn nằm trong mảng (và trong file) SUỐT lúc xử lý,
 // chỉ gỡ ra sau khi thực sự xong (thành công/lỗi) — nếu bot crash giữa
 // chừng lúc generate, job vẫn còn trong file để thử lại ở lần chạy sau.
-const jobs: GenerationJob[] = [];
+//
+// GPT dùng browser context RIÊNG (chatgpt.com, khác domain/session với
+// hailuoai.video) nên KHÔNG cần xếp chung hàng đợi với video/ảnh — tách
+// thành 2 hàng đợi độc lập (2 mảng, 2 file lưu, 2 vòng xử lý riêng) để job
+// GPT không phải chờ video/ảnh xử lý xong mới tới lượt, và ngược lại.
+const jobs: HailuoJob[] = [];
 let processing = false;
+const gptJobs: GptJob[] = [];
+let gptProcessing = false;
 let telegram: Telegram | null = null;
 
 /** Gọi 1 lần lúc khởi động bot, trước khi có prompt nào được gửi. */
 export function initQueue(botTelegram: Telegram): void {
   telegram = botTelegram;
   loadPersistedJobs();
+  loadPersistedGptJobs();
   void processQueue();
+  void processGptQueue();
 }
 
 function loadPersistedJobs(): void {
   try {
     if (!fs.existsSync(QUEUE_FILE)) return;
-    const restored: GenerationJob[] = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+    const restored: HailuoJob[] = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
     if (restored.length > 0) {
       jobs.push(...restored);
-      console.log(`[queue] Khôi phục ${restored.length} job còn dang dở từ lần chạy trước.`);
+      console.log(`[queue] Khôi phục ${restored.length} job video/ảnh còn dang dở từ lần chạy trước.`);
     }
   } catch (err) {
-    console.error("[queue] Không đọc được file hàng đợi đã lưu, bỏ qua:", err);
+    console.error("[queue] Không đọc được file hàng đợi video/ảnh đã lưu, bỏ qua:", err);
   }
 }
 
@@ -73,16 +91,45 @@ function persistJobs(): void {
     fs.mkdirSync(path.dirname(QUEUE_FILE), { recursive: true });
     fs.writeFileSync(QUEUE_FILE, JSON.stringify(jobs, null, 2), "utf-8");
   } catch (err) {
-    console.error("[queue] Không ghi được file hàng đợi:", err);
+    console.error("[queue] Không ghi được file hàng đợi video/ảnh:", err);
+  }
+}
+
+function loadPersistedGptJobs(): void {
+  try {
+    if (!fs.existsSync(GPT_QUEUE_FILE)) return;
+    const restored: GptJob[] = JSON.parse(fs.readFileSync(GPT_QUEUE_FILE, "utf-8"));
+    if (restored.length > 0) {
+      gptJobs.push(...restored);
+      console.log(`[queue] Khôi phục ${restored.length} job GPT còn dang dở từ lần chạy trước.`);
+    }
+  } catch (err) {
+    console.error("[queue] Không đọc được file hàng đợi GPT đã lưu, bỏ qua:", err);
+  }
+}
+
+function persistGptJobs(): void {
+  try {
+    fs.mkdirSync(path.dirname(GPT_QUEUE_FILE), { recursive: true });
+    fs.writeFileSync(GPT_QUEUE_FILE, JSON.stringify(gptJobs, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[queue] Không ghi được file hàng đợi GPT:", err);
   }
 }
 
 /**
- * Chạy tuần tự từng job — video và ảnh dùng CHUNG 1 hàng đợi (1 browser
- * context, 1 job tại một thời điểm) để tránh nhiều tab cùng thao tác trên
- * cùng một tài khoản hailuoai.video.
+ * Đẩy job vào ĐÚNG hàng đợi theo loại — video/ảnh dùng chung 1 hàng đợi (1
+ * browser context hailuoai.video, 1 job tại một thời điểm để tránh nhiều tab
+ * cùng thao tác trên cùng tài khoản), GPT dùng hàng đợi riêng (browser
+ * context khác hẳn, chạy độc lập không phải chờ video/ảnh).
  */
 export function enqueueJob(job: GenerationJob): void {
+  if (job.type === "gpt") {
+    gptJobs.push(job);
+    persistGptJobs();
+    void processGptQueue();
+    return;
+  }
   jobs.push(job);
   persistJobs();
   void processQueue();
@@ -90,6 +137,10 @@ export function enqueueJob(job: GenerationJob): void {
 
 export function getPendingCount(): number {
   return jobs.length + (processing ? 1 : 0);
+}
+
+export function getGptPendingCount(): number {
+  return gptJobs.length + (gptProcessing ? 1 : 0);
 }
 
 async function processQueue(): Promise<void> {
@@ -127,17 +178,17 @@ async function processQueue(): Promise<void> {
       } catch (err) {
         await notifyError(job, err);
       } finally {
-        if (job.type === "image") {
-          for (const p of job.referenceImagePaths ?? []) {
-            await fsp.unlink(p).catch(() => {});
-          }
-        } else {
+        if (job.type === "video") {
           if (job.startFramePath) await fsp.unlink(job.startFramePath).catch(() => {});
           if (job.characterImagePath) await fsp.unlink(job.characterImagePath).catch(() => {});
           for (const p of job.referenceImagePaths ?? []) {
             await fsp.unlink(p).catch(() => {});
           }
           for (const p of job.omniReferencePaths ?? []) {
+            await fsp.unlink(p).catch(() => {});
+          }
+        } else {
+          for (const p of job.referenceImagePaths ?? []) {
             await fsp.unlink(p).catch(() => {});
           }
         }
@@ -147,6 +198,28 @@ async function processQueue(): Promise<void> {
     }
   } finally {
     processing = false;
+  }
+}
+
+async function processGptQueue(): Promise<void> {
+  if (gptProcessing || !telegram) return;
+  gptProcessing = true;
+  try {
+    while (gptJobs.length > 0) {
+      const job = gptJobs[0];
+      const jobId = randomUUID();
+      try {
+        const { downloadedFiles } = await askChatGpt(job.prompt, jobId);
+        await notifyGptSuccess(job, downloadedFiles);
+      } catch (err) {
+        await notifyError(job, err);
+      } finally {
+        gptJobs.shift();
+        persistGptJobs();
+      }
+    }
+  } finally {
+    gptProcessing = false;
   }
 }
 
@@ -224,9 +297,54 @@ async function sendGeneratedImage(job: ImageGenerationJob, filePath: string, cap
   }
 }
 
+/**
+ * Gửi lại mọi file GPT đính kèm (nếu có) đã tải về trong lúc hỏi đáp (xem
+ * downloadAttachedFiles trong chatgpt.ts) — GPT tự tạo sẵn kết quả thành
+ * file, không còn tự parse/merge code block JSON để tạo file result riêng
+ * nữa. Không xoá các file sau khi gửi — giữ làm lưu trữ, khác video/ảnh chỉ
+ * là file tạm.
+ */
+async function notifyGptSuccess(
+  job: GptJob,
+  downloadedFiles: string[],
+): Promise<void> {
+  if (!telegram) return;
+  const promptPreview = job.prompt.split(" ").slice(0, 20).join(" ");
+  try {
+    if (downloadedFiles.length === 0) {
+      // GPT trả lời xong nhưng không có file đính kèm nào — không coi là lỗi.
+      await telegram.sendMessage(job.chatId, `✅ GPT đã trả lời xong cho prompt: "${promptPreview}" (không có file đính kèm).`, {
+        reply_parameters: { message_id: job.promptMessageId },
+      });
+    }
+    for (const [i, downloadedFile] of downloadedFiles.entries()) {
+      await telegram.sendDocument(job.chatId, { source: downloadedFile }, {
+        caption:
+          i === 0
+            ? `✅ Kết quả GPT cho prompt: "${promptPreview}"`
+            : `📎 ${path.basename(downloadedFile)}`,
+        reply_parameters: { message_id: job.promptMessageId },
+      });
+    }
+  } catch (err) {
+    console.error("[queue] Gửi kết quả GPT thất bại:", err);
+    await telegram.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+    await notifyAdmins(err);
+  }
+  await deleteStatusMessage(job);
+}
+
+function jobTypeLabel(type: GenerationJob["type"]): string {
+  if (type === "video") return "video";
+  if (type === "image") return "ảnh";
+  return "GPT";
+}
+
 async function notifyError(job: GenerationJob, err: unknown): Promise<void> {
   if (!telegram) return;
-  console.error(`[queue] Tạo ${job.type === "video" ? "video" : "ảnh"} thất bại:`, err);
+  console.error(`[queue] Tạo ${jobTypeLabel(job.type)} thất bại:`, err);
   await notifyAdmins(err);
   await telegram.sendMessage(job.chatId, "404", {
     reply_parameters: { message_id: job.promptMessageId },

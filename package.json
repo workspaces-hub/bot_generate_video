@@ -8,9 +8,11 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "login": "tsx scripts/login.ts",
+    "login-chatgpt": "tsx scripts/login-chatgpt.ts",
     "check-proxy": "tsx scripts/check-proxy.ts",
     "import-session": "tsx scripts/import-session.ts",
     "download-last-video": "tsx scripts/download-last-video.ts",
+    "download-video": "tsx scripts/download-video-by-feed-id.ts",
     "check-session": "tsx scripts/check-session.ts",
     "check-credit": "tsx scripts/check-credit.ts",
     "playwright:install": "playwright install chromium"

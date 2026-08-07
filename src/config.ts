@@ -40,6 +40,17 @@ export const config = {
   uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? "./storage/uploads"),
   debugDir: path.resolve("./storage/debug"),
 
+  // Tính năng "GPT": bot mở chatgpt.com, điền prompt, chờ trả lời xong rồi
+  // lưu ra file. Dùng session RIÊNG (khác hailuoai.video) vì khác domain —
+  // xem scripts/login-chatgpt.ts.
+  chatGptBaseUrl: process.env.CHATGPT_BASE_URL ?? "https://chatgpt.com",
+  chatGptStorageStatePath: path.resolve(
+    process.env.CHATGPT_STORAGE_STATE_PATH ?? "./storage/chatgpt-session.json",
+  ),
+  chatGptResultsDir: path.resolve(
+    process.env.CHATGPT_RESULTS_DIR ?? "./storage/chatgpt-results",
+  ),
+
   headless: (process.env.HEADLESS ?? "false").toLowerCase() === "true",
   generationTimeoutMs: Number(process.env.GENERATION_TIMEOUT_MS ?? 10800_000),
 
