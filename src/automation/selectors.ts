@@ -258,6 +258,17 @@ export const deleteAllFailedButtonLocator = (page: Page): Locator =>
   page.getByText(/^Delete All Failed$/i);
 
 /**
+ * Text "Generating..." hiện trên card đang xử lý trong lịch sử — DOM thật
+ * xác nhận (job fb09b10a): `<div class="line-clamp-2 ...">Generating...</div>`.
+ * Nhận `Page` hoặc `Locator` làm scope — waitForNewVideo dùng bản scope theo
+ * 1 entry cụ thể (div[data-feed-id="..."]) để chỉ theo dõi ĐÚNG job hiện tại,
+ * không nhầm lẫn với job KHÁC của tài khoản cũng đang generate song song
+ * (đếm số lượng "Generating..." toàn trang không đủ tin cậy cho việc đó).
+ */
+export const generatingIndicatorLocator = (scope: Page | Locator): Locator =>
+  scope.getByText(/^Generating\.\.\.$/i);
+
+/**
  * Popup nâng cấp gói / hết credit (vd "Seedance 2.0 Full Lineup... Choose
  * Your Plan, Subscribe, Redeem a Code") có thể che kín trang khi tài khoản
  * không đủ credit để generate. Phát hiện riêng để báo lỗi rõ ràng thay vì

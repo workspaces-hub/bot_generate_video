@@ -21,6 +21,7 @@ import {
   exactVideoInputModeChipCandidates,
   firstVisible,
   generateButtonCandidates,
+  generatingIndicatorLocator,
   getOmniReferenceCount,
   getReferenceImageCount,
   historyVideoLocator,
@@ -1123,6 +1124,27 @@ interface VideoBaseline {
   lastSrc: string | null;
   /** Số nút "Delete All Failed" đang hiện SẴN trong lịch sử (từ các job cũ) — dùng để phát hiện lỗi MỚI, xem waitForNewVideo. */
   failedMarkerCount: number;
+  /**
+   * data-feed-id của TẤT CẢ entry đang có SẴN trong lịch sử trước khi bấm
+   * Generate — dùng để nhận ra entry MỚI (id không có trong tập này) đúng là
+   * của job hiện tại, xem waitForNewVideo. Đếm SỐ LƯỢNG "Generating..." đơn
+   * thuần không đủ tin cậy: nếu tài khoản có job KHÁC (job khác của bot hay
+   * user thao tác trực tiếp trên web) cũng đang generate song song, số lượng
+   * có thể giảm về đúng baseline do job KHÁC xong trước — khiến hiểu nhầm là
+   * job này đã xong dù thực ra vẫn đang chạy.
+   */
+  feedIds: Set<string>;
+}
+
+/** DOM thật xác nhận (job fb09b10a): mỗi entry (kể cả đang "Generating...") đã có sẵn data-feed-id ổn định ngay từ đầu. */
+async function getHistoryFeedIds(page: Page): Promise<string[]> {
+  return page
+    .locator("div[data-feed-id]")
+    .evaluateAll((els) =>
+      els
+        .map((el) => el.getAttribute("data-feed-id"))
+        .filter((id): id is string => !!id),
+    );
 }
 
 async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
@@ -1133,6 +1155,7 @@ async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
     firstSrc: count > 0 ? await videos.first().getAttribute("src") : null,
     lastSrc: count > 0 ? await videos.last().getAttribute("src") : null,
     failedMarkerCount: await deleteAllFailedButtonLocator(page).count(),
+    feedIds: new Set(await getHistoryFeedIds(page)),
   };
 }
 
@@ -1151,6 +1174,19 @@ async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
  * cả đang xử lý). So sánh SỐ LƯỢNG nút này với baseline (không phải chỉ
  * "có tồn tại hay không") để tránh báo nhầm lỗi cũ có sẵn từ trước trong
  * lịch sử — chỉ coi là lỗi MỚI khi số lượng TĂNG so với lúc bắt đầu job.
+ *
+ * Xác nhận qua debug thật (job fb09b10a): ngay sau khi bấm Generate, lịch sử
+ * hiện thẻ "Generating..." (generatingIndicatorLocator) cho job này, nằm
+ * trong entry mang data-feed-id riêng, đã có sẵn NGAY TỪ LÚC đang generate
+ * (không phải chỉ gán sau khi xong). Nhận diện entry của job này bằng feedId
+ * KHÔNG có trong baseline.feedIds (thay vì đếm số lượng "Generating..." toàn
+ * trang — không đủ tin cậy nếu tài khoản có job KHÁC cũng đang generate song
+ * song, vì số lượng có thể giảm về đúng baseline do job KHÁC xong trước).
+ * Theo dõi ĐÚNG entry đó: ngay khi "Generating..." biến mất khỏi entry này mà
+ * vẫn CHƯA có video mới (đã check ở trên trong CÙNG vòng lặp) và cũng KHÔNG
+ * có dấu hiệu lỗi rõ ràng nào (paywall/toast/"Delete All Failed"), dừng chờ
+ * NGAY, báo lỗi rõ ràng thay vì tiếp tục poll cho hết timeoutMs dù kết quả
+ * job đã ngã ngũ.
  */
 async function waitForNewVideo(
   page: Page,
@@ -1160,6 +1196,8 @@ async function waitForNewVideo(
   const videos = historyVideoLocator(page);
   const start = Date.now();
   const pollIntervalMs = 5000;
+  let trackedFeedId: string | null = null;
+  let sawGeneratingOnTrackedEntry = false;
 
   while (Date.now() - start < timeoutMs) {
     const count = await videos.count();
@@ -1192,6 +1230,24 @@ async function waitForNewVideo(
       throw new GenerationError(
         "Website báo lỗi khi tạo video (card mới xuất hiện với nút \"Delete All Failed\") — không cần đợi hết timeout",
       );
+    }
+
+    if (!trackedFeedId) {
+      const currentFeedIds = await getHistoryFeedIds(page);
+      trackedFeedId = currentFeedIds.find((id) => !baseline.feedIds.has(id)) ?? null;
+    }
+
+    if (trackedFeedId) {
+      const trackedEntry = page.locator(`div[data-feed-id="${trackedFeedId}"]`).first();
+      const stillGeneratingHere =
+        (await generatingIndicatorLocator(trackedEntry).count()) > 0;
+      if (stillGeneratingHere) {
+        sawGeneratingOnTrackedEntry = true;
+      } else if (sawGeneratingOnTrackedEntry) {
+        throw new GenerationError(
+          `Thẻ "Generating..." của video này (id ${trackedFeedId}) đã biến mất nhưng không thấy video mới lẫn dấu hiệu lỗi rõ ràng nào — job có thể đã fail âm thầm, kiểm tra lại trên hailuoai.video`,
+        );
+      }
     }
 
     await page.waitForTimeout(pollIntervalMs);
