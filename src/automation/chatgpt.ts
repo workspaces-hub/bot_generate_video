@@ -6,7 +6,9 @@ import { getChatGptBrowserContext } from "./chatgptBrowser";
 import {
   assistantMessageLocator,
   downloadButtonCandidates,
+  downloadFileLinkLocator,
   fileAttachmentLocator,
+  fileCardLocator,
   promptTextareaCandidates,
   sendButtonCandidates,
   signInIndicatorCandidates,
@@ -119,13 +121,22 @@ async function sendMessage(page: Page, text: string): Promise<void> {
  * vào chỉ mở preview (chưa tải ngay) thì thử bấm tiếp nút "Download" hiện ra
  * sau đó. KHÔNG throw nếu 1 file lỗi — chỉ log cảnh báo và bỏ qua file đó,
  * không chặn cả job vì lỗi tải 1 file đính kèm.
+ *
+ * Xác nhận qua debug thật (job 6d869584): mỗi file có 2 nút liên quan tới
+ * CÙNG 1 file — nút link-text "Download <filename>" (tải thẳng) và thẻ
+ * "card" file (mở preview, không chắc tải). Chỉ bấm downloadFileLinkLocator
+ * TRƯỚC; nếu không có nút nào (count 0) mới fallback sang fileCardLocator —
+ * KHÔNG bấm cả 2 cho cùng 1 file (tránh tải trùng/mở preview thừa không cần
+ * thiết khi nút "Download ..." đã đủ để tải thẳng).
  */
 async function downloadAttachedFiles(
   page: Page,
   message: Locator,
   jobId: string,
 ): Promise<string[]> {
-  const attachments = fileAttachmentLocator(message);
+  const downloadLinks = downloadFileLinkLocator(message);
+  const attachments =
+    (await downloadLinks.count()) > 0 ? downloadLinks : fileCardLocator(message);
   const count = await attachments.count();
   const savedPaths: string[] = [];
 

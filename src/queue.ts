@@ -308,6 +308,7 @@ async function notifyGptSuccess(
   job: GptJob,
   downloadedFiles: string[],
 ): Promise<void> {
+  console.log("🚀 ~ notifyGptSuccess ~ downloadedFiles:", downloadedFiles)
   if (!telegram) return;
   const promptPreview = job.prompt.split(" ").slice(0, 20).join(" ");
   try {
