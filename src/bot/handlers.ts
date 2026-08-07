@@ -310,7 +310,7 @@ async function submitGptJob({
   }
 
   const statusMessage = await ctx.reply(
-    `⏳ Đang hỏi GPT cho prompt:\n"${prompt.split(" ").slice(0, 20).join(" ")}"`,
+    '⏳ Đang hỏi GPT',
     {
       reply_parameters: { message_id: promptMessageId },
     },

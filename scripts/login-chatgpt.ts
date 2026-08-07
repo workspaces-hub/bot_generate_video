@@ -9,10 +9,11 @@ import { launchRealChrome } from "../src/automation/launch";
  * terminal và nhấn Enter để lưu cookies/localStorage vào
  * CHATGPT_STORAGE_STATE_PATH. Bot sẽ dùng file này để tự động thao tác mà
  * không cần đăng nhập lại — session RIÊNG với hailuoai.video (npm run login).
- * KHÔNG dùng proxy — khớp với lúc bot thật sự gọi GPT (xem chatgptBrowser.ts).
+ * Dùng proxy giống lúc bot thật sự gọi GPT (xem chatgptBrowser.ts) — tắt
+ * proxy khiến IP thẳng của VPS bị chatgpt.com chặn bằng Cloudflare challenge.
  */
 async function main(): Promise<void> {
-  const browser = await launchRealChrome(false);
+  const browser = await launchRealChrome();
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(config.chatGptBaseUrl);

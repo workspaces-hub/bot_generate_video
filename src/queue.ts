@@ -393,7 +393,7 @@ async function notifyGptSuccess(
     const allFiles = [...result.otherFiles, ...result.zipFiles];
     if (allFiles.length === 0) {
       // GPT trả lời xong nhưng không có file đính kèm nào — không coi là lỗi.
-      await telegram.sendMessage(job.chatId, `✅ GPT đã trả lời xong cho prompt: "${promptPreview}" (không có file đính kèm).`, {
+      await telegram.sendMessage(job.chatId, `✅ GPT đã trả lời xong" (không có file đính kèm).`, {
         reply_parameters: { message_id: job.promptMessageId },
       });
     }
@@ -401,7 +401,7 @@ async function notifyGptSuccess(
       await telegram.sendDocument(job.chatId, { source: filePath }, {
         caption:
           i === 0
-            ? `✅ Kết quả GPT cho prompt: "${promptPreview}"`
+            ? `✅ Kết quả GPT"`
             : `📎 ${path.basename(filePath)}`,
         reply_parameters: { message_id: job.promptMessageId },
       });
