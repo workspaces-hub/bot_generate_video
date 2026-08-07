@@ -10,6 +10,7 @@ import {
   fileAttachmentLocator,
   fileCardLocator,
   promptTextareaCandidates,
+  regenerateErrorButtonCandidates,
   sendButtonCandidates,
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
@@ -68,10 +69,33 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // THAY THẾ cho việc chờ nút Stop biến mất.
   const stableRequiredMs = 3000;
   const pollIntervalMs = 1000;
+  // Xác nhận qua debug thật (job d077805e, chatgptImage.ts): GPT đôi khi báo
+  // lỗi THẬT ("Something went wrong. Please try again." kèm nút Retry,
+  // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
+  // Tự bấm Retry (giới hạn số lần) trước khi chịu thua, vì nguyên nhân hay
+  // gặp là quá tải server nhất thời, thử lại thường tự qua.
+  const maxRetriesOnError = 2;
+  let retriesUsed = 0;
 
   const start = Date.now();
   let stableSince: number | null = null;
   while (Date.now() - start < config.generationTimeoutMs) {
+    const retryButton = await firstVisible(regenerateErrorButtonCandidates(page), 500).catch(
+      () => null,
+    );
+    if (retryButton) {
+      if (retriesUsed >= maxRetriesOnError) {
+        throw new ChatGptError(
+          `GPT báo lỗi ("Something went wrong") — đã Retry ${retriesUsed} lần vẫn lỗi.`,
+        );
+      }
+      await retryButton.click().catch(() => {});
+      retriesUsed++;
+      stableSince = null;
+      await page.waitForTimeout(pollIntervalMs);
+      continue;
+    }
+
     const stillGenerating = await firstVisible(
       stopGeneratingButtonCandidates(page),
       500,
