@@ -7,8 +7,13 @@ import { config } from "../config";
  * (CDP automation indicator, navigator.webdriver=true, cờ --enable-automation).
  * Dùng Chrome thật (channel: "chrome") thay vì Chromium bundled, đồng thời
  * gỡ các cờ/flag tố cáo automation để đăng nhập Google hoạt động bình thường.
+ *
+ * useProxy=false (dùng cho chatgpt.com — xem chatgptBrowser.ts): tính năng
+ * GPT không cần proxy, chỉ hailuoai.video mới cần (tránh đăng nhập/generate
+ * từ 2 IP khác nhau — xem config.proxyServer). Mặc định true để không đổi
+ * hành vi các nơi gọi cũ (login.ts, check-proxy.ts).
  */
-export async function launchRealChrome(): Promise<Browser> {
+export async function launchRealChrome(useProxy = true): Promise<Browser> {
   if (!config.headless && process.platform === "linux" && !process.env.DISPLAY) {
     console.warn(
       "[launch] Đang chạy headless:false trên Linux nhưng không có $DISPLAY (không có X server) — " +
@@ -37,7 +42,7 @@ export async function launchRealChrome(): Promise<Browser> {
     headless: config.headless,
     args,
     ignoreDefaultArgs: ["--enable-automation"],
-    proxy: config.proxyServer
+    proxy: useProxy && config.proxyServer
       ? {
           server: config.proxyServer,
           username: config.proxyUsername,

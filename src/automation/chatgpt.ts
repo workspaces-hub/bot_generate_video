@@ -23,21 +23,42 @@ import { captureErrorSnapshot, captureSnapshot } from "./hailuo";
 export class ChatGptError extends Error {}
 
 /**
- * Gõ text vào ô nhập rồi bấm gửi — prompt có thể RẤT dài, dùng clipboard
- * copy/paste (navigator.clipboard.writeText + Ctrl/Cmd+V) thay vì
+ * Gõ text vào ô nhập rồi bấm gửi — prompt có thể RẤT dài, ưu tiên dùng
+ * clipboard copy/paste (navigator.clipboard.writeText + Ctrl/Cmd+V) thay vì
  * .fill()/gõ từng phím, đáng tin cậy hơn với nội dung dài (đúng cách user
  * thật sẽ làm: copy nội dung rồi dán vào ô chat).
+ *
+ * Xác nhận qua debug thật (job ae8f1dbf): 1 số phiên/tài khoản chatgpt.com có
+ * Permissions-Policy CHẶN HẲN Clipboard API ở tầng trang ("NotAllowedError:
+ * ... blocked because of a permissions policy applied to the current
+ * document") — khác với việc thiếu quyền (permission prompt), nên
+ * grantPermissions() không có tác dụng gì với trường hợp này. Fallback sang
+ * textarea.fill() (set thẳng nội dung, không cần clipboard, không gõ từng
+ * phím) khi gặp lỗi này.
  */
 async function sendMessage(page: Page, text: string): Promise<void> {
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
-    origin: config.chatGptBaseUrl,
-  });
-  await page.evaluate((t) => navigator.clipboard.writeText(t), text);
+  let clipboardOk = true;
+  try {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: config.chatGptBaseUrl,
+    });
+    await page.evaluate((t) => navigator.clipboard.writeText(t), text);
+  } catch (err) {
+    clipboardOk = false;
+    console.warn(
+      "[chatgpt] Clipboard API bị chặn (Permissions-Policy), chuyển sang textarea.fill():",
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   const textarea = await firstVisible(promptTextareaCandidates(page), 20_000);
   await textarea.click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.press("ControlOrMeta+V");
+  if (clipboardOk) {
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.press("ControlOrMeta+V");
+  } else {
+    await textarea.fill(text);
+  }
 
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
   await sendButton.click();

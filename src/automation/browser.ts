@@ -15,13 +15,14 @@ export function createBrowserContextManager(
   storageStatePath: string,
   logLabel: string,
   loginHint: string,
+  useProxy = true,
 ): () => Promise<BrowserContext> {
   let contextPromise: Promise<BrowserContext> | null = null;
 
   return function getContext(): Promise<BrowserContext> {
     if (!contextPromise) {
       contextPromise = (async () => {
-        const browser = await launchRealChrome();
+        const browser = await launchRealChrome(useProxy);
         const hasSession = fs.existsSync(storageStatePath);
         if (!hasSession) {
           console.warn(

@@ -39,15 +39,32 @@ const generatedImageLocator = (message: Locator): Locator =>
  * dung chính (ảnh) đã sẵn sàng.
  */
 async function sendImagePrompt(page: Page, text: string): Promise<void> {
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
-    origin: config.chatGptBaseUrl,
-  });
-  await page.evaluate((t) => navigator.clipboard.writeText(t), text);
+  // Xác nhận qua debug thật (job ae8f1dbf, chatgpt.ts): 1 số phiên/tài khoản
+  // chatgpt.com có Permissions-Policy CHẶN HẲN Clipboard API ở tầng trang —
+  // grantPermissions() không có tác dụng với trường hợp này. Fallback sang
+  // textarea.fill() khi gặp lỗi.
+  let clipboardOk = true;
+  try {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: config.chatGptBaseUrl,
+    });
+    await page.evaluate((t) => navigator.clipboard.writeText(t), text);
+  } catch (err) {
+    clipboardOk = false;
+    console.warn(
+      "[chatgptImage] Clipboard API bị chặn (Permissions-Policy), chuyển sang textarea.fill():",
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   const textarea = await firstVisible(promptTextareaCandidates(page), 20_000);
   await textarea.click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.press("ControlOrMeta+V");
+  if (clipboardOk) {
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.press("ControlOrMeta+V");
+  } else {
+    await textarea.fill(text);
+  }
 
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
   await sendButton.click();
