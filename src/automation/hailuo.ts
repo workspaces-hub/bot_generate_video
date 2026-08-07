@@ -1239,11 +1239,36 @@ async function waitForNewVideo(
 
     if (trackedFeedId) {
       const trackedEntry = page.locator(`div[data-feed-id="${trackedFeedId}"]`).first();
+
+      // Check TRỰC TIẾP <video> trong ĐÚNG entry đang theo dõi — đáng tin cậy
+      // và nhanh hơn dựa vào count() chung của historyVideoLocator (scope cả
+      // #create-new-scroll-container, có thể có nhiều card khác thay đổi
+      // cùng lúc).
+      const trackedVideo = trackedEntry.locator("video[src]").first();
+      if ((await trackedVideo.count()) > 0) {
+        return trackedVideo;
+      }
+
       const stillGeneratingHere =
         (await generatingIndicatorLocator(trackedEntry).count()) > 0;
       if (stillGeneratingHere) {
         sawGeneratingOnTrackedEntry = true;
       } else if (sawGeneratingOnTrackedEntry) {
+        // Xác nhận qua debug thật (job 1627c714): video này THỰC RA đã tạo
+        // xong (data-feed-id đã có <video src> thật trong debug HTML chụp
+        // ngay sau khi lỗi được ném ra) — có khoảng trễ NGẮN giữa lúc thẻ
+        // "Generating..." biến mất và lúc <video src> thực sự gắn vào DOM,
+        // và poll trước đó (5s/lần) đúng vào khoảng trống này nên báo lỗi
+        // NHẦM. Cho thêm 1 "grace period" ngắn, poll dồn dập hơn (2s/lần) để
+        // chắc chắn không phải chỉ là độ trễ render trước khi kết luận lỗi
+        // thật.
+        const graceDeadline = Date.now() + 20_000;
+        while (Date.now() < graceDeadline) {
+          await page.waitForTimeout(2000);
+          if ((await trackedVideo.count()) > 0) {
+            return trackedVideo;
+          }
+        }
         throw new GenerationError(
           `Thẻ "Generating..." của video này (id ${trackedFeedId}) đã biến mất nhưng không thấy video mới lẫn dấu hiệu lỗi rõ ràng nào — job có thể đã fail âm thầm, kiểm tra lại trên hailuoai.video`,
         );
