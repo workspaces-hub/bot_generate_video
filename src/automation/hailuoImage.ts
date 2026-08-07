@@ -161,7 +161,7 @@ async function uploadReferenceImage(page: Page, imagePath: string, expectedCount
   try {
     await attemptUploadReferenceImage(page, imagePath, expectedCountAfter);
   } catch (err) {
-    console.warn("[hailuoImage] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:", err);
+    // console.warn("[hailuoImage] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:", err);
     await dismissBlockingOverlays(page);
     await attemptUploadReferenceImage(page, imagePath, expectedCountAfter);
   }

@@ -86,15 +86,15 @@ export async function generateReferenceImagesForFile(
     (e): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> & StoryboardEntry => {
       if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
       if (!e.id || !e.prompt) {
-        console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt":`, e);
+        // console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt":`, e);
         return false;
       }
       return true;
     },
   );
-  console.log(
-    `[storyboardPipeline] Tìm thấy ${targets.length} entry CHARACTER/LOCATION trong ${entries.length} entry (${inputPath}).`,
-  );
+  // console.log(
+  //   `[storyboardPipeline] Tìm thấy ${targets.length} entry CHARACTER/LOCATION trong ${entries.length} entry (${inputPath}).`,
+  // );
 
   let succeeded = 0;
   let failed = 0;
@@ -102,7 +102,7 @@ export async function generateReferenceImagesForFile(
   for (const entry of targets) {
     const destDir = entry.type === "CHARACTER" ? charactersDir : locationsDir;
     const jobId = randomUUID();
-    console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`);
+    // console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`);
     try {
       const savedPath = await generateReferenceImage(
         entry.prompt,
@@ -110,7 +110,7 @@ export async function generateReferenceImagesForFile(
         sanitizeId(entry.id),
         jobId,
       );
-      console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`);
+      // console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`);
       entry.error = false;
       succeeded++;
     } catch (err) {
@@ -187,22 +187,22 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
     (e): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> & StoryboardEntry => {
       if (e.type !== "VIDEO") return false;
       if (!e.id || !e.prompt) {
-        console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt":`, e);
+        // console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt":`, e);
         return false;
       }
       return true;
     },
   );
-  console.log(
-    `[storyboardPipeline] Tìm thấy ${targets.length} entry VIDEO trong ${entries.length} entry (${inputPath}).`,
-  );
+  // console.log(
+  //   `[storyboardPipeline] Tìm thấy ${targets.length} entry VIDEO trong ${entries.length} entry (${inputPath}).`,
+  // );
 
   let succeeded = 0;
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
     const jobId = randomUUID();
-    console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video...`);
+    // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video...`);
     try {
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
@@ -216,9 +216,9 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
       }
 
       if (entry.duration) {
-        console.warn(
-          `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên hailuoai.video, bỏ qua.`,
-        );
+        // console.warn(
+        //   `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên hailuoai.video, bỏ qua.`,
+        // );
       }
 
       const options: GenerateVideoOptions =
@@ -234,7 +234,7 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
         await fs.promises.unlink(tempFilePath).catch(() => {});
       }
 
-      console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đã lưu: ${destPath}`);
+      // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đã lưu: ${destPath}`);
       entry.error = false;
       succeeded++;
     } catch (err) {

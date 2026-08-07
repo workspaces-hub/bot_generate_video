@@ -339,7 +339,7 @@ async function sendGeneratedImages(job: ImageGenerationJob, filePaths: string[])
       { reply_parameters: { message_id: job.promptMessageId } },
     );
   } catch (err) {
-    console.warn("[queue] sendMediaGroup thất bại, gửi lần lượt từng ảnh:", err);
+    // console.warn("[queue] sendMediaGroup thất bại, gửi lần lượt từng ảnh:", err);
     for (const filePath of filePaths) {
       await sendGeneratedImage(job, filePath, caption);
     }

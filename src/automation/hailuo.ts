@@ -378,10 +378,10 @@ async function switchVideoInputMode(
       const outerHtml = await alreadyMatchedChip
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
-      console.warn(
-        `[hailuo] switchVideoInputMode(${modeName}): alreadyInTargetMode=true, phần tử khớp outerHTML=`,
-        outerHtml,
-      );
+      // console.warn(
+      //   `[hailuo] switchVideoInputMode(${modeName}): alreadyInTargetMode=true, phần tử khớp outerHTML=`,
+      //   outerHtml,
+      // );
       return;
     }
 
@@ -424,12 +424,12 @@ async function switchVideoInputMode(
       const outerHtml = await chip
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
-      console.warn(
-        `[hailuo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
-        box,
-        "outerHTML=",
-        outerHtml,
-      );
+      // console.warn(
+      //   `[hailuo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
+      //   box,
+      //   "outerHTML=",
+      //   outerHtml,
+      // );
       // Rê chuột qua trước rồi mới bấm (tách riêng, không chỉ để .click() tự
       // làm) — 1 số popover chỉ "arm" sau mousemove/mouseenter thật, và click
       // ngay sau khi vừa hydrate có thể bị bỏ lỡ nếu chưa có bước hover riêng.
@@ -487,10 +487,10 @@ async function switchVideoInputMode(
       const outerHtml = await switchedChip
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
-      console.warn(
-        `[hailuo] switchVideoInputMode(${modeName}): switchedOk=true, phần tử khớp outerHTML=`,
-        outerHtml,
-      );
+      // console.warn(
+      //   `[hailuo] switchVideoInputMode(${modeName}): switchedOk=true, phần tử khớp outerHTML=`,
+      //   outerHtml,
+      // );
     }
     const switchedOk = Boolean(switchedChip);
     if (!switchedOk) {
@@ -520,10 +520,10 @@ async function uploadCharacterImage(
   try {
     await attemptUploadCharacterImage(page, imagePath);
   } catch (err) {
-    console.warn(
-      "[hailuo] Upload ảnh nhân vật lần đầu thất bại, thử đóng popup rồi thử lại:",
-      err,
-    );
+    // console.warn(
+    //   "[hailuo] Upload ảnh nhân vật lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   err,
+    // );
     await dismissBlockingOverlays(page);
     await attemptUploadCharacterImage(page, imagePath);
   }
@@ -649,10 +649,10 @@ async function uploadVideoRefImage(
   try {
     await attemptUploadVideoRefImage(page, imagePath, expectedCountAfter);
   } catch (err) {
-    console.warn(
-      "[hailuo] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
-      err,
-    );
+    // console.warn(
+    //   "[hailuo] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   err,
+    // );
     await dismissBlockingOverlays(page);
     await attemptUploadVideoRefImage(page, imagePath, expectedCountAfter);
   }
@@ -732,10 +732,10 @@ async function uploadOmniReferenceFile(
   try {
     await attemptUploadOmniReferenceFile(page, filePath, expectedCountAfter);
   } catch (err) {
-    console.warn(
-      "[hailuo] Upload file tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
-      err,
-    );
+    // console.warn(
+    //   "[hailuo] Upload file tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   err,
+    // );
     await dismissBlockingOverlays(page);
     await attemptUploadOmniReferenceFile(page, filePath, expectedCountAfter);
   }
@@ -884,10 +884,10 @@ export async function selectChipOption(
     );
     await clickWithForceFallback(option);
   } catch (err) {
-    console.warn(
-      `[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
-      err,
-    );
+    // console.warn(
+    //   `[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
+    //   err,
+    // );
   }
 }
 
@@ -909,10 +909,10 @@ export async function gotoWithRetry(
       return;
     } catch (err) {
       lastErr = err;
-      console.warn(
-        `[hailuo] page.goto lỗi (lần ${attempt}/${attempts}):`,
-        err instanceof Error ? err.message : err,
-      );
+      // console.warn(
+      //   `[hailuo] page.goto lỗi (lần ${attempt}/${attempts}):`,
+      //   err instanceof Error ? err.message : err,
+      // );
       if (attempt < attempts) {
         await page.waitForTimeout(3000);
       }
@@ -939,9 +939,9 @@ export async function fetchWithRetry(
     const response = await page.context().request.get(url);
     if (response.ok()) return response;
     lastStatus = response.status();
-    console.warn(
-      `[hailuo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
-    );
+    // console.warn(
+    //   `[hailuo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
+    // );
     if (attempt < attempts) {
       await page.waitForTimeout(delayMs);
     }
@@ -1263,7 +1263,7 @@ export async function downloadVideo(
   // hơn vì là dữ liệu thô, không phải giao diện).
   const flightData = await getFlightDataText(page);
   const noWatermarkUrl = extractDownloadUrlWithoutWatermark(flightData, feedId);
-  console.log(`Đã tìm thấy URL không watermark: ${noWatermarkUrl}`);
+  // console.log(`Đã tìm thấy URL không watermark: ${noWatermarkUrl}`);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
   await fs.promises.writeFile(filePath, await response.body());
@@ -1368,9 +1368,9 @@ export async function captureSnapshot(
 ): Promise<void> {
   try {
     await writeSnapshotFiles(page, jobId);
-    console.log(
-      `[hailuo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
-    );
+    // console.log(
+    //   `[hailuo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
+    // );
   } catch (debugErr) {
     console.error("[hailuo] Không thể lưu debug snapshot:", debugErr);
   }
