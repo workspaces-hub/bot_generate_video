@@ -95,6 +95,7 @@ export const downloadButtonCandidates = (page: Page): Array<() => Locator> => [
 export const regenerateErrorButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.locator('[data-testid="regenerate-thread-error-button"]'),
   () => page.getByRole("button", { name: /^retry$/i }),
+  () => page.getByRole("button", { name: /^thử lại$/i }),
 ];
 
 /** Dấu hiệu CHƯA đăng nhập (trang chatgpt.com hiện màn hình đăng nhập). */
