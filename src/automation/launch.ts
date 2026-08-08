@@ -14,7 +14,11 @@ import { config } from "../config";
  * hành vi các nơi gọi cũ (login.ts, check-proxy.ts).
  */
 export async function launchRealChrome(useProxy = true): Promise<Browser> {
-  if (!config.headless && process.platform === "linux" && !process.env.DISPLAY) {
+  if (
+    !config.headless &&
+    process.platform === "linux" &&
+    !process.env.DISPLAY
+  ) {
     console.warn(
       "[launch] Đang chạy headless:false trên Linux nhưng không có $DISPLAY (không có X server) — " +
         "Chrome sẽ không khởi động được. Đặt HEADLESS=true trong .env (VPS thường không có màn hình), " +
@@ -30,6 +34,8 @@ export async function launchRealChrome(useProxy = true): Promise<Browser> {
     // video nặng (tính năng Omni Reference). Chuyển sang dùng /tmp thay vì
     // /dev/shm để tránh giới hạn này.
     "--disable-dev-shm-usage",
+    "--disable-quic",
+    "--disable-http2",
   ];
   if (config.chromeNoSandbox) {
     args.push("--no-sandbox", "--disable-setuid-sandbox");
@@ -38,16 +44,18 @@ export async function launchRealChrome(useProxy = true): Promise<Browser> {
   return chromium.launch({
     // "chromium" = dùng bản Chromium bundled sẵn của Playwright thay vì đòi
     // hỏi Google Chrome đã cài trên máy (tiện cho VPS chỉ tái sử dụng session).
-    channel: config.browserChannel === "chromium" ? undefined : config.browserChannel,
+    channel:
+      config.browserChannel === "chromium" ? undefined : config.browserChannel,
     headless: config.headless,
     args,
     ignoreDefaultArgs: ["--enable-automation"],
-    proxy: useProxy && config.proxyServer
-      ? {
-          server: config.proxyServer,
-          username: config.proxyUsername,
-          password: config.proxyPassword,
-        }
-      : undefined,
+    proxy:
+      useProxy && config.proxyServer
+        ? {
+            server: config.proxyServer,
+            username: config.proxyUsername,
+            password: config.proxyPassword,
+          }
+        : undefined,
   });
 }

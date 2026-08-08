@@ -50,22 +50,57 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
   // kịp chèn iframe/checkbox vào DOM). Đợi 10s trước khi dò qua các frame.
   await page.waitForTimeout(10_000);
 
-  for (const frame of page.frames()) {
+  // Log chi tiết — page.content()/screenshot debug snapshot KHÔNG thấy được
+  // bên trong iframe (khác browsing context), nên đây là cách DUY NHẤT biết
+  // được lần chạy thật có tìm/bấm được checkbox hay không khi xem log job.
+  const frames = page.frames();
+  console.warn(
+    `[chatgpt-browser] Đang dò ${frames.length} frame để tìm checkbox: ${frames.map((f) => f.url()).join(", ")}`,
+  );
+
+  let clickedFrameUrl: string | null = null;
+  for (const frame of frames) {
+    const checkboxCount = await frame
+      .locator('input[type="checkbox"], [role="checkbox"]')
+      .count()
+      .catch(() => 0);
+    if (checkboxCount === 0) continue;
+
+    console.warn(
+      `[chatgpt-browser] Frame ${frame.url()} có ${checkboxCount} checkbox — thử bấm...`,
+    );
     const clicked = await frame
-      .locator('input[type="checkbox"]')
+      .locator('input[type="checkbox"], [role="checkbox"]')
       .first()
-      .click({ timeout: 2000 })
+      .click({ timeout: 3000 })
       .then(() => true)
-      .catch(() => false);
-    if (clicked) break;
+      .catch((err) => {
+        console.warn(`[chatgpt-browser] Bấm checkbox ở frame ${frame.url()} lỗi:`, err instanceof Error ? err.message : err);
+        return false;
+      });
+    if (clicked) {
+      clickedFrameUrl = frame.url();
+      break;
+    }
   }
+  console.warn(
+    clickedFrameUrl
+      ? `[chatgpt-browser] Đã bấm checkbox ở frame ${clickedFrameUrl}, chờ Cloudflare xác nhận...`
+      : "[chatgpt-browser] KHÔNG tìm/bấm được checkbox nào trong bất kỳ frame nào.",
+  );
 
   // Chờ Cloudflare xử lý xong — trang tự chuyển qua giao diện thật nếu pass
   // được challenge (best-effort, không throw nếu vẫn còn kẹt: các bước sau
   // tự nhiên sẽ báo lỗi "không tìm thấy ô nhập prompt" như bình thường).
-  await page
+  const passed = await page
     .waitForFunction(() => !document.body.innerText.includes("Verify you are human"), {
       timeout: 15_000,
     })
-    .catch(() => {});
+    .then(() => true)
+    .catch(() => false);
+  console.warn(
+    passed
+      ? "[chatgpt-browser] Đã qua được Cloudflare challenge."
+      : "[chatgpt-browser] Vẫn còn kẹt ở trang Cloudflare challenge sau khi chờ.",
+  );
 }
