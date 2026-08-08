@@ -186,21 +186,42 @@ async function downloadAttachedFiles(
   const attachments =
     (await downloadLinks.count()) > 0 ? downloadLinks : fileCardLocator(message);
   const count = await attachments.count();
+  console.log("🚀 ~ downloadAttachedFiles ~ count:", count)
   const savedPaths: string[] = [];
 
   for (let i = 0; i < count; i++) {
     try {
-      const downloadPromise = page.waitForEvent("download", { timeout: 15_000 });
-      await attachments.nth(i).click();
-      let download = await downloadPromise.catch(() => null);
+      // QUAN TRỌNG: gắn .catch() NGAY khi tạo promise (cùng statement), TRƯỚC
+      // khi click() — nếu không, click() throw (vd element bị re-render/stale
+      // giữa các lượt "yes" của vòng lặp askChatGpt) sẽ nhảy thẳng ra catch
+      // bên ngoài trong khi downloadPromise vẫn đang chờ, chưa kịp gắn
+      // .catch() ở dòng sau — promise đó reject "mồ côi" sau khi hết timeout,
+      // gây unhandled rejection làm crash tiến trình (đã xác nhận qua log
+      // thật: lỗi "Timeout 15000ms exceeded" vẫn lọt ra ngoài dù đã có
+      // .catch() ở dòng kế tiếp, vì click() đã throw trước khi chạy tới đó).
+      const downloadPromise = page
+        .waitForEvent("download", { timeout: 15_000 })
+        .catch(() => null);
+      // force: true — DOM thật xác nhận: nút "Download <filename>"
+      // (aria-label bắt đầu bằng "Download ") đôi khi là 1 icon nhỏ chỉ hiện
+      // khi hover, NẰM ĐÈ LÊN bởi chính thẻ "card" file (aria-label=tên file,
+      // class "group/open-file") to hơn ở CÙNG toạ độ — click bình thường
+      // luôn bị coi là "intercepts pointer events" bởi thẻ card và timeout
+      // sau 30s dù nút Download đã "visible, enabled, stable". Nút vẫn đúng
+      // là nút cần bấm (đã xác nhận qua log thật) nên bỏ qua check hit-target
+      // bằng force, không đổi selector.
+      await attachments.nth(i).click({ force: true });
+      let download = await downloadPromise;
 
       if (!download) {
-        const secondaryDownloadPromise = page.waitForEvent("download", { timeout: 10_000 });
+        const secondaryDownloadPromise = page
+          .waitForEvent("download", { timeout: 10_000 })
+          .catch(() => null);
         const downloadButton = await firstVisible(downloadButtonCandidates(page), 5000).catch(() => null);
         if (downloadButton) {
           await downloadButton.click();
-          download = await secondaryDownloadPromise.catch(() => null);
         }
+        download = await secondaryDownloadPromise;
       }
       if (!download) continue;
 

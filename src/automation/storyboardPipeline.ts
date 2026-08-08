@@ -81,12 +81,16 @@ export async function generateReferenceImagesForFile(
   const locationsDir = path.join(outputDir, "locations");
   await fs.promises.mkdir(charactersDir, { recursive: true });
   await fs.promises.mkdir(locationsDir, { recursive: true });
+  await fs.promises.copyFile(inputPath, path.join(outputDir, path.basename(inputPath)));
 
   const targets = entries.filter(
     (e): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> & StoryboardEntry => {
       if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
-      if (!e.id || !e.prompt) {
-        // console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt":`, e);
+      // Chỉ gen khi "prompt" là string thật — entry thiếu id, hoặc prompt bị
+      // sai kiểu (số/object/null từ JSON input lỗi) đều bỏ qua thay vì gọi
+      // generateReferenceImage với giá trị không phải string.
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        // console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt" hợp lệ:`, e);
         return false;
       }
       return true;
@@ -182,12 +186,14 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
   const locationsDir = path.join(refImagesDir, "locations");
   const videosDir = path.join(refImagesDir, "videos");
   await fs.promises.mkdir(videosDir, { recursive: true });
+  await fs.promises.copyFile(inputPath, path.join(refImagesDir, path.basename(inputPath)));
 
   const targets = entries.filter(
     (e): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> & StoryboardEntry => {
       if (e.type !== "VIDEO") return false;
-      if (!e.id || !e.prompt) {
-        // console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt":`, e);
+      // Chỉ gen khi "prompt" là string thật — xem lý do ở generateReferenceImagesForFile.
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        // console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt" hợp lệ:`, e);
         return false;
       }
       return true;

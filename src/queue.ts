@@ -259,6 +259,7 @@ async function runStoryboardPipeline(downloadedFiles: string[]): Promise<GptPipe
   const failedVideoEntries: FailedEntry[] = [];
 
   for (const filePath of downloadedFiles) {
+    console.log("🚀 ~ runStoryboardPipeline ~ filePath:", filePath)
     if (path.extname(filePath).toLowerCase() !== ".json") {
       otherFiles.push(filePath);
       continue;
