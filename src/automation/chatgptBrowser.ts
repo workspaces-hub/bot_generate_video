@@ -56,6 +56,7 @@ async function isCloudflareChallengePage(page: Page): Promise<boolean> {
  * sau trong CÙNG lần chạy bot.
  */
 export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<void> {
+  await page.waitForTimeout(10_000);
   if (!(await isCloudflareChallengePage(page))) return;
 
   console.warn(

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
+    "start:xvfb": "xvfb-run -a node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "login": "tsx scripts/login.ts",
     "login-chatgpt": "tsx scripts/login-chatgpt.ts",
