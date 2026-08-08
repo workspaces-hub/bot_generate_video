@@ -19,11 +19,31 @@ export const getChatGptBrowserContext = createBrowserContextManager(
 );
 
 /**
+ * Nhận diện trang Cloudflare challenge — DOM thật xác nhận (job afd3c6d8,
+ * 30520119): <title>Just a moment...</title> + 1 <script
+ * src="https://challenges.cloudflare.com/turnstile/...">. QUAN TRỌNG: chữ
+ * "Verify you are human" + checkbox nằm BÊN TRONG iframe Turnstile (Cloudflare
+ * tự chèn), KHÔNG nằm ở document chính — page.getByText("verify you are
+ * human") KHÔNG BAO GIỜ khớp được (đã xác nhận qua log thật: isChallengePage
+ * luôn false dù ảnh chụp rõ ràng đang ở trang challenge), vì getByText mặc
+ * định chỉ tìm trong frame chính. Phải dùng tín hiệu THẬT nằm ở document
+ * chính: title trang hoặc thẻ <script> nói trên.
+ */
+async function isCloudflareChallengePage(page: Page): Promise<boolean> {
+  const title = await page.title().catch(() => "");
+  if (/just a moment/i.test(title)) return true;
+
+  const hasTurnstileScript =
+    (await page
+      .locator('script[src*="challenges.cloudflare.com"]')
+      .count()
+      .catch(() => 0)) > 0;
+  return hasTurnstileScript;
+}
+
+/**
  * Cloudflare "Verify you are human" (managed challenge, Turnstile) đôi khi
- * chặn chatgpt.com trước khi vào được trang thật — DOM thật xác nhận (job
- * afd3c6d8, 30520119): page.content() chỉ ~10KB, có text "Verify you are
- * human" + script challenges.cloudflare.com/turnstile, tất cả selector khác
- * (#prompt-textarea...) đều không tìm thấy vì trang thật chưa hề load.
+ * chặn chatgpt.com trước khi vào được trang thật.
  *
  * Checkbox Turnstile nằm trong 1 iframe RIÊNG do Cloudflare chèn vào (không
  * phải DOM chính của trang, không đọc được qua page.content()) — dò qua TẤT
@@ -36,14 +56,11 @@ export const getChatGptBrowserContext = createBrowserContextManager(
  * sau trong CÙNG lần chạy bot.
  */
 export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<void> {
-  const isChallengePage = await page
-    .getByText(/verify you are human/i)
-    .first()
-    .isVisible({ timeout: 2000 })
-    .catch(() => false);
-  if (!isChallengePage) return;
+  if (!(await isCloudflareChallengePage(page))) return;
 
-  console.warn("[chatgpt-browser] Gặp Cloudflare challenge — thử tự bấm checkbox xác nhận...");
+  console.warn(
+    '[chatgpt-browser] Gặp Cloudflare challenge (title "Just a moment...") — thử tự bấm checkbox xác nhận...',
+  );
 
   // Iframe Turnstile do Cloudflare chèn vào bằng JS SAU khi trang load, cần
   // vài giây để render xong — tìm checkbox ngay có thể chưa thấy gì cả (chưa
@@ -91,16 +108,20 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
 
   // Chờ Cloudflare xử lý xong — trang tự chuyển qua giao diện thật nếu pass
   // được challenge (best-effort, không throw nếu vẫn còn kẹt: các bước sau
-  // tự nhiên sẽ báo lỗi "không tìm thấy ô nhập prompt" như bình thường).
-  const passed = await page
-    .waitForFunction(() => !document.body.innerText.includes("Verify you are human"), {
-      timeout: 15_000,
-    })
-    .then(() => true)
-    .catch(() => false);
+  // tự nhiên sẽ báo lỗi "không tìm thấy ô nhập prompt" như bình thường). Poll
+  // bằng isCloudflareChallengePage (cùng tín hiệu title/script ở document
+  // chính) — KHÔNG dùng document.body.innerText như trước (luôn sai, xem
+  // isCloudflareChallengePage).
+  const pollDeadline = Date.now() + 15_000;
+  let stillChallenge = true;
+  while (Date.now() < pollDeadline) {
+    stillChallenge = await isCloudflareChallengePage(page);
+    if (!stillChallenge) break;
+    await page.waitForTimeout(1000);
+  }
   console.warn(
-    passed
-      ? "[chatgpt-browser] Đã qua được Cloudflare challenge."
-      : "[chatgpt-browser] Vẫn còn kẹt ở trang Cloudflare challenge sau khi chờ.",
+    stillChallenge
+      ? "[chatgpt-browser] Vẫn còn kẹt ở trang Cloudflare challenge sau khi chờ."
+      : "[chatgpt-browser] Đã qua được Cloudflare challenge.",
   );
 }
