@@ -22,6 +22,9 @@ import { captureErrorSnapshot, captureSnapshot } from "./hailuo";
 
 export class ChatGptError extends Error {}
 
+/** Chặn lặp vô hạn nếu vì lý do gì đó GPT không bao giờ đính kèm file. */
+const MAX_TURNS_WAITING_FOR_FILE = 30;
+
 /**
  * Gõ text vào ô nhập rồi bấm gửi — prompt có thể RẤT dài, ưu tiên dùng
  * clipboard copy/paste (navigator.clipboard.writeText + Ctrl/Cmd+V) thay vì
@@ -234,10 +237,15 @@ async function readLatestAssistantMessage(
 }
 
 /**
- * Mở chatgpt.com, gửi prompt 1 LẦN DUY NHẤT, chờ GPT trả lời xong, rồi thử
- * tải file GPT đính kèm (nếu có, xem downloadAttachedFiles) về
- * config.chatGptResultsDir. Không có file đính kèm cũng không coi là lỗi —
- * chỉ trả về mảng rỗng.
+ * Mở chatgpt.com, gửi prompt, chờ GPT trả lời xong, rồi thử tải file GPT
+ * đính kèm (nếu có, xem downloadAttachedFiles) về config.chatGptResultsDir.
+ *
+ * Nếu trả lời xong mà VẪN CHƯA có file đính kèm nào (vd GPT còn đang dẫn
+ * dắt qua các phần trước đó, chưa tới phần xuất file), chụp lại ảnh màn hình
+ * trạng thái hiện tại RỒI gửi tiếp "yes" để GPT tiếp tục, lặp lại tới khi có
+ * file thì dừng (giới hạn MAX_TURNS_WAITING_FOR_FILE lượt để chặn lặp vô
+ * hạn nếu GPT không bao giờ đính kèm file). Không có file sau khi hết lượt
+ * cũng không coi là lỗi — chỉ trả về mảng rỗng.
  */
 export async function askChatGpt(
   prompt: string,
@@ -267,10 +275,27 @@ export async function askChatGpt(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await sendMessage(page, prompt);
-    await captureSnapshot(page, jobId, "result");
+    let messageToSend = prompt;
+    let downloadedFiles: string[] = [];
+    for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
+      await sendMessage(page, messageToSend);
 
-    const { downloadedFiles } = await readLatestAssistantMessage(page, jobId);
+      const result = await readLatestAssistantMessage(page, jobId);
+      downloadedFiles = result.downloadedFiles;
+
+      if (downloadedFiles.length > 0) {
+        await captureSnapshot(page, jobId, "result");
+        break;
+      }
+
+      // Chưa có file — chụp lại trạng thái hiện tại TRƯỚC KHI gửi "yes" để
+      // còn biết GPT đang dừng ở đâu (phần nào) nếu vòng lặp không bao giờ
+      // ra được file. Đặt tên file debug riêng theo turn (captureSnapshot ghi
+      // file theo đúng tham số jobId truyền vào) — nếu không, mỗi lượt sẽ ghi
+      // đè lên đúng 1 file, mất hết ảnh các lượt trước.
+      await captureSnapshot(page, `${jobId}-no-file-turn-${turn}`, `no-file-turn-${turn}`);
+      messageToSend = "yes";
+    }
 
     return { downloadedFiles };
   } catch (err) {
