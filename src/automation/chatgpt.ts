@@ -238,11 +238,28 @@ async function downloadAttachedFiles(
   return savedPaths;
 }
 
-/** Lấy file đính kèm (nếu có) của tin nhắn trả lời MỚI NHẤT từ GPT. */
+/**
+ * GPT báo đã hoàn thiện bản JSON storyboard — coi là dấu hiệu DUY NHẤT để
+ * DỪNG gửi "yes" tiếp (KHÔNG dừng chỉ vì đã có file đính kèm — GPT có thể
+ * đính kèm file trung gian/nháp trước khi thật sự hoàn thiện). Nhận diện qua
+ * 1 trong các cách diễn đạt:
+ * - "Đã hoàn thiện bản JSON"
+ * - "production-ready" kèm "đầy đủ"
+ * - Nhắc tới tên file "full.json" (tên file JSON cuối cùng) — innerText của
+ *   tin nhắn có chứa cả nhãn nút "Download full.json" nếu đã đính kèm.
+ */
+function isCompletionText(text: string): boolean {
+  if (/full\.json/i.test(text)) return true;
+  if (/đã hoàn thành/i.test(text)) return true;
+  if (/đã hoàn thiện bản json/i.test(text)) return true;
+  return /production-ready/i.test(text) && /đầy đủ/i.test(text);
+}
+
+/** Lấy file đính kèm (nếu có) và nội dung text của tin nhắn trả lời MỚI NHẤT từ GPT. */
 async function readLatestAssistantMessage(
   page: Page,
   jobId: string,
-): Promise<{ downloadedFiles: string[] }> {
+): Promise<{ downloadedFiles: string[]; isComplete: boolean }> {
   const messages = assistantMessageLocator(page);
   const count = await messages.count();
   if (count === 0) {
@@ -253,20 +270,23 @@ async function readLatestAssistantMessage(
   const latest: Locator = messages.last();
 
   const downloadedFiles = await downloadAttachedFiles(page, latest, jobId);
+  const text = await latest.innerText().catch(() => "");
 
-  return { downloadedFiles };
+  return { downloadedFiles, isComplete: isCompletionText(text) };
 }
 
 /**
  * Mở chatgpt.com, gửi prompt, chờ GPT trả lời xong, rồi thử tải file GPT
  * đính kèm (nếu có, xem downloadAttachedFiles) về config.chatGptResultsDir.
  *
- * Nếu trả lời xong mà VẪN CHƯA có file đính kèm nào (vd GPT còn đang dẫn
- * dắt qua các phần trước đó, chưa tới phần xuất file), chụp lại ảnh màn hình
- * trạng thái hiện tại RỒI gửi tiếp "yes" để GPT tiếp tục, lặp lại tới khi có
- * file thì dừng (giới hạn MAX_TURNS_WAITING_FOR_FILE lượt để chặn lặp vô
- * hạn nếu GPT không bao giờ đính kèm file). Không có file sau khi hết lượt
- * cũng không coi là lỗi — chỉ trả về mảng rỗng.
+ * Nếu trả lời xong mà phản hồi CHƯA báo đã hoàn thiện (xem isCompletionText
+ * — "Đã hoàn thiện bản JSON", "production-ready" kèm "đầy đủ", hoặc nhắc tới
+ * "full.json"), chụp lại ảnh màn hình trạng thái hiện tại RỒI gửi tiếp "yes"
+ * để GPT tiếp tục, lặp lại tới khi isComplete = true thì dừng (giới hạn
+ * MAX_TURNS_WAITING_FOR_FILE lượt để chặn lặp vô hạn nếu GPT không bao giờ
+ * báo xong). CHỈ dừng theo isComplete — có file đính kèm KHÔNG tự động dừng
+ * (có thể là file nháp/trung gian) — không có file sau khi hết lượt cũng
+ * không coi là lỗi, chỉ trả về mảng rỗng.
  */
 export async function askChatGpt(
   prompt: string,
@@ -304,7 +324,7 @@ export async function askChatGpt(
       const result = await readLatestAssistantMessage(page, jobId);
       downloadedFiles = result.downloadedFiles;
 
-      if (downloadedFiles.length > 0) {
+      if (result.isComplete) {
         await captureSnapshot(page, jobId, "result");
         break;
       }
