@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
-import { getChatGptBrowserContext } from "./chatgptBrowser";
+import { dismissCloudflareChallengeIfPresent, getChatGptBrowserContext } from "./chatgptBrowser";
 import {
   assistantMessageLocator,
   downloadButtonCandidates,
@@ -250,6 +250,7 @@ export async function askChatGpt(
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
+    await dismissCloudflareChallengeIfPresent(page);
 
     const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
       .then(() => true)
