@@ -45,6 +45,11 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
 
   console.warn("[chatgpt-browser] Gặp Cloudflare challenge — thử tự bấm checkbox xác nhận...");
 
+  // Iframe Turnstile do Cloudflare chèn vào bằng JS SAU khi trang load, cần
+  // vài giây để render xong — tìm checkbox ngay có thể chưa thấy gì cả (chưa
+  // kịp chèn iframe/checkbox vào DOM). Đợi 10s trước khi dò qua các frame.
+  await page.waitForTimeout(10_000);
+
   for (const frame of page.frames()) {
     const clicked = await frame
       .locator('input[type="checkbox"]')
