@@ -234,7 +234,14 @@ async function downloadAttachedFiles(
           5000,
         ).catch(() => null);
         if (downloadButton) {
-          await downloadButton.click();
+          // force: true — cùng lý do với click ở trên: DOM thật xác nhận nút
+          // "Download" (data-testid="download-files-turn-action-button") bị
+          // 1 <div class="z-0 flex justify-end"> (hoặc icon svg con của
+          // chính nút) chồng lên đúng toạ độ, khiến click thường luôn bị coi
+          // là "intercepts pointer events" và timeout sau 30s dù nút đã
+          // visible/enabled/stable — đúng nút cần bấm, chỉ bỏ qua check
+          // hit-target.
+          await downloadButton.click({ force: true });
         }
         download = await secondaryDownloadPromise;
       }
