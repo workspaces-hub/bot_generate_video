@@ -332,7 +332,7 @@ export async function askChatGpt(
         result.isComplete,
         downloadedFiles.length,
       );
-      if (result.isComplete) {
+      if (result.isComplete && downloadedFiles.length > 0) {
         await captureSnapshot(page, jobId, "result");
         break;
       }
