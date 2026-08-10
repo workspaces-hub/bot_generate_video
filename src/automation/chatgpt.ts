@@ -102,9 +102,23 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // Chờ nút "Stop generating" xuất hiện (GPT bắt đầu trả lời) — best-effort,
   // không throw nếu không thấy (có thể trả lời quá nhanh, đã xong trước khi
   // kịp bắt được trạng thái này).
-  await firstVisible(stopGeneratingButtonCandidates(page), 10_000).catch(
-    () => {},
-  );
+  //
+  // Xác nhận qua debug thật (job 1beafb45): nút Stop có thể xuất hiện MUỘN
+  // hơn 10s chờ ban đầu (trang vẫn đang ở "chatgpt.com/" — CHƯA kịp điều
+  // hướng sang URL hội thoại "/c/...", conversation-turn = 0, giữa màn hình
+  // còn spinner "đang tải") — nếu vòng lặp bên dưới coi "chưa thấy nút Stop"
+  // dù chỉ 1 lần là ĐÃ XONG, sẽ trả về NGAY LẬP TỨC trước khi GPT kịp bắt đầu
+  // trả lời, khiến readLatestAssistantMessage tìm thấy 0 tin nhắn (throw
+  // "Không tìm thấy câu trả lời nào"). hasSeenGenerating chỉ cho phép coi là
+  // "đã xong" SAU KHI từng thấy nút Stop xuất hiện thật ít nhất 1 lần (bằng
+  // chứng GPT đã bắt đầu trả lời) — trừ khi trang đã thật sự có tin nhắn trả
+  // lời (hiếm khi GPT trả lời quá nhanh, không kịp thấy nút Stop).
+  let hasSeenGenerating = await firstVisible(
+    stopGeneratingButtonCandidates(page),
+    10_000,
+  )
+    .then(() => true)
+    .catch(() => false);
 
   // Rồi chờ tới khi nút đó biến mất — GPT đã trả lời xong.
   //
@@ -158,6 +172,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     )
       .then(() => true)
       .catch(() => false);
+    if (stillGenerating) hasSeenGenerating = true;
 
     // const hasFileReady = await (async () => {
     //   const messages = assistantMessageLocator(page);
@@ -165,8 +180,16 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     //   return (await fileAttachmentLocator(messages.last()).count()) > 0;
     // })();
 
-    console.log("stillGenerating ", stillGenerating);
-    if (!stillGenerating) return;
+    console.log("stillGenerating ", stillGenerating, "hasSeenGenerating", hasSeenGenerating);
+    if (!stillGenerating) {
+      if (hasSeenGenerating) return;
+      // Chưa từng thấy nút Stop — chỉ coi là xong nếu trang đã thật sự có
+      // tin nhắn trả lời (trường hợp hiếm: GPT trả lời quá nhanh). Không có
+      // gì cả thì vẫn phải chờ tiếp, không được kết luận "xong" (xem job
+      // 1beafb45 ở trên).
+      const hasAssistantTurn = (await assistantMessageLocator(page).count()) > 0;
+      if (hasAssistantTurn) return;
+    }
 
     await page.waitForTimeout(pollIntervalMs);
   }
