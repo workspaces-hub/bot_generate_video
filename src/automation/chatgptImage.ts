@@ -87,16 +87,20 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
     // Xác nhận qua thực tế (cùng vấn đề với chatgpt.ts's sendMessage): chạy
     // headed qua Xvfb trên VPS đôi khi Ctrl+V dán nhầm nội dung clipboard
     // OS/X11 cũ dù navigator.clipboard.writeText() không hề báo lỗi — đọc
-    // lại nội dung sau khi dán, không khớp thì ép ghi đè bằng fill().
+    // lại nội dung sau khi dán, không khớp thì ép ghi đè bằng fill(). So
+    // sánh sau khi chuẩn hoá whitespace (gộp mọi \n/khoảng trắng liên tiếp
+    // thành 1 dấu cách) — tránh false positive với prompt nhiều dòng do
+    // ProseMirror render xuống dòng khác cách biểu diễn gốc (xem chatgpt.ts).
+    const normalizeForCompare = (s: string) => s.replace(/\s+/g, " ").trim();
     const pasted = await textarea.innerText().catch(() => "");
-    if (pasted.trim() !== text.trim()) {
+    if (normalizeForCompare(pasted) !== normalizeForCompare(text)) {
       console.warn(
         "[chatgptImage] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — ghi đè lại bằng fill().",
       );
-      await textarea.fill(text);
+      await textarea.fill(text, { timeout: 120_000 });
     }
   } else {
-    await textarea.fill(text);
+    await textarea.fill(text, { timeout: 120_000 });
   }
 
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);

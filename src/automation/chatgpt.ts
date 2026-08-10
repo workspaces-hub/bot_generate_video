@@ -73,15 +73,27 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     // sai khác này không tự lộ ra bằng exception nên phải tự đọc lại nội
     // dung sau khi dán rồi so sánh; không khớp thì coi là dán lỗi, ép ghi đè
     // lại bằng fill() (không qua clipboard OS, đường tin cậy tuyệt đối).
+    //
+    // So sánh sau khi CHUẨN HOÁ khoảng trắng (gộp mọi dãy whitespace/xuống
+    // dòng liên tiếp thành 1 dấu cách) — xác nhận qua thực tế (job
+    // 5643dab5): so khớp tuyệt đối (chỉ .trim()) với prompt NHIỀU DÒNG/rất
+    // dài (JSON storyboard) bị "false positive" do ProseMirror render xuống
+    // dòng/đoạn khác cách biểu diễn \n gốc — dù dán ĐÚNG vẫn bị coi là dán
+    // sai, kích hoạt fill() lại 1 khối text khổng lồ không cần thiết, gây
+    // treo/timeout dây chuyền (fill "not editable" 30s, rồi cả screenshot
+    // debug cũng timeout theo vì tab bị đơ).
+    const normalizeForCompare = (s: string) => s.replace(/\s+/g, " ").trim();
     const pasted = await textarea.innerText().catch(() => "");
-    if (pasted.trim() !== text.trim()) {
+    if (normalizeForCompare(pasted) !== normalizeForCompare(text)) {
       console.warn(
         "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — ghi đè lại bằng fill().",
       );
-      await textarea.fill(text);
+      // timeout dài hơn mặc định (30s) — prompt có thể rất dài (JSON
+      // storyboard nhiều nghìn ký tự), ProseMirror cần thời gian xử lý.
+      await textarea.fill(text, { timeout: 120_000 });
     }
   } else {
-    await textarea.fill(text);
+    await textarea.fill(text, { timeout: 120_000 });
   }
 
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
