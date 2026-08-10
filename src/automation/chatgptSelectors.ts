@@ -70,9 +70,20 @@ export const fileAttachmentLocator = (message: Locator): Locator =>
     ].join(", "),
   );
 
-/** Nút link-text "Download <filename>" — bấm vào kích hoạt download thật ngay, ưu tiên dùng cái này. */
+/**
+ * Nút link-text "Download <filename>" — bấm vào kích hoạt download thật ngay,
+ * ưu tiên dùng cái này. DOM thật xác nhận (job 9a775122): CÙNG 1 file có tới
+ * 2 nút cùng khớp `[aria-label^="Download "]` — nút link-text thật
+ * (`aria-label="Download <filename>"`) VÀ 1 icon hover chung chung
+ * (`aria-label="Download file"`, không có tên file) nằm đè lên thẻ card —
+ * bấm cả 2 tải TRÙNG LẶP cùng 1 file (đã xác nhận: 2 file tải về giống hệt
+ * nhau byte-for-byte). Loại trừ tường minh nút generic "Download file" —
+ * chỉ giữ nút có TÊN FILE thật trong aria-label.
+ */
 export const downloadFileLinkLocator = (message: Locator): Locator =>
-  message.locator('button[aria-label^="Download "]');
+  message.locator(
+    'button[aria-label^="Download "]:not([aria-label="Download file"])',
+  );
 
 /** Thẻ "card" file (mở preview/canvas, không chắc tải thẳng) — chỉ dùng fallback khi downloadFileLinkLocator rỗng. */
 export const fileCardLocator = (message: Locator): Locator =>
