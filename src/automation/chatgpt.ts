@@ -64,6 +64,22 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   if (clipboardOk) {
     await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.press("ControlOrMeta+V");
+
+    // Xác nhận qua thực tế: chạy headed qua Xvfb trên VPS (không có clipboard
+    // manager X11 thật đứng sau) đôi khi navigator.clipboard.writeText() báo
+    // thành công ở tầng JS (KHÔNG throw, clipboardOk vẫn true) nhưng Ctrl+V
+    // (paste tầng OS/X11, khác hẳn Web Clipboard API) lại dán nội dung
+    // CŨ/không liên quan (vd dán nhầm chữ "playwright" thay vì prompt thật) —
+    // sai khác này không tự lộ ra bằng exception nên phải tự đọc lại nội
+    // dung sau khi dán rồi so sánh; không khớp thì coi là dán lỗi, ép ghi đè
+    // lại bằng fill() (không qua clipboard OS, đường tin cậy tuyệt đối).
+    const pasted = await textarea.innerText().catch(() => "");
+    if (pasted.trim() !== text.trim()) {
+      console.warn(
+        "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — ghi đè lại bằng fill().",
+      );
+      await textarea.fill(text);
+    }
   } else {
     await textarea.fill(text);
   }

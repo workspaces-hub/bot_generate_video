@@ -83,6 +83,18 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
   if (clipboardOk) {
     await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.press("ControlOrMeta+V");
+
+    // Xác nhận qua thực tế (cùng vấn đề với chatgpt.ts's sendMessage): chạy
+    // headed qua Xvfb trên VPS đôi khi Ctrl+V dán nhầm nội dung clipboard
+    // OS/X11 cũ dù navigator.clipboard.writeText() không hề báo lỗi — đọc
+    // lại nội dung sau khi dán, không khớp thì ép ghi đè bằng fill().
+    const pasted = await textarea.innerText().catch(() => "");
+    if (pasted.trim() !== text.trim()) {
+      console.warn(
+        "[chatgptImage] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — ghi đè lại bằng fill().",
+      );
+      await textarea.fill(text);
+    }
   } else {
     await textarea.fill(text);
   }
