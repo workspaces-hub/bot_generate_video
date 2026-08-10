@@ -322,18 +322,37 @@ export async function askChatGpt(
         result.isComplete,
         downloadedFiles.length,
       );
-      if (result.isComplete ) {
+      if (result.isComplete) {
         await captureSnapshot(page, jobId, "result");
         break;
       }
+
+      // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
+      // có) chỉ là bản nháp/trung gian (xem docstring askChatGpt), KHÔNG phải
+      // kết quả cuối — xoá luôn khỏi đĩa để tránh rác lại config.chatGptResultsDir
+      // và tránh nhầm với file thật khi đọc lại sau này.
+      for (const filePath of downloadedFiles) {
+        await fs.promises.unlink(filePath).catch((err) => {
+          console.warn(
+            `[chatgpt] Không xoá được file nháp "${filePath}":`,
+            err,
+          );
+        });
+      }
+      downloadedFiles = [];
 
       // Chưa có file — chụp lại trạng thái hiện tại TRƯỚC KHI gửi "yes" để
       // còn biết GPT đang dừng ở đâu (phần nào) nếu vòng lặp không bao giờ
       // ra được file. Đặt tên file debug riêng theo turn (captureSnapshot ghi
       // file theo đúng tham số jobId truyền vào) — nếu không, mỗi lượt sẽ ghi
       // đè lên đúng 1 file, mất hết ảnh các lượt trước.
-      await captureSnapshot(page, `${jobId}-no-file-turn-${turn}`, `no-file-turn-${turn}`);
-      messageToSend = "yes. chỉ gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json";
+      await captureSnapshot(
+        page,
+        `${jobId}-no-file-turn-${turn}`,
+        `no-file-turn-${turn}`,
+      );
+      messageToSend =
+        "yes. chỉ gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json";
     }
 
     return { downloadedFiles };

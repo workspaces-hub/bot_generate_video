@@ -32,6 +32,23 @@ export function sanitizeId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+/**
+ * Ghi đè lại TOÀN BỘ mảng entries vào file input — gọi lại NGAY sau MỖI entry
+ * xử lý xong (không đợi hết cả loạt), để nếu tiến trình bị dừng/crash giữa
+ * chừng (vd hết credit, mất mạng ở entry sau) thì các entry ĐÃ generate trước
+ * đó không bị mất field "error" đã cập nhật.
+ */
+async function saveEntries(
+  inputPath: string,
+  entries: StoryboardEntry[],
+): Promise<void> {
+  await fs.promises.writeFile(
+    inputPath,
+    JSON.stringify(entries, null, 2),
+    "utf-8",
+  );
+}
+
 /** Thư mục reference-images/<tên file input, bỏ đuôi> — DÙNG CHUNG giữa bước tạo ảnh và tạo video của CÙNG 1 file input. */
 export function referenceImagesDirFor(inputPath: string): string {
   const baseName = path.basename(inputPath, path.extname(inputPath));
@@ -64,8 +81,8 @@ export interface GenerateImagesResult {
  *
  * Entry nào generate lỗi được đánh dấu "error": true, thành công thì
  * "error": false — LUÔN ghi tường minh (không xoá field), để phân biệt được
- * với entry CHƯA TỪNG chạy. Sau khi xử lý xong HẾT (kể cả có lỗi), ghi đè lại
- * TOÀN BỘ mảng vào đúng file input gốc.
+ * với entry CHƯA TỪNG chạy. Ghi đè lại TOÀN BỘ mảng vào đúng file input gốc
+ * NGAY sau MỖI entry (xem saveEntries) — không đợi xử lý xong hết cả loạt.
  */
 export async function generateReferenceImagesForFile(
   inputPath: string,
@@ -81,10 +98,16 @@ export async function generateReferenceImagesForFile(
   const locationsDir = path.join(outputDir, "locations");
   await fs.promises.mkdir(charactersDir, { recursive: true });
   await fs.promises.mkdir(locationsDir, { recursive: true });
-  await fs.promises.copyFile(inputPath, path.join(outputDir, path.basename(inputPath)));
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
 
   const targets = entries.filter(
-    (e): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> & StoryboardEntry => {
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
       if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
       // Chỉ gen khi "prompt" là string thật — entry thiếu id, hoặc prompt bị
       // sai kiểu (số/object/null từ JSON input lỗi) đều bỏ qua thay vì gọi
@@ -114,7 +137,9 @@ export async function generateReferenceImagesForFile(
         sanitizeId(entry.id),
         jobId,
       );
-      console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`);
+      console.log(
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`,
+      );
       entry.error = false;
       succeeded++;
     } catch (err) {
@@ -126,11 +151,17 @@ export async function generateReferenceImagesForFile(
       failed++;
       failedEntries.push({ id: entry.id, type: entry.type });
     }
+    await saveEntries(inputPath, entries);
   }
 
-  await fs.promises.writeFile(inputPath, JSON.stringify(entries, null, 2), "utf-8");
-
-  return { outputDir, charactersDir, locationsDir, succeeded, failed, failedEntries };
+  return {
+    outputDir,
+    charactersDir,
+    locationsDir,
+    succeeded,
+    failed,
+    failedEntries,
+  };
 }
 
 /**
@@ -147,7 +178,9 @@ async function resolveRefImagePath(dir: string, id: string): Promise<string> {
   const match = files.find((f) => f.startsWith(`${id}.`));
   if (match) return path.join(dir, match);
 
-  throw new Error(`Không tìm thấy file ảnh tham chiếu cho id "${id}" trong ${dir}`);
+  throw new Error(
+    `Không tìm thấy file ảnh tham chiếu cho id "${id}" trong ${dir}`,
+  );
 }
 
 export interface GenerateVideosResult {
@@ -172,9 +205,11 @@ export interface GenerateVideosResult {
  * Video tạo xong lưu vào reference-images/<tên file input>/videos/<id>.mp4.
  *
  * Chạy TUẦN TỰ, đánh dấu "error" trên từng entry, ghi đè lại file input gốc
- * — cùng quy tắc với generateReferenceImagesForFile.
+ * NGAY sau MỖI entry — cùng quy tắc với generateReferenceImagesForFile.
  */
-export async function generateVideosForFile(inputPath: string): Promise<GenerateVideosResult> {
+export async function generateVideosForFile(
+  inputPath: string,
+): Promise<GenerateVideosResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
   if (!Array.isArray(entries)) {
@@ -186,10 +221,16 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
   const locationsDir = path.join(refImagesDir, "locations");
   const videosDir = path.join(refImagesDir, "videos");
   await fs.promises.mkdir(videosDir, { recursive: true });
-  await fs.promises.copyFile(inputPath, path.join(refImagesDir, path.basename(inputPath)));
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(refImagesDir, path.basename(inputPath)),
+  );
 
   const targets = entries.filter(
-    (e): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> & StoryboardEntry => {
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
       if (e.type !== "VIDEO") return false;
       // Chỉ gen khi "prompt" là string thật — xem lý do ở generateReferenceImagesForFile.
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
@@ -232,7 +273,10 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
 
       const tempFilePath = await generateVideo(entry.prompt, options, jobId);
 
-      const destPath = path.join(videosDir, `jobId_${sanitizeId(entry.id)}.mp4`);
+      const destPath = path.join(
+        videosDir,
+        `jobId_${sanitizeId(entry.id)}.mp4`,
+      );
       try {
         await fs.promises.rename(tempFilePath, destPath);
       } catch {
@@ -252,9 +296,8 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
       failed++;
       failedEntries.push({ id: entry.id, type: "VIDEO" });
     }
+    await saveEntries(inputPath, entries);
   }
-
-  await fs.promises.writeFile(inputPath, JSON.stringify(entries, null, 2), "utf-8");
 
   return { videosDir, succeeded, failed, failedEntries };
 }

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Telegram } from "telegraf";
+import { Telegraf, type Telegram } from "telegraf";
 import { config } from "./config";
 import { generateVideo } from "./automation/hailuo";
 import { generateImage } from "./automation/hailuoImage";
@@ -12,7 +12,7 @@ import {
   generateVideosForFile,
   type FailedEntry,
 } from "./automation/storyboardPipeline";
-import { zipDirectory } from "./automation/zip";
+import { zipFiles as zipFilesToArchive } from "./automation/zip";
 
 interface BaseJob {
   chatId: number;
@@ -82,13 +82,20 @@ export function initQueue(botTelegram: Telegram): void {
 function loadPersistedJobs(): void {
   try {
     if (!fs.existsSync(QUEUE_FILE)) return;
-    const restored: HailuoJob[] = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+    const restored: HailuoJob[] = JSON.parse(
+      fs.readFileSync(QUEUE_FILE, "utf-8"),
+    );
     if (restored.length > 0) {
       jobs.push(...restored);
-      console.log(`[queue] Khôi phục ${restored.length} job video/ảnh còn dang dở từ lần chạy trước.`);
+      console.log(
+        `[queue] Khôi phục ${restored.length} job video/ảnh còn dang dở từ lần chạy trước.`,
+      );
     }
   } catch (err) {
-    console.error("[queue] Không đọc được file hàng đợi video/ảnh đã lưu, bỏ qua:", err);
+    console.error(
+      "[queue] Không đọc được file hàng đợi video/ảnh đã lưu, bỏ qua:",
+      err,
+    );
   }
 }
 
@@ -104,13 +111,20 @@ function persistJobs(): void {
 function loadPersistedGptJobs(): void {
   try {
     if (!fs.existsSync(GPT_QUEUE_FILE)) return;
-    const restored: GptJob[] = JSON.parse(fs.readFileSync(GPT_QUEUE_FILE, "utf-8"));
+    const restored: GptJob[] = JSON.parse(
+      fs.readFileSync(GPT_QUEUE_FILE, "utf-8"),
+    );
     if (restored.length > 0) {
       gptJobs.push(...restored);
-      console.log(`[queue] Khôi phục ${restored.length} job GPT còn dang dở từ lần chạy trước.`);
+      console.log(
+        `[queue] Khôi phục ${restored.length} job GPT còn dang dở từ lần chạy trước.`,
+      );
     }
   } catch (err) {
-    console.error("[queue] Không đọc được file hàng đợi GPT đã lưu, bỏ qua:", err);
+    console.error(
+      "[queue] Không đọc được file hàng đợi GPT đã lưu, bỏ qua:",
+      err,
+    );
   }
 }
 
@@ -185,8 +199,10 @@ async function processQueue(): Promise<void> {
         await notifyError(job, err);
       } finally {
         if (job.type === "video") {
-          if (job.startFramePath) await fsp.unlink(job.startFramePath).catch(() => {});
-          if (job.characterImagePath) await fsp.unlink(job.characterImagePath).catch(() => {});
+          if (job.startFramePath)
+            await fsp.unlink(job.startFramePath).catch(() => {});
+          if (job.characterImagePath)
+            await fsp.unlink(job.characterImagePath).catch(() => {});
           for (const p of job.referenceImagePaths ?? []) {
             await fsp.unlink(p).catch(() => {});
           }
@@ -239,6 +255,9 @@ interface GptPipelineResult {
   failedVideoEntries: FailedEntry[];
 }
 
+/** Số video tối đa gộp chung trong 1 file zip khi gửi kết quả — xem runStoryboardPipeline. */
+const VIDEOS_PER_ZIP_PART = 3;
+
 /**
  * Với MỖI file JSON storyboard GPT tải về (thường chỉ 1, vd meta.json):
  * 1. Tạo ảnh cho toàn bộ entry CHARACTER/LOCATION (generateReferenceImagesForFile)
@@ -247,20 +266,23 @@ interface GptPipelineResult {
  *    chỉ báo lỗi cho user (folder ảnh vẫn còn nguyên trên đĩa để kiểm tra/
  *    chạy lại thủ công).
  * 3. Nếu KHÔNG lỗi ảnh nào: tiếp tục tạo toàn bộ video (generateVideosForFile)
- *    — lưu vào reference-images/<tên file json>/videos/, rồi CHỈ nén folder
- *    "videos" đó (không nén cả folder reference-images/<tên file json>) thành
- *    1 file .zip đặt tên trùng tên file JSON input để gửi.
+ *    — lưu vào reference-images/<tên file json>/videos/, rồi nén file trong
+ *    đó (không nén cả folder reference-images/<tên file json>) thành nhiều
+ *    file .zip, mỗi file gồm tối đa VIDEOS_PER_ZIP_PART video, đặt tên
+ *    "<tên file json>_partX.zip" để gửi.
  * File KHÔNG phải .json (hiếm khi xảy ra) gửi thẳng như trước, không qua các
  * bước trên.
  */
-async function runStoryboardPipeline(downloadedFiles: string[]): Promise<GptPipelineResult> {
+async function runStoryboardPipeline(
+  downloadedFiles: string[],
+): Promise<GptPipelineResult> {
   const otherFiles: string[] = [];
   const zipFiles: string[] = [];
   const failedImageEntries: FailedEntry[] = [];
   const failedVideoEntries: FailedEntry[] = [];
 
   for (const filePath of downloadedFiles) {
-    console.log("🚀 ~ runStoryboardPipeline ~ filePath:", filePath)
+    console.log("🚀 ~ runStoryboardPipeline ~ filePath:", filePath);
     if (path.extname(filePath).toLowerCase() !== ".json") {
       otherFiles.push(filePath);
       continue;
@@ -276,14 +298,25 @@ async function runStoryboardPipeline(downloadedFiles: string[]): Promise<GptPipe
       const videosResult = await generateVideosForFile(filePath);
       failedVideoEntries.push(...videosResult.failedEntries);
 
-      // Chỉ nén folder "videos" (không nén cả folder reference-images/<tên
-      // file json> — bên trong còn có characters/locations/file json gốc,
-      // không cần gửi lại) — đặt tên file zip trùng tên file JSON input, GIỮ
-      // NGUYÊN quy ước cũ (outputDir đã là reference-images/<tên file json>
-      // nên `${imagesResult.outputDir}.zip` vẫn đúng tên).
-      const zipPath = `${imagesResult.outputDir}.zip`;
-      await zipDirectory(videosResult.videosDir, zipPath);
-      zipFiles.push(zipPath);
+      // Chỉ nén file trong folder "videos" (không nén cả folder
+      // reference-images/<tên file json> — bên trong còn có
+      // characters/locations/file json gốc, không cần gửi lại) — chia thành
+      // nhiều phần, MỖI PHẦN gồm tối đa VIDEOS_PER_ZIP_PART video, tên file
+      // "<tên file json>_partX.zip" — tránh 1 file zip duy nhất quá nặng khi
+      // có nhiều video (dễ vượt giới hạn upload 50MB của Telegram Bot API,
+      // xem sendDocumentMaybeSplit).
+      const videoFileNames = (await fsp.readdir(videosResult.videosDir))
+        .filter((f) => f.toLowerCase().endsWith(".mp4"))
+        .sort();
+      for (let i = 0; i < videoFileNames.length; i += VIDEOS_PER_ZIP_PART) {
+        const chunk = videoFileNames
+          .slice(i, i + VIDEOS_PER_ZIP_PART)
+          .map((f) => path.join(videosResult.videosDir, f));
+        const partIndex = i / VIDEOS_PER_ZIP_PART + 1;
+        const zipPath = `${imagesResult.outputDir}_part${partIndex}.zip`;
+        await zipFilesToArchive(chunk, zipPath);
+        zipFiles.push(zipPath);
+      }
     }
   }
 
@@ -294,13 +327,20 @@ function formatFailedEntries(entries: FailedEntry[]): string {
   return entries.map((e) => `- [${e.type}] ${e.id}`).join("\n");
 }
 
-async function notifyVideoSuccess(job: VideoGenerationJob, filePath: string): Promise<void> {
+async function notifyVideoSuccess(
+  job: VideoGenerationJob,
+  filePath: string,
+): Promise<void> {
   if (!telegram) return;
   try {
-    await telegram.sendVideo(job.chatId, { source: filePath }, {
-      caption: `✅ Video cho prompt: "${job.prompt.split(" ").slice(0,20).join(" ")}"`,
-      reply_parameters: { message_id: job.promptMessageId },
-    });
+    await telegram.sendVideo(
+      job.chatId,
+      { source: filePath },
+      {
+        caption: `✅ Video cho prompt: "${job.prompt.split(" ").slice(0, 20).join(" ")}"`,
+        reply_parameters: { message_id: job.promptMessageId },
+      },
+    );
   } catch (err) {
     console.error("[queue] Gửi video thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
@@ -311,7 +351,10 @@ async function notifyVideoSuccess(job: VideoGenerationJob, filePath: string): Pr
   await deleteStatusMessage(job);
 }
 
-async function notifyImageSuccess(job: ImageGenerationJob, filePaths: string[]): Promise<void> {
+async function notifyImageSuccess(
+  job: ImageGenerationJob,
+  filePaths: string[],
+): Promise<void> {
   if (!telegram) return;
   try {
     await sendGeneratedImages(job, filePaths);
@@ -333,8 +376,11 @@ async function notifyImageSuccess(job: ImageGenerationJob, filePaths: string[]):
  * "400: Bad Request: IMAGE_PROCESS_FAILED" (Telegram không xử lý/nén được
  * ảnh AI tạo ra) — sendDocument gửi file gốc nên đáng tin cậy hơn.
  */
-async function sendGeneratedImages(job: ImageGenerationJob, filePaths: string[]): Promise<void> {
-  const caption = `✅ Ảnh cho prompt: "${job.prompt.split(" ").slice(0,20).join(" ")}"`;
+async function sendGeneratedImages(
+  job: ImageGenerationJob,
+  filePaths: string[],
+): Promise<void> {
+  const caption = `✅ Ảnh cho prompt: "${job.prompt.split(" ").slice(0, 20).join(" ")}"`;
   try {
     await telegram!.sendMediaGroup(
       job.chatId,
@@ -353,18 +399,122 @@ async function sendGeneratedImages(job: ImageGenerationJob, filePaths: string[])
   }
 }
 
-async function sendGeneratedImage(job: ImageGenerationJob, filePath: string, caption: string): Promise<void> {
+async function sendGeneratedImage(
+  job: ImageGenerationJob,
+  filePath: string,
+  caption: string,
+): Promise<void> {
   try {
-    await telegram!.sendPhoto(job.chatId, { source: filePath }, {
-      caption,
-      reply_parameters: { message_id: job.promptMessageId },
-    });
+    await telegram!.sendPhoto(
+      job.chatId,
+      { source: filePath },
+      {
+        caption,
+        reply_parameters: { message_id: job.promptMessageId },
+      },
+    );
   } catch (err) {
-    console.warn("[queue] sendPhoto thất bại, thử lại bằng sendDocument (gửi file gốc, không nén):", filePath, err);
-    await telegram!.sendDocument(job.chatId, { source: filePath }, {
-      caption,
-      reply_parameters: { message_id: job.promptMessageId },
-    });
+    console.warn(
+      "[queue] sendPhoto thất bại, thử lại bằng sendDocument (gửi file gốc, không nén):",
+      filePath,
+      err,
+    );
+    await telegram!.sendDocument(
+      job.chatId,
+      { source: filePath },
+      {
+        caption,
+        reply_parameters: { message_id: job.promptMessageId },
+      },
+    );
+  }
+}
+
+// Giới hạn upload THẬT của Telegram Bot API cho sendDocument là 50MB — xác
+// nhận qua lỗi thật "413 Request Entity Too Large" khi gửi file zip video lớn
+// (reference-images/.../videos.zip có thể vượt xa 50MB với nhiều video). Chừa
+// dư 1MB làm an toàn (overhead multipart/form-data).
+const TELEGRAM_MAX_DOCUMENT_BYTES = 49 * 1024 * 1024;
+
+/**
+ * Chia 1 file thành nhiều phần <= maxPartBytes, đặt tên
+ * "<tên file>.part001", "<tên file>.part002", ... Đọc/ghi tuần tự bằng
+ * buffer cố định — không load nguyên file zip video (có thể rất lớn) vào bộ
+ * nhớ cùng lúc.
+ */
+async function splitFileIntoParts(
+  filePath: string,
+  maxPartBytes: number,
+): Promise<string[]> {
+  const partPaths: string[] = [];
+  const fd = await fsp.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(maxPartBytes);
+    let partIndex = 1;
+    while (true) {
+      const { bytesRead } = await fd.read(buffer, 0, maxPartBytes, null);
+      if (bytesRead === 0) break;
+      const partPath = `${filePath}.part${String(partIndex).padStart(3, "0")}`;
+      await fsp.writeFile(partPath, buffer.subarray(0, bytesRead));
+      partPaths.push(partPath);
+      partIndex++;
+    }
+  } finally {
+    await fd.close();
+  }
+  return partPaths;
+}
+
+/**
+ * Gửi 1 file qua sendDocument — nếu file vượt giới hạn upload thật của
+ * Telegram Bot API (xem TELEGRAM_MAX_DOCUMENT_BYTES), KHÔNG gọi sendDocument
+ * trực tiếp (chắc chắn lỗi 413) mà chia file thành nhiều phần rồi gửi từng
+ * phần kèm hướng dẫn ghép lại — Bot API không có cách nào khác để gửi file
+ * lớn hơn giới hạn này (trừ khi tự host Local Bot API Server, ngoài phạm vi ở
+ * đây). Các file phần chỉ là tạm, xoá ngay sau khi gửi xong.
+ */
+async function sendDocumentMaybeSplit(
+  chatId: number,
+  filePath: string,
+  caption: string,
+  replyToMessageId: number,
+): Promise<void> {
+  const { size } = await fsp.stat(filePath);
+  if (size <= TELEGRAM_MAX_DOCUMENT_BYTES) {
+    await telegram!.sendDocument(
+      chatId,
+      { source: filePath },
+      {
+        caption,
+        reply_parameters: { message_id: replyToMessageId },
+      },
+    );
+    return;
+  }
+
+  const fileName = path.basename(filePath);
+  const partPaths = await splitFileIntoParts(
+    filePath,
+    TELEGRAM_MAX_DOCUMENT_BYTES,
+  );
+  try {
+    await telegram!.sendMessage(
+      chatId,
+      `📦 File "${fileName}" nặng ${(size / 1024 / 1024).toFixed(1)}MB, vượt giới hạn 50MB của Telegram Bot API — chia thành ${partPaths.length} phần. Tải hết các phần rồi ghép lại bằng lệnh (Linux/macOS):\ncat ${fileName}.part* > ${fileName}`,
+      { reply_parameters: { message_id: replyToMessageId } },
+    );
+    for (const [idx, partPath] of partPaths.entries()) {
+      await telegram!.sendDocument(
+        chatId,
+        { source: partPath },
+        {
+          caption: `${caption} (phần ${idx + 1}/${partPaths.length})`,
+          reply_parameters: { message_id: replyToMessageId },
+        },
+      );
+    }
+  } finally {
+    await Promise.all(partPaths.map((p) => fsp.unlink(p).catch(() => {})));
   }
 }
 
@@ -397,21 +547,24 @@ async function notifyGptSuccess(
       );
     }
 
-    const allFiles = [...result.otherFiles, ...result.zipFiles];
+    const allFiles = result.zipFiles;
     if (allFiles.length === 0) {
       // GPT trả lời xong nhưng không có file đính kèm nào — không coi là lỗi.
-      await telegram.sendMessage(job.chatId, `✅ GPT đã trả lời xong" (không có file đính kèm).`, {
-        reply_parameters: { message_id: job.promptMessageId },
-      });
+      await telegram.sendMessage(
+        job.chatId,
+        `✅ GPT đã trả lời xong" (không có file đính kèm).`,
+        {
+          reply_parameters: { message_id: job.promptMessageId },
+        },
+      );
     }
     for (const [i, filePath] of allFiles.entries()) {
-      await telegram.sendDocument(job.chatId, { source: filePath }, {
-        caption:
-          i === 0
-            ? `✅ Kết quả GPT"`
-            : `📎 ${path.basename(filePath)}`,
-        reply_parameters: { message_id: job.promptMessageId },
-      });
+      await sendDocumentMaybeSplit(
+        job.chatId,
+        filePath,
+        i === 0 ? `✅ Kết quả GPT"` : `📎 ${path.basename(filePath)}`,
+        job.promptMessageId,
+      );
     }
   } catch (err) {
     console.error("[queue] Gửi kết quả GPT thất bại:", err);
@@ -441,7 +594,9 @@ async function notifyError(job: GenerationJob, err: unknown): Promise<void> {
 
 async function deleteStatusMessage(job: GenerationJob): Promise<void> {
   if (job.statusMessageId) {
-    await telegram!.deleteMessage(job.chatId, job.statusMessageId).catch(() => {});
+    await telegram!
+      .deleteMessage(job.chatId, job.statusMessageId)
+      .catch(() => {});
   }
 }
 

@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
-import { dismissCloudflareChallengeIfPresent, getChatGptBrowserContext } from "./chatgptBrowser";
+import {
+  dismissCloudflareChallengeIfPresent,
+  getChatGptBrowserContext,
+} from "./chatgptBrowser";
 import {
   assistantMessageLocator,
   promptTextareaCandidates,
@@ -28,7 +31,9 @@ export class ChatGptImageError extends Error {}
  * Giữ `img[alt]` chung chung làm fallback phòng khi GPT không kèm tiền tố đó.
  */
 const generatedImageLocator = (message: Locator): Locator =>
-  message.locator('img[src*="/backend-api/estuary/content"], img[alt^="Generated image"], img[alt]');
+  message.locator(
+    'img[src*="/backend-api/estuary/content"], img[alt^="Generated image"], img[alt]',
+  );
 
 /**
  * Gõ prompt rồi bấm gửi, chờ GPT tạo ảnh xong — cùng cơ chế với
@@ -45,9 +50,11 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
   // textarea.fill() khi gặp lỗi.
   let clipboardOk = true;
   try {
-    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
-      origin: config.chatGptBaseUrl,
-    });
+    await page
+      .context()
+      .grantPermissions(["clipboard-read", "clipboard-write"], {
+        origin: config.chatGptBaseUrl,
+      });
     await page.evaluate((t) => navigator.clipboard.writeText(t), text);
   } catch (err) {
     clipboardOk = false;
@@ -69,7 +76,22 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
   await sendButton.click();
 
-  await firstVisible(stopGeneratingButtonCandidates(page), 10_000).catch(() => {});
+  // Xác nhận qua debug thật (job b39be426): nút Stop (data-testid="stop-button",
+  // aria-label "Stop answering") có thể xuất hiện MUỘN hơn 10s chờ ban đầu
+  // (proxy/network chậm, hoặc GPT mất thời gian "suy nghĩ" trước khi thật sự
+  // bắt đầu render ảnh) — nếu vòng lặp bên dưới coi "chưa thấy nút Stop + chưa
+  // có ảnh" trong 3s liền là ĐÃ XONG, sẽ kết thúc NGAY TỪ ĐẦU trước khi GPT
+  // kịp bắt đầu generate thật (ảnh placeholder vẫn đang load dở, xem screenshot
+  // job trên) — throw nhầm "không thấy ảnh nào được tạo" dù thực ra GPT còn
+  // đang chạy. hasSeenGenerating chỉ cho phép coi là "ổn định/xong" SAU KHI đã
+  // từng thấy nút Stop xuất hiện thật ít nhất 1 lần (bằng chứng generate đã
+  // bắt đầu) — trừ khi ảnh đã xuất hiện thật (hasImageReady) thì không cần chờ.
+  let hasSeenGenerating = await firstVisible(
+    stopGeneratingButtonCandidates(page),
+    10_000,
+  )
+    .then(() => true)
+    .catch(() => false);
 
   const stableRequiredMs = 3000;
   const pollIntervalMs = 1000;
@@ -83,8 +105,10 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
   const start = Date.now();
   let stableSince: number | null = null;
   while (Date.now() - start < config.generationTimeoutMs) {
-    const retryButton = await firstVisible(regenerateErrorButtonCandidates(page), 500)
-      .catch(() => null);
+    const retryButton = await firstVisible(
+      regenerateErrorButtonCandidates(page),
+      500,
+    ).catch(() => null);
     if (retryButton) {
       if (retriesUsed >= maxRetriesOnError) {
         throw new ChatGptImageError(
@@ -98,9 +122,13 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
       continue;
     }
 
-    const stillGenerating = await firstVisible(stopGeneratingButtonCandidates(page), 500)
+    const stillGenerating = await firstVisible(
+      stopGeneratingButtonCandidates(page),
+      500,
+    )
       .then(() => true)
       .catch(() => false);
+    if (stillGenerating) hasSeenGenerating = true;
 
     const hasImageReady = await (async () => {
       const messages = assistantMessageLocator(page);
@@ -108,12 +136,13 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
       return (await generatedImageLocator(messages.last()).count()) > 0;
     })();
 
-    if (stillGenerating && !hasImageReady) {
+    if ((stillGenerating || !hasSeenGenerating) && !hasImageReady) {
       stableSince = null;
     } else {
       if (stableSince === null) stableSince = Date.now();
       if (Date.now() - stableSince >= stableRequiredMs) {
-        const hasAnyMessage = (await page.locator("[data-message-author-role]").count()) > 0;
+        const hasAnyMessage =
+          (await page.locator("[data-message-author-role]").count()) > 0;
         if (!hasAnyMessage) {
           throw new ChatGptImageError(
             "Trang không có tin nhắn nào sau khi chờ phản hồi (có thể đã mất trạng thái giữa chừng) — cần thử lại.",
@@ -172,24 +201,32 @@ export async function generateReferenceImage(
 
     // domcontentloaded fire sớm với SPA — chờ mạng rảnh trước khi tìm ô nhập
     // prompt, cùng lý do đã áp dụng cho hailuoai.video (xem generateVideo).
-    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
 
     await sendImagePrompt(page, `Generate an image: ${prompt}`);
     await captureSnapshot(page, jobId, "result");
 
     const messages = assistantMessageLocator(page);
     if ((await messages.count()) === 0) {
-      throw new ChatGptImageError("Không tìm thấy câu trả lời nào từ ChatGPT trên trang");
+      throw new ChatGptImageError(
+        "Không tìm thấy câu trả lời nào từ ChatGPT trên trang",
+      );
     }
     const latest = messages.last();
     const images = generatedImageLocator(latest);
     if ((await images.count()) === 0) {
-      throw new ChatGptImageError("GPT trả lời xong nhưng không thấy ảnh nào được tạo");
+      throw new ChatGptImageError(
+        "GPT trả lời xong nhưng không thấy ảnh nào được tạo",
+      );
     }
 
     const src = await images.first().getAttribute("src");
     if (!src) {
-      throw new ChatGptImageError('Không lấy được URL ảnh (thẻ <img> không có "src")');
+      throw new ChatGptImageError(
+        'Không lấy được URL ảnh (thẻ <img> không có "src")',
+      );
     }
 
     // Ảnh do ChatGPT tạo thường phục vụ qua URL đã ký sẵn (pre-signed) —
@@ -197,11 +234,16 @@ export async function generateReferenceImage(
     // thay vì phải bấm hover/click UI để kích hoạt sự kiện download.
     const response = await page.context().request.get(src);
     if (!response.ok()) {
-      throw new ChatGptImageError(`Tải ảnh thất bại: HTTP ${response.status()}`);
+      throw new ChatGptImageError(
+        `Tải ảnh thất bại: HTTP ${response.status()}`,
+      );
     }
 
     await fs.promises.mkdir(destDir, { recursive: true });
-    const destPath = path.join(destDir, `${baseFileName}.${guessImageExtension(src)}`);
+    const destPath = path.join(
+      destDir,
+      `${baseFileName}.${guessImageExtension(src)}`,
+    );
     await fs.promises.writeFile(destPath, await response.body());
 
     return destPath;
