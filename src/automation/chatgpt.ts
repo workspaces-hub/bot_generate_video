@@ -25,6 +25,23 @@ import { captureErrorSnapshot, captureSnapshot } from "./hailuo";
 
 export class ChatGptError extends Error {}
 
+/**
+ * Xoá sạch nội dung ô nhập rồi gõ lại "text" qua page.keyboard.insertText()
+ * — KHÔNG dùng textarea.fill(). Xác nhận qua debug thật (job 463abed5):
+ * fill() set thẳng textContent của <div contenteditable> (ProseMirror) rồi
+ * chỉ bắn 1 sự kiện "input" — ProseMirror (editor thật ChatGPT dùng) không
+ * đồng bộ lại state nội bộ từ cách này, nên dù DOM hiển thị ĐÚNG text, ứng
+ * dụng vẫn coi ô nhập là RỖNG → nút Send không bao giờ hiện ra (timeout "waiting
+ * for send-button to be visible" ngay sau khi fill()). insertText() giả lập
+ * đúng luồng sự kiện input thật (như gõ tay/paste), ProseMirror nhận diện
+ * được bình thường.
+ */
+async function insertPromptText(page: Page, text: string): Promise<void> {
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("Delete");
+  await page.keyboard.insertText(text);
+}
+
 /** Chặn lặp vô hạn nếu vì lý do gì đó GPT không bao giờ đính kèm file. */
 const MAX_TURNS_WAITING_FOR_FILE = 30;
 
@@ -86,14 +103,12 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     const pasted = await textarea.innerText().catch(() => "");
     if (normalizeForCompare(pasted) !== normalizeForCompare(text)) {
       console.warn(
-        "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — ghi đè lại bằng fill().",
+        "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
       );
-      // timeout dài hơn mặc định (30s) — prompt có thể rất dài (JSON
-      // storyboard nhiều nghìn ký tự), ProseMirror cần thời gian xử lý.
-      await textarea.fill(text, { timeout: 120_000 });
+      await insertPromptText(page, text);
     }
   } else {
-    await textarea.fill(text, { timeout: 120_000 });
+    await insertPromptText(page, text);
   }
 
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
@@ -305,11 +320,17 @@ async function downloadAttachedFiles(
  * 1 trong các cách diễn đạt:
  * - "Đã hoàn thiện bản JSON"
  * - "production-ready" kèm "đầy đủ"
- * - Nhắc tới tên file "full.json" (tên file JSON cuối cùng) — innerText của
- *   tin nhắn có chứa cả nhãn nút "Download full.json" nếu đã đính kèm.
+ *
+ * KHÔNG check chữ "full.json" xuất hiện trong TEXT nữa — xác nhận qua debug
+ * thật (job 463abed5): GPT có thể nhắc "_full.json" khi mô tả QUY ƯỚC đặt
+ * tên file SẼ dùng (vd "sẽ đặt tên file chứa _full.json") — TRƯỚC khi thật
+ * sự tạo xong file, không phải xác nhận đã hoàn thiện. Check kiểu "chữ xuất
+ * hiện ở bất kỳ đâu trong text" bị false positive ở đúng trường hợp này,
+ * khiến vòng lặp coi là "xong" quá sớm trong khi chưa có file thật, rồi kẹt
+ * trạng thái dở dang. Tên file "full.json" giờ chỉ được coi là dấu hiệu hoàn
+ * thiện khi nó THẬT SỰ là tên 1 file đã tải về (xem readLatestAssistantMessage).
  */
 function isCompletionText(text: string): boolean {
-  if (/full\.json/i.test(text)) return true;
   if (/đã hoàn thành/i.test(text)) return true;
   if (/đã hoàn thiện bản json/i.test(text)) return true;
   return /production-ready/i.test(text) && /đầy đủ/i.test(text);
@@ -344,8 +365,11 @@ async function readLatestAssistantMessage(
 
   const downloadedFiles = await downloadAttachedFiles(page, latest, jobId, promptFileName);
   const text = await latest.innerText().catch(() => "");
+  // Tên file "full.json" chỉ tính là dấu hiệu hoàn thiện khi có 1 file THẬT
+  // đã tải về mang tên đó (xem comment isCompletionText).
+  const hasFullJsonFile = downloadedFiles.some((p) => /full\.json$/i.test(p));
 
-  return { downloadedFiles, isComplete: isCompletionText(text) };
+  return { downloadedFiles, isComplete: hasFullJsonFile || isCompletionText(text) };
 }
 
 /**
@@ -402,7 +426,18 @@ export async function askChatGpt(
         result.isComplete,
         downloadedFiles.length,
       );
-      if (result.isComplete && downloadedFiles.length > 0) {
+      if (result.isComplete) {
+        if (downloadedFiles.length === 0) {
+          // Hiếm: GPT xác nhận hoàn thiện bằng LỜI (vd "Đã hoàn thiện bản
+          // JSON") nhưng lượt trả lời NÀY lại không có file đính kèm — có
+          // thể file đã đính kèm ở lượt TRƯỚC, lượt này chỉ là xác nhận bằng
+          // text. Không chặn lại gửi tiếp "yes" nữa (đã coi là xong theo yêu
+          // cầu "chỉ dừng khi isComplete = true"), chỉ log cảnh báo để biết
+          // nếu job trả về downloadedFiles rỗng dù isComplete = true.
+          console.warn(
+            "[chatgpt] isComplete = true nhưng lượt này không có file đính kèm nào — có thể file đã đính kèm ở lượt trước.",
+          );
+        }
         await captureSnapshot(page, jobId, "result");
         break;
       }

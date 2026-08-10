@@ -22,6 +22,18 @@ import { captureErrorSnapshot, captureSnapshot } from "./hailuo";
 export class ChatGptImageError extends Error {}
 
 /**
+ * Xoá sạch nội dung ô nhập rồi gõ lại "text" qua page.keyboard.insertText()
+ * — KHÔNG dùng textarea.fill() (xem lý do chi tiết ở insertPromptText trong
+ * chatgpt.ts, job 463abed5: fill() không đồng bộ được state nội bộ của
+ * ProseMirror, khiến nút Send không bao giờ hiện dù DOM đã có đúng text).
+ */
+async function insertPromptText(page: Page, text: string): Promise<void> {
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("Delete");
+  await page.keyboard.insertText(text);
+}
+
+/**
  * Ảnh GPT tạo ra hiện trong tin nhắn trả lời — DOM thật xác nhận (job
  * 24b9cf53): KHÔNG phải domain oaiusercontent.com như phỏng đoán ban đầu, mà
  * ảnh được phục vụ qua chính domain chatgpt.com, URL đã ký sẵn dạng
@@ -87,20 +99,21 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
     // Xác nhận qua thực tế (cùng vấn đề với chatgpt.ts's sendMessage): chạy
     // headed qua Xvfb trên VPS đôi khi Ctrl+V dán nhầm nội dung clipboard
     // OS/X11 cũ dù navigator.clipboard.writeText() không hề báo lỗi — đọc
-    // lại nội dung sau khi dán, không khớp thì ép ghi đè bằng fill(). So
-    // sánh sau khi chuẩn hoá whitespace (gộp mọi \n/khoảng trắng liên tiếp
-    // thành 1 dấu cách) — tránh false positive với prompt nhiều dòng do
-    // ProseMirror render xuống dòng khác cách biểu diễn gốc (xem chatgpt.ts).
+    // lại nội dung sau khi dán, không khớp thì ép gõ lại bằng insertText()
+    // (không dùng fill(), xem insertPromptText). So sánh sau khi chuẩn hoá
+    // whitespace (gộp mọi \n/khoảng trắng liên tiếp thành 1 dấu cách) — tránh
+    // false positive với prompt nhiều dòng do ProseMirror render xuống dòng
+    // khác cách biểu diễn gốc (xem chatgpt.ts).
     const normalizeForCompare = (s: string) => s.replace(/\s+/g, " ").trim();
     const pasted = await textarea.innerText().catch(() => "");
     if (normalizeForCompare(pasted) !== normalizeForCompare(text)) {
       console.warn(
-        "[chatgptImage] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — ghi đè lại bằng fill().",
+        "[chatgptImage] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
       );
-      await textarea.fill(text, { timeout: 120_000 });
+      await insertPromptText(page, text);
     }
   } else {
-    await textarea.fill(text, { timeout: 120_000 });
+    await insertPromptText(page, text);
   }
 
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
