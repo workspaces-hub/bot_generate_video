@@ -114,7 +114,7 @@ export async function generateReferenceImagesForFile(
         sanitizeId(entry.id),
         jobId,
       );
-      // console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`);
+      console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`);
       entry.error = false;
       succeeded++;
     } catch (err) {
@@ -232,7 +232,7 @@ export async function generateVideosForFile(inputPath: string): Promise<Generate
 
       const tempFilePath = await generateVideo(entry.prompt, options, jobId);
 
-      const destPath = path.join(videosDir, `${sanitizeId(entry.id)}.mp4`);
+      const destPath = path.join(videosDir, `jobId_${sanitizeId(entry.id)}.mp4`);
       try {
         await fs.promises.rename(tempFilePath, destPath);
       } catch {

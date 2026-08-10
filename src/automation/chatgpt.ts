@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
-import { dismissCloudflareChallengeIfPresent, getChatGptBrowserContext } from "./chatgptBrowser";
+import {
+  dismissCloudflareChallengeIfPresent,
+  getChatGptBrowserContext,
+} from "./chatgptBrowser";
 import {
   assistantMessageLocator,
   downloadButtonCandidates,
@@ -42,9 +45,11 @@ const MAX_TURNS_WAITING_FOR_FILE = 30;
 async function sendMessage(page: Page, text: string): Promise<void> {
   let clipboardOk = true;
   try {
-    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
-      origin: config.chatGptBaseUrl,
-    });
+    await page
+      .context()
+      .grantPermissions(["clipboard-read", "clipboard-write"], {
+        origin: config.chatGptBaseUrl,
+      });
     await page.evaluate((t) => navigator.clipboard.writeText(t), text);
   } catch (err) {
     clipboardOk = false;
@@ -102,11 +107,11 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   let retriesUsed = 0;
 
   const start = Date.now();
-  let stableSince: number | null = null;
   while (Date.now() - start < config.generationTimeoutMs) {
-    const retryButton = await firstVisible(regenerateErrorButtonCandidates(page), 500).catch(
-      () => null,
-    );
+    const retryButton = await firstVisible(
+      regenerateErrorButtonCandidates(page),
+      500,
+    ).catch(() => null);
     if (retryButton) {
       if (retriesUsed >= maxRetriesOnError) {
         throw new ChatGptError(
@@ -115,7 +120,6 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       }
       await retryButton.click().catch(() => {});
       retriesUsed++;
-      stableSince = null;
       await page.waitForTimeout(pollIntervalMs);
       continue;
     }
@@ -127,32 +131,14 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       .then(() => true)
       .catch(() => false);
 
-    const hasFileReady = await (async () => {
-      const messages = assistantMessageLocator(page);
-      if ((await messages.count()) === 0) return false;
-      return (await fileAttachmentLocator(messages.last()).count()) > 0;
-    })();
+    // const hasFileReady = await (async () => {
+    //   const messages = assistantMessageLocator(page);
+    //   if ((await messages.count()) === 0) return false;
+    //   return (await fileAttachmentLocator(messages.last()).count()) > 0;
+    // })();
 
-    if (stillGenerating && !hasFileReady) {
-      stableSince = null;
-    } else {
-      if (stableSince === null) stableSince = Date.now();
-      if (Date.now() - stableSince >= stableRequiredMs) {
-        // Xác nhận qua debug thật (job 4b50baaa): trang có thể bị đưa về lại
-        // màn hình "New chat" trống — mất trắng tin nhắn vừa gửi — mà không
-        // hề báo lỗi gì (không còn nút Stop nên vòng lặp vẫn tưởng là "đã
-        // xong"). Xác nhận LẠI thực sự đã có tin nhắn trên trang trước khi
-        // coi là thành công.
-        const hasAnyMessage =
-          (await page.locator("[data-message-author-role]").count()) > 0;
-        if (!hasAnyMessage) {
-          throw new ChatGptError(
-            "Trang không có tin nhắn nào sau khi chờ phản hồi (có thể đã mất trạng thái giữa chừng) — cần thử lại.",
-          );
-        }
-        return;
-      }
-    }
+    console.log("stillGenerating ", stillGenerating);
+    if (!stillGenerating) return;
 
     await page.waitForTimeout(pollIntervalMs);
   }
@@ -184,9 +170,11 @@ async function downloadAttachedFiles(
 ): Promise<string[]> {
   const downloadLinks = downloadFileLinkLocator(message);
   const attachments =
-    (await downloadLinks.count()) > 0 ? downloadLinks : fileCardLocator(message);
+    (await downloadLinks.count()) > 0
+      ? downloadLinks
+      : fileCardLocator(message);
   const count = await attachments.count();
-  console.log("🚀 ~ downloadAttachedFiles ~ count:", count)
+  console.log("🚀 ~ downloadAttachedFiles ~ count:", count);
   const savedPaths: string[] = [];
 
   for (let i = 0; i < count; i++) {
@@ -217,7 +205,10 @@ async function downloadAttachedFiles(
         const secondaryDownloadPromise = page
           .waitForEvent("download", { timeout: 10_000 })
           .catch(() => null);
-        const downloadButton = await firstVisible(downloadButtonCandidates(page), 5000).catch(() => null);
+        const downloadButton = await firstVisible(
+          downloadButtonCandidates(page),
+          5000,
+        ).catch(() => null);
         if (downloadButton) {
           await downloadButton.click();
         }
@@ -227,7 +218,10 @@ async function downloadAttachedFiles(
 
       await fs.promises.mkdir(config.chatGptResultsDir, { recursive: true });
       const suggested = download.suggestedFilename() || `attachment-${i}`;
-      const filePath = path.join(config.chatGptResultsDir, `${jobId}-${suggested}`);
+      const filePath = path.join(
+        config.chatGptResultsDir,
+        `${jobId}-${suggested}`,
+      );
       await download.saveAs(filePath);
       savedPaths.push(filePath);
     } catch (err) {
@@ -323,8 +317,12 @@ export async function askChatGpt(
 
       const result = await readLatestAssistantMessage(page, jobId);
       downloadedFiles = result.downloadedFiles;
-
-      if (result.isComplete) {
+      console.log(
+        "result.isComplete, downloadedFiles.length",
+        result.isComplete,
+        downloadedFiles.length,
+      );
+      if (result.isComplete ) {
         await captureSnapshot(page, jobId, "result");
         break;
       }
@@ -335,7 +333,7 @@ export async function askChatGpt(
       // file theo đúng tham số jobId truyền vào) — nếu không, mỗi lượt sẽ ghi
       // đè lên đúng 1 file, mất hết ảnh các lượt trước.
       await captureSnapshot(page, `${jobId}-no-file-turn-${turn}`, `no-file-turn-${turn}`);
-      messageToSend = "yes";
+      messageToSend = "yes. chỉ gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json";
     }
 
     return { downloadedFiles };

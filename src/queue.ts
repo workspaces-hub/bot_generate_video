@@ -247,8 +247,9 @@ interface GptPipelineResult {
  *    chỉ báo lỗi cho user (folder ảnh vẫn còn nguyên trên đĩa để kiểm tra/
  *    chạy lại thủ công).
  * 3. Nếu KHÔNG lỗi ảnh nào: tiếp tục tạo toàn bộ video (generateVideosForFile)
- *    — lưu vào reference-images/<tên file json>/videos/, rồi nén CẢ folder
- *    thành 1 file .zip để gửi.
+ *    — lưu vào reference-images/<tên file json>/videos/, rồi CHỈ nén folder
+ *    "videos" đó (không nén cả folder reference-images/<tên file json>) thành
+ *    1 file .zip đặt tên trùng tên file JSON input để gửi.
  * File KHÔNG phải .json (hiếm khi xảy ra) gửi thẳng như trước, không qua các
  * bước trên.
  */
@@ -275,8 +276,13 @@ async function runStoryboardPipeline(downloadedFiles: string[]): Promise<GptPipe
       const videosResult = await generateVideosForFile(filePath);
       failedVideoEntries.push(...videosResult.failedEntries);
 
+      // Chỉ nén folder "videos" (không nén cả folder reference-images/<tên
+      // file json> — bên trong còn có characters/locations/file json gốc,
+      // không cần gửi lại) — đặt tên file zip trùng tên file JSON input, GIỮ
+      // NGUYÊN quy ước cũ (outputDir đã là reference-images/<tên file json>
+      // nên `${imagesResult.outputDir}.zip` vẫn đúng tên).
       const zipPath = `${imagesResult.outputDir}.zip`;
-      await zipDirectory(imagesResult.outputDir, zipPath);
+      await zipDirectory(videosResult.videosDir, zipPath);
       zipFiles.push(zipPath);
     }
   }
