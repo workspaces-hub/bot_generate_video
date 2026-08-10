@@ -322,7 +322,19 @@ async function readLatestAssistantMessage(
   promptFileName?: string,
 ): Promise<{ downloadedFiles: string[]; isComplete: boolean }> {
   const messages = assistantMessageLocator(page);
-  const count = await messages.count();
+  // Xác nhận qua debug thật (job 98d9a048): dù sendMessage đã xác nhận GPT
+  // trả lời xong thật (hasSeenGenerating true, nút Stop đã biến mất hẳn),
+  // trang đôi khi vẫn kẹt ở màn hình loading (spinner giữa trang, canonical
+  // URL chưa kịp đổi sang "/c/...") 1 lúc trước khi lịch sử hội thoại thật sự
+  // render ra DOM — không phải do sendMessage kết luận sai, mà do trang tải
+  // chậm SAU KHI đã xong. Poll thêm vài giây thay vì throw ngay ở lần check
+  // đầu tiên.
+  let count = await messages.count();
+  const pollDeadline = Date.now() + 30_000;
+  while (count === 0 && Date.now() < pollDeadline) {
+    await page.waitForTimeout(1000);
+    count = await messages.count();
+  }
   if (count === 0) {
     throw new ChatGptError(
       "Không tìm thấy câu trả lời nào từ ChatGPT trên trang",
