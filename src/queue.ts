@@ -289,6 +289,7 @@ async function runStoryboardPipeline(
     }
 
     const imagesResult = await generateReferenceImagesForFile(filePath);
+    console.log("🚀 ~ runStoryboardPipeline ~ imagesResult:", imagesResult)
     failedImageEntries.push(...imagesResult.failedEntries);
 
     // Chỉ nén + gửi kết quả khi KHÔNG có ảnh nào lỗi và đã tạo được video —

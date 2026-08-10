@@ -36,6 +36,20 @@ const generatedImageLocator = (message: Locator): Locator =>
   );
 
 /**
+ * Khối placeholder "đang tạo ảnh" (khung mờ + hiệu ứng chấm động) — DOM thật
+ * xác nhận (job 7fb6c915): `<div aria-label="Generating image..."
+ * data-testid="image-gen-loading-state">`. Dấu hiệu ĐÁNG TIN CẬY HƠN nút Stop
+ * để biết ảnh CÒN đang generate: nút Stop (data-testid="stop-button") có thể
+ * "chớp tắt" (biến mất rồi hiện lại) giữa chừng dù ảnh chưa xong — nếu chỉ
+ * dựa vào việc thiếu nút Stop trong 3s, vòng lặp coi nhầm là ĐÃ XONG ngay lúc
+ * placeholder này vẫn còn nguyên trên trang (throw nhầm "không thấy ảnh nào
+ * được tạo" dù GPT còn đang render) — xác nhận qua nhiều job thật (7fb6c915,
+ * 2f168624). Khối này chỉ biến mất khi ảnh thật đã render xong.
+ */
+const imageLoadingLocator = (message: Locator): Locator =>
+  message.locator('[data-testid="image-gen-loading-state"]');
+
+/**
  * Gõ prompt rồi bấm gửi, chờ GPT tạo ảnh xong — cùng cơ chế với
  * sendMessage trong chatgpt.ts (clipboard paste, chờ nút Stop vắng mặt ổn
  * định), nhưng dấu hiệu "xong thay thế" ở đây là ẢNH đã xuất hiện trong tin
@@ -130,13 +144,22 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
       .catch(() => false);
     if (stillGenerating) hasSeenGenerating = true;
 
-    const hasImageReady = await (async () => {
+    const { hasImageReady, isImageLoading } = await (async () => {
       const messages = assistantMessageLocator(page);
-      if ((await messages.count()) === 0) return false;
-      return (await generatedImageLocator(messages.last()).count()) > 0;
+      if ((await messages.count()) === 0)
+        return { hasImageReady: false, isImageLoading: false };
+      const latest = messages.last();
+      return {
+        hasImageReady: (await generatedImageLocator(latest).count()) > 0,
+        isImageLoading: (await imageLoadingLocator(latest).count()) > 0,
+      };
     })();
+    if (isImageLoading) hasSeenGenerating = true;
 
-    if ((stillGenerating || !hasSeenGenerating) && !hasImageReady) {
+    if (
+      (stillGenerating || !hasSeenGenerating || isImageLoading) &&
+      !hasImageReady
+    ) {
       stableSince = null;
     } else {
       if (stableSince === null) stableSince = Date.now();
