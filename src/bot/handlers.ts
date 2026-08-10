@@ -14,6 +14,7 @@ import { enqueueJob } from "../queue";
 import {
   CHARACTER_REF_BUTTON_LABEL,
   GPT_BUTTON_LABEL,
+  GPT_CHECK_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
@@ -21,7 +22,14 @@ import {
   promptMenu,
 } from "./keyboard";
 
-type PendingMode = "video" | "image" | "videoRef" | "characterRef" | "omniRef" | "gpt";
+type PendingMode =
+  | "video"
+  | "image"
+  | "videoRef"
+  | "characterRef"
+  | "omniRef"
+  | "gpt"
+  | "gptCheck";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -293,6 +301,10 @@ interface SubmitGptParams {
   groupChatId: number;
   promptMessageId: number;
   rawText: string;
+  /** true = chế độ "Check prompt kịch bản" — chỉ hỏi GPT + gửi lại file tải về, không gen ảnh/video. */
+  skipPipeline?: boolean;
+  /** Tên file .txt user upload làm prompt (nếu gửi qua file thay vì gõ text) — dùng đặt tên lại file JSON GPT trả về, xem queue.ts. */
+  promptFileName?: string;
 }
 
 /** Chế độ "GPT" chỉ nhận text thuần, không có ảnh/model/resolution nào — dùng thẳng rawText làm prompt, không qua parsePromptMessage. */
@@ -301,6 +313,8 @@ async function submitGptJob({
   groupChatId,
   promptMessageId,
   rawText,
+  skipPipeline,
+  promptFileName,
 }: SubmitGptParams): Promise<void> {
   const prompt = rawText.trim();
 
@@ -322,6 +336,8 @@ async function submitGptJob({
     prompt,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
+    skipPipeline,
+    promptFileName,
   });
 }
 
@@ -600,6 +616,17 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(GPT_CHECK_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "gptCheck");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt kịch bản ở tin nhắn tiếp theo, ` +
+        `hoặc gửi 1 file .txt chứa prompt (dùng khi prompt quá dài). ` +
+        `Bot sẽ hỏi GPT rồi gửi lại NGUYÊN file JSON tải về để bạn kiểm tra — KHÔNG gen ảnh/video.`,
+    );
+  });
+
   bot.on(message("text"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
     if (
@@ -609,7 +636,8 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === VIDEO_REF_BUTTON_LABEL ||
       ctx.message.text === CHARACTER_REF_BUTTON_LABEL ||
       ctx.message.text === OMNI_REF_BUTTON_LABEL ||
-      ctx.message.text === GPT_BUTTON_LABEL
+      ctx.message.text === GPT_BUTTON_LABEL ||
+      ctx.message.text === GPT_CHECK_BUTTON_LABEL
     ) {
       return next();
     }
@@ -657,12 +685,13 @@ export function registerHandlers(bot: Telegraf): void {
         userId,
         rawText: ctx.message.text,
       });
-    } else if (mode === "gpt") {
+    } else if (mode === "gpt" || mode === "gptCheck") {
       await submitGptJob({
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
         rawText: ctx.message.text,
+        skipPipeline: mode === "gptCheck",
       });
     } else {
       await submitImageJob({
@@ -797,10 +826,11 @@ export function registerHandlers(bot: Telegraf): void {
 
     const userId = ctx.from.id;
 
-    // Chế độ "GPT": user gửi prompt qua file .txt thay vì gõ trực tiếp (dùng
-    // khi prompt quá dài) — đọc thẳng nội dung file làm prompt, không lưu
-    // buffer/ảnh gì cả.
-    if (waitingMode.get(userId) === "gpt") {
+    // Chế độ "GPT"/"Check prompt kịch bản": user gửi prompt qua file .txt
+    // thay vì gõ trực tiếp (dùng khi prompt quá dài) — đọc thẳng nội dung
+    // file làm prompt, không lưu buffer/ảnh gì cả.
+    const gptMode = waitingMode.get(userId);
+    if (gptMode === "gpt" || gptMode === "gptCheck") {
       waitingMode.delete(userId);
       let promptText: string;
       try {
@@ -815,6 +845,8 @@ export function registerHandlers(bot: Telegraf): void {
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
         rawText: promptText,
+        skipPipeline: gptMode === "gptCheck",
+        promptFileName: ctx.message.document.file_name,
       });
       return;
     }

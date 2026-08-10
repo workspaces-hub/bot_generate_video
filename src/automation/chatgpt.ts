@@ -167,6 +167,7 @@ async function downloadAttachedFiles(
   page: Page,
   message: Locator,
   jobId: string,
+  promptFileName?: string,
 ): Promise<string[]> {
   const downloadLinks = downloadFileLinkLocator(message);
   const attachments =
@@ -176,6 +177,13 @@ async function downloadAttachedFiles(
   const count = await attachments.count();
   console.log("🚀 ~ downloadAttachedFiles ~ count:", count);
   const savedPaths: string[] = [];
+  // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file GPT
+  // trả về giống tên file đó (giữ nguyên đuôi thật của file tải về, vd
+  // .json) thay vì tên GPT tự đặt — dễ đối chiếu với file prompt gốc. Nhiều
+  // file cùng lượt (hiếm) thì đánh số thêm "-2", "-3"... để không đè lên nhau.
+  const promptFileBaseName = promptFileName
+    ? path.basename(promptFileName, path.extname(promptFileName))
+    : null;
 
   for (let i = 0; i < count; i++) {
     try {
@@ -218,10 +226,10 @@ async function downloadAttachedFiles(
 
       await fs.promises.mkdir(config.chatGptResultsDir, { recursive: true });
       const suggested = download.suggestedFilename() || `attachment-${i}`;
-      const filePath = path.join(
-        config.chatGptResultsDir,
-        `${jobId}-${suggested}`,
-      );
+      const fileName = promptFileBaseName
+        ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggested)}`
+        : `${jobId}-${suggested}`;
+      const filePath = path.join(config.chatGptResultsDir, fileName);
       await download.saveAs(filePath);
       savedPaths.push(filePath);
     } catch (err) {
@@ -253,6 +261,7 @@ function isCompletionText(text: string): boolean {
 async function readLatestAssistantMessage(
   page: Page,
   jobId: string,
+  promptFileName?: string,
 ): Promise<{ downloadedFiles: string[]; isComplete: boolean }> {
   const messages = assistantMessageLocator(page);
   const count = await messages.count();
@@ -263,7 +272,7 @@ async function readLatestAssistantMessage(
   }
   const latest: Locator = messages.last();
 
-  const downloadedFiles = await downloadAttachedFiles(page, latest, jobId);
+  const downloadedFiles = await downloadAttachedFiles(page, latest, jobId, promptFileName);
   const text = await latest.innerText().catch(() => "");
 
   return { downloadedFiles, isComplete: isCompletionText(text) };
@@ -285,6 +294,7 @@ async function readLatestAssistantMessage(
 export async function askChatGpt(
   prompt: string,
   jobId: string,
+  promptFileName?: string,
 ): Promise<{ downloadedFiles: string[] }> {
   const context = await getChatGptBrowserContext();
   const page = await context.newPage();
@@ -315,7 +325,7 @@ export async function askChatGpt(
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
       await sendMessage(page, messageToSend);
 
-      const result = await readLatestAssistantMessage(page, jobId);
+      const result = await readLatestAssistantMessage(page, jobId, promptFileName);
       downloadedFiles = result.downloadedFiles;
       console.log(
         "result.isComplete, downloadedFiles.length",

@@ -45,6 +45,10 @@ export interface ImageGenerationJob extends BaseJob {
 
 export interface GptJob extends BaseJob {
   type: "gpt";
+  /** true = chỉ hỏi GPT rồi gửi lại NGUYÊN file tải về (vd JSON storyboard) để check nhanh — KHÔNG chạy runStoryboardPipeline (không gen ảnh/video). */
+  skipPipeline?: boolean;
+  /** Tên file .txt user upload làm prompt (nếu có) — dùng đặt tên lại file GPT trả về (xem askChatGpt) thay vì tên GPT tự đặt. */
+  promptFileName?: string;
 }
 
 /** Job dùng chung 1 browser context (hailuoai.video) — video và ảnh cùng site nên phải xếp hàng tuần tự. */
@@ -231,9 +235,13 @@ async function processGptQueue(): Promise<void> {
       const job = gptJobs[0];
       const jobId = randomUUID();
       try {
-        const { downloadedFiles } = await askChatGpt(job.prompt, jobId);
-        const result = await runStoryboardPipeline(downloadedFiles);
-        await notifyGptSuccess(job, result);
+        const { downloadedFiles } = await askChatGpt(job.prompt, jobId, job.promptFileName);
+        if (job.skipPipeline) {
+          await notifyGptCheckSuccess(job, downloadedFiles);
+        } else {
+          const result = await runStoryboardPipeline(downloadedFiles);
+          await notifyGptSuccess(job, result);
+        }
       } catch (err) {
         await notifyError(job, err);
       } finally {
@@ -517,6 +525,41 @@ async function sendDocumentMaybeSplit(
   } finally {
     await Promise.all(partPaths.map((p) => fsp.unlink(p).catch(() => {})));
   }
+}
+
+/**
+ * Dùng cho job "Check prompt kịch bản" (GptJob.skipPipeline = true) — GPT trả
+ * lời xong thì gửi lại NGUYÊN các file tải về (thường là 1 file JSON
+ * storyboard) để user kiểm tra nội dung nhanh, KHÔNG gen ảnh/video, KHÔNG nén
+ * zip. Không xoá file sau khi gửi — giữ làm lưu trữ.
+ */
+async function notifyGptCheckSuccess(
+  job: GptJob,
+  downloadedFiles: string[],
+): Promise<void> {
+  if (!telegram) return;
+  try {
+    if (downloadedFiles.length === 0) {
+      await telegram.sendMessage(job.chatId, `✅ GPT đã trả lời xong (không có file đính kèm).`, {
+        reply_parameters: { message_id: job.promptMessageId },
+      });
+    }
+    for (const [i, filePath] of downloadedFiles.entries()) {
+      await sendDocumentMaybeSplit(
+        job.chatId,
+        filePath,
+        i === 0 ? `✅ Kết quả check GPT` : `📎 ${path.basename(filePath)}`,
+        job.promptMessageId,
+      );
+    }
+  } catch (err) {
+    console.error("[queue] Gửi kết quả check GPT thất bại:", err);
+    await telegram.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+    await notifyAdmins(err);
+  }
+  await deleteStatusMessage(job);
 }
 
 /**

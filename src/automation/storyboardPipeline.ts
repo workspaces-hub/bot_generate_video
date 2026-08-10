@@ -275,7 +275,7 @@ export async function generateVideosForFile(
 
       const destPath = path.join(
         videosDir,
-        `jobId_${sanitizeId(entry.id)}.mp4`,
+        `${sanitizeId(entry.id)}.mp4`,
       );
       try {
         await fs.promises.rename(tempFilePath, destPath);
