@@ -280,7 +280,7 @@ export async function generateReferenceImagesForFileViaHailuo(
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
     if (entry?.success) continue;
-    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
+    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     console.log(
       `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (hailuo)...`,
     );
@@ -474,7 +474,7 @@ export async function generateVideosForFile(
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
     if (entry?.success) continue;
-    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
+    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video...`);
     try {
       const refs = (entry.ref ?? []).filter(
@@ -602,7 +602,7 @@ export async function generateSceneImagesForFile(
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
     if (entry?.success) continue;
-    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
+    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     try {
       // Xác nhận qua thực tế (job d1bf82f7, entry SCENE_19_END): JSON
       // storyboard có thể tự khai báo ref TỚI 1 entry SCENE_SETTING khác (vd
@@ -712,7 +712,7 @@ export async function generateSceneImagesForFileViaHailuo(
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
     if (entry?.success) continue;
-    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
+    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     console.log(
       `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đang tạo ảnh (hailuo)...`,
     );
