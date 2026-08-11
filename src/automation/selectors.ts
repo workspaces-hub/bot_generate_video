@@ -23,6 +23,21 @@ export async function firstVisible(candidates: Array<() => Locator>, timeoutMs =
   );
 }
 
+/**
+ * Nhận diện lỗi Chrome renderer CRASH THẬT (khác lỗi selector/timeout thường)
+ * — xác nhận qua log lỗi thật: "page.screenshot: Target crashed" xảy ra khi
+ * tiến trình renderer của tab chết giữa chừng (thường do OOM dưới Xvfb, xem
+ * launch.ts). Khi đã crash, page/context KHÔNG dùng lại được nữa — mọi thao
+ * tác Playwright tiếp theo trên cùng page đều throw lỗi có message chứa
+ * "crashed" hoặc "has been closed". Dùng chung cho hailuo.ts (generateVideo)
+ * và chatgptImage.ts (generateReferenceImage) để tự mở tab MỚI thử lại thay
+ * vì để cả job fail hẳn vì 1 lần crash thoáng qua.
+ */
+export function isPageCrashError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /crashed|has been closed/i.test(message);
+}
+
 export const promptInputCandidates = (page: Page): Array<() => Locator> => [
   // Ô nhập prompt thật là rich-text editor (Slate.js, contenteditable) với
   // id cố định, không phải <textarea>/<input>. Không dùng getByRole("textbox")
@@ -44,6 +59,33 @@ export const modelChipCandidates = (page: Page): Array<() => Locator> => [
 export const resolutionChipCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /^\d{3,4}p$/i }),
   () => page.getByText(/^\d{3,4}p$/i),
+];
+
+/**
+ * DOM THẬT xác nhận (debug snapshot "<jobId>-before-generate-click"): chip
+ * chọn SỐ LƯỢNG ảnh tạo ra mỗi lần generate là 1 `<div class="... cursor-pointer
+ * ...">` chứa icon (stack/layers) + `<span class="ml-1 text-[13px]
+ * text-hl_text_02">4</span>` — hoàn toàn KHÔNG có role="button"/thẻ <button>
+ * nào (khác hẳn chip model/resolution) — getByRole("button", ...) dùng ở bản
+ * phỏng đoán ban đầu KHÔNG BAO GIỜ khớp được, xác nhận đây chính là lý do
+ * selectImageCount (hailuoImage.ts) chưa từng chọn được số ảnh (chip vẫn giữ
+ * mặc định "4" dù gọi với imageCount=1). Nằm trong toolbar góc dưới-phải
+ * khung nhập prompt (`div[class*="right-3"][class*="bottom-3"]`), ngay TRƯỚC
+ * icon credit + nút "Create" — KHÔNG cùng khu vực với chip model/resolution
+ * như phỏng đoán ban đầu.
+ *
+ * CHƯA có DOM thật của POPOVER sau khi bấm chip này (chưa xác nhận có đúng
+ * dùng chung cấu trúc "ant-popover-content"/dropdownOptionCandidates với các
+ * chip khác không) — nếu selectChipOption vẫn không chọn được sau khi sửa
+ * candidate này, cần thêm 1 debug snapshot NGAY SAU KHI CLICK chip để xem
+ * cấu trúc popover thật.
+ */
+export const imageCountChipCandidates = (page: Page): Array<() => Locator> => [
+  () => page.locator("span.ml-1", { hasText: /^[1-4]$/ }),
+  () =>
+    page.locator('div[class*="right-3"][class*="bottom-3"] div.cursor-pointer', {
+      hasText: /^[1-4]$/,
+    }),
 ];
 
 const VIDEO_INPUT_MODE_NAMES = [

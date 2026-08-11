@@ -25,6 +25,7 @@ import {
   getOmniReferenceCount,
   getReferenceImageCount,
   historyVideoLocator,
+  isPageCrashError,
   modelChipCandidates,
   openPopoverLocator,
   promptInputCandidates,
@@ -55,7 +56,37 @@ export interface GenerateVideoOptions {
   omniReferencePaths?: string[];
 }
 
+/**
+ * Xác nhận qua log lỗi thật ("page.screenshot: Target crashed"): Chrome
+ * renderer của tab đôi khi CRASH THẬT giữa chừng (nghi do OOM dưới Xvfb, xem
+ * launch.ts) — page đã crash không dùng lại được nữa (mọi thao tác tiếp theo
+ * đều throw), không phải lỗi selector/timeout thường. Tự mở tab MỚI (gọi lại
+ * attemptGenerateVideo từ đầu — hàm đó tự tạo page riêng) thử lại 1 lần
+ * trước khi chịu thua, vì phần lớn là sự cố thoáng qua.
+ */
 export async function generateVideo(
+  prompt: string,
+  options: GenerateVideoOptions,
+  jobId: string,
+): Promise<string> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptGenerateVideo(prompt, options, jobId);
+    } catch (err) {
+      if (isPageCrashError(err) && attempt < maxCrashRetries) {
+        // console.warn(
+        //   `[hailuo] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+        //   err instanceof Error ? err.message : err,
+        // );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function attemptGenerateVideo(
   prompt: string,
   {
     resolution,

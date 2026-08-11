@@ -28,6 +28,7 @@ import {
   getEntryFeedId,
   getReferenceImageCount,
   historyImageEntryLocator,
+  imageCountChipCandidates,
   imageModeTabCandidates,
   modelChipCandidates,
   promptInputCandidates,
@@ -38,26 +39,65 @@ export const MAX_REFERENCE_IMAGES = 16;
 export interface GenerateImageOptions {
   model?: string;
   referenceImagePaths?: string[];
+  /** Số ảnh tạo ra mỗi lần generate — mặc định 4 (đúng số ảnh site tự tạo nếu không chỉnh, xem selectImageCount). */
+  imageCount?: 1 | 2 | 3 | 4;
+}
+
+/**
+ * Chọn số lượng ảnh tạo ra mỗi lần generate (chip riêng trong toolbar khung
+ * nhập prompt, nghi cùng khu vực với modelChipCandidates — xem
+ * imageCountChipCandidates trong selectors.ts, CHƯA có DOM thật xác nhận).
+ *
+ * Đọc nhãn chip HIỆN TẠI trước — nếu đã đúng số count cần chọn thì bỏ qua
+ * luôn (theo yêu cầu người dùng), không mở dropdown/chọn lại: vừa đỡ 1 thao
+ * tác thừa, vừa tránh trường hợp bấm vào đúng chip đang mở lại VÔ TÌNH đóng
+ * dropdown nếu site coi đây là nút toggle thay vì luôn mở.
+ */
+async function selectImageCount(
+  page: Page,
+  imageCount: 1 | 2 | 3 | 4,
+): Promise<void> {
+  console.log("🚀 ~ selectImageCount ~ imageCount:", imageCount)
+  const chip = await firstVisible(imageCountChipCandidates(page), 3000).catch(
+    () => null,
+  );
+  if (chip) {
+    const currentLabel = await chip.innerText().catch(() => "");
+    if (new RegExp(`^\\s*${imageCount}\\b`).test(currentLabel)) {
+      return;
+    }
+  }
+  await selectChipOption(
+    page,
+    imageCountChipCandidates(page),
+    String(imageCount),
+    "số lượng ảnh",
+  );
 }
 
 /**
  * Tạo ảnh từ prompt + tối đa 16 ảnh tham chiếu (tuỳ chọn). Mỗi lần generate
- * trả về CẢ CỤM nhiều ảnh (thực tế xác nhận: 4 ảnh/lần) — trả về mảng path,
- * không phải 1 file duy nhất như video.
+ * trả về CẢ CỤM nhiều ảnh (mặc định 4 ảnh/lần, tuỳ chỉnh qua imageCount) —
+ * trả về mảng path, không phải 1 file duy nhất như video.
  */
 export async function generateImage(
   prompt: string,
-  { model, referenceImagePaths = [] }: GenerateImageOptions,
+  { model, referenceImagePaths = [], imageCount = 4 }: GenerateImageOptions,
   jobId: string,
 ): Promise<string[]> {
   if (referenceImagePaths.length > MAX_REFERENCE_IMAGES) {
-    throw new GenerationError(`Chỉ hỗ trợ tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu.`);
+    throw new GenerationError(
+      `Chỉ hỗ trợ tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu.`,
+    );
   }
 
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
-    const url = new URL(config.hailuoCreateImagePath, config.hailuoBaseUrl).toString();
+    const url = new URL(
+      config.hailuoCreateImagePath,
+      config.hailuoBaseUrl,
+    ).toString();
     await gotoWithRetry(page, url);
 
     await ensureLoggedIn(page);
@@ -88,7 +128,9 @@ export async function generateImage(
     // thời gian hydrate. Nếu không có ảnh tham chiếu thì không bước nào ở
     // trên chờ mạng cả, nên vẫn cần chờ ở đây trước khi tìm ô nhập prompt.
     if (referenceImagePaths.length === 0) {
-      await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+      await page
+        .waitForLoadState("networkidle", { timeout: 20_000 })
+        .catch(() => {});
     }
 
     await dismissBlockingOverlays(page);
@@ -101,7 +143,12 @@ export async function generateImage(
     if (model) {
       await selectChipOption(page, modelChipCandidates(page), model, "model");
     }
-
+    await selectImageCount(page, imageCount);
+    await captureSnapshot(
+      page,
+      jobId + "-before-generate-cl ick",
+      "before-generate-click",
+    );
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác ảnh
     // nào là MỚI (không phải ảnh cũ nhất trong lịch sử) — cùng cách tiếp
     // cận đã dùng cho video (xem waitForNewVideo trong hailuo.ts).
@@ -111,15 +158,25 @@ export async function generateImage(
     await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    await captureSnapshot(page, jobId + "-after-generate-click", "after-generate-click");
+    await captureSnapshot(
+      page,
+      jobId + "-after-generate-click",
+      "after-generate-click",
+    );
 
-    const newEntry = await waitForNewImageEntry(page, baseline, config.generationTimeoutMs);
+    const newEntry = await waitForNewImageEntry(
+      page,
+      baseline,
+      config.generationTimeoutMs,
+    );
     await waitForEntryImagesToSettle(page, newEntry);
 
     return await downloadImagesInEntry(page, newEntry, jobId);
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
-    throw err instanceof GenerationError ? err : new GenerationError(err instanceof Error ? err.message : String(err));
+    throw err instanceof GenerationError
+      ? err
+      : new GenerationError(err instanceof Error ? err.message : String(err));
   } finally {
     await page.close();
   }
@@ -132,11 +189,16 @@ export async function generateImage(
  * spinner lúc bấm Generate). Đây mới là tín hiệu chính xác ảnh đã sẵn sàng.
  */
 async function waitForUploadsToSettle(page: Page): Promise<void> {
-  await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+  await page
+    .waitForLoadState("networkidle", { timeout: 15_000 })
+    .catch(() => {});
 
   try {
     await page.waitForFunction(
-      () => document.querySelectorAll('[aria-label="Uploaded image, click to preview"][aria-busy="true"]').length === 0,
+      () =>
+        document.querySelectorAll(
+          '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
+        ).length === 0,
       { timeout: 600_000 },
     );
   } catch {
@@ -156,7 +218,11 @@ async function waitForUploadsToSettle(page: Page): Promise<void> {
  * Thử đóng popup quảng cáo trước, và thử lại 1 lần nếu lần đầu thất bại
  * (có thể do popup bật ra đúng lúc đó).
  */
-async function uploadReferenceImage(page: Page, imagePath: string, expectedCountAfter: number): Promise<void> {
+async function uploadReferenceImage(
+  page: Page,
+  imagePath: string,
+  expectedCountAfter: number,
+): Promise<void> {
   await dismissBlockingOverlays(page);
   try {
     await attemptUploadReferenceImage(page, imagePath, expectedCountAfter);
@@ -167,9 +233,16 @@ async function uploadReferenceImage(page: Page, imagePath: string, expectedCount
   }
 }
 
-async function attemptUploadReferenceImage(page: Page, imagePath: string, expectedCountAfter: number): Promise<void> {
+async function attemptUploadReferenceImage(
+  page: Page,
+  imagePath: string,
+  expectedCountAfter: number,
+): Promise<void> {
   try {
-    const addButton = await firstVisible(addReferenceImageButtonCandidates(page), 8000);
+    const addButton = await firstVisible(
+      addReferenceImageButtonCandidates(page),
+      8000,
+    );
     const [fileChooser] = await Promise.all([
       page.waitForEvent("filechooser", { timeout: 10_000 }),
       clickDismissingModals(page, addButton),
@@ -218,7 +291,11 @@ async function captureImageBaseline(page: Page): Promise<ImageBaseline> {
  * bên trong thay vì chỉ 1 ảnh đầu/cuối. Cùng cách tiếp cận với
  * waitForNewVideo — xem chú thích ở đó.
  */
-async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeoutMs: number): Promise<Locator> {
+async function waitForNewImageEntry(
+  page: Page,
+  baseline: ImageBaseline,
+  timeoutMs: number,
+): Promise<Locator> {
   const entries = historyImageEntryLocator(page);
   const start = Date.now();
   const pollIntervalMs = 5000;
@@ -252,7 +329,9 @@ async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeout
     await page.waitForTimeout(pollIntervalMs);
   }
 
-  throw new GenerationError(`Hết thời gian chờ tạo ảnh (timeout ${timeoutMs}ms)`);
+  throw new GenerationError(
+    `Hết thời gian chờ tạo ảnh (timeout ${timeoutMs}ms)`,
+  );
 }
 
 /**
@@ -272,7 +351,11 @@ async function waitForNewImageEntry(page: Page, baseline: ImageBaseline, timeout
  * đổi: case "cả 4 đều lỗi" sẽ chờ hết timeoutMs (10 phút) mới báo lỗi, đổi
  * lấy việc không bao giờ cắt ngang 1 job đang generate bình thường.
  */
-async function waitForEntryImagesToSettle(page: Page, entry: Locator, timeoutMs = 600_000): Promise<void> {
+async function waitForEntryImagesToSettle(
+  page: Page,
+  entry: Locator,
+  timeoutMs = 600_000,
+): Promise<void> {
   const images = entryImagesLocator(entry);
   const start = Date.now();
   const pollIntervalMs = 15000;
@@ -324,19 +407,27 @@ async function getEntryFeedIds(entry: Locator): Promise<string[]> {
  * Next.js flight data của trang — đáng tin cậy hơn nhiều so với fetch thẳng
  * <img src> (bản đó có watermark, giống video trước khi sửa).
  */
-async function downloadImagesInEntry(page: Page, entry: Locator, jobId: string): Promise<string[]> {
+async function downloadImagesInEntry(
+  page: Page,
+  entry: Locator,
+  jobId: string,
+): Promise<string[]> {
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
 
   const feedIds = await getEntryFeedIds(entry);
   if (feedIds.length === 0) {
     // Cả cụm (thường 4 ảnh) đều rơi vào trạng thái lỗi (data-batch-disabled,
     // không có <img src>) — không phải bug, chỉ là site tạo ảnh thất bại.
-    throw new GenerationError("Không tạo được ảnh nào — site báo lỗi tất cả ảnh trong lần generate này");
+    throw new GenerationError(
+      "Không tạo được ảnh nào — site báo lỗi tất cả ảnh trong lần generate này",
+    );
   }
 
   const filePaths: string[] = [];
   for (let i = 0; i < feedIds.length; i++) {
-    filePaths.push(await downloadImageByFeedId(page, feedIds[i], jobId, i, feedIds.length));
+    filePaths.push(
+      await downloadImageByFeedId(page, feedIds[i], jobId, i, feedIds.length),
+    );
   }
   return filePaths;
 }
@@ -348,7 +439,10 @@ async function downloadImageByFeedId(
   index: number,
   total: number,
 ): Promise<string> {
-  const detailUrl = new URL(`/my-work-detail/ai-image/${feedId}`, config.hailuoBaseUrl);
+  const detailUrl = new URL(
+    `/my-work-detail/ai-image/${feedId}`,
+    config.hailuoBaseUrl,
+  );
   detailUrl.searchParams.set("source-page", "create");
   await gotoWithRetry(page, detailUrl.toString());
 
@@ -358,9 +452,15 @@ async function downloadImageByFeedId(
   // dù trang sau đó vẫn render đúng. Chờ tới khi flight data thật sự xuất
   // hiện trong DOM trước khi trích xuất.
   await page
-    .waitForFunction(() => document.documentElement.innerHTML.includes("downloadURLWithoutWatermark"), {
-      timeout: 600_000,
-    })
+    .waitForFunction(
+      () =>
+        document.documentElement.innerHTML.includes(
+          "downloadURLWithoutWatermark",
+        ),
+      {
+        timeout: 600_000,
+      },
+    )
     .catch(() => {});
 
   // Đọc self.__next_f đã nối lại (KHÔNG dùng page.content() thô) — tránh bị
@@ -374,7 +474,10 @@ async function downloadImageByFeedId(
   // Suy ra đuôi file thật từ URL thay vì hardcode .png — tránh lệch định
   // dạng thật (có thể là .jpg/.webp) khiến Telegram xử lý ảnh lỗi.
   const ext = path.extname(new URL(noWatermarkUrl).pathname) || ".png";
-  const filePath = path.join(config.downloadDir, total > 1 ? `${jobId}-${index + 1}${ext}` : `${jobId}${ext}`);
+  const filePath = path.join(
+    config.downloadDir,
+    total > 1 ? `${jobId}-${index + 1}${ext}` : `${jobId}${ext}`,
+  );
   await fs.promises.writeFile(filePath, await response.body());
   return filePath;
 }

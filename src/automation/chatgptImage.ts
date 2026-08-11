@@ -15,7 +15,7 @@ import {
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
 } from "./chatgptSelectors";
-import { firstVisible } from "./selectors";
+import { firstVisible, isPageCrashError } from "./selectors";
 // captureSnapshot/captureErrorSnapshot đã tổng quát (chỉ cần Page + jobId),
 // dùng lại nguyên bản thay vì viết trùng cho chatgpt.com (cùng cách chatgpt.ts đã làm).
 import { captureErrorSnapshot, captureSnapshot } from "./hailuo";
@@ -308,7 +308,45 @@ function enqueueImageGeneration<T>(task: () => Promise<T>): Promise<T> {
   return result;
 }
 
+/**
+ * Xác nhận qua log lỗi thật ("page.screenshot: Target crashed"): Chrome
+ * renderer của tab đôi khi CRASH THẬT giữa chừng (nghi do OOM dưới Xvfb, xem
+ * launch.ts) — page đã crash không dùng lại được nữa (mọi thao tác tiếp theo
+ * đều throw), không phải lỗi selector/timeout thường. Tự mở tab MỚI (gọi lại
+ * attemptGenerateReferenceImage từ đầu — hàm đó tự tạo page riêng) thử lại 1
+ * lần trước khi chịu thua, vì phần lớn là sự cố thoáng qua.
+ */
 async function generateReferenceImageInternal(
+  prompt: string,
+  destDir: string,
+  baseFileName: string,
+  jobId: string,
+  refImagePaths?: string[],
+): Promise<GenerateReferenceImageResult> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptGenerateReferenceImage(
+        prompt,
+        destDir,
+        baseFileName,
+        jobId,
+        refImagePaths,
+      );
+    } catch (err) {
+      if (isPageCrashError(err) && attempt < maxCrashRetries) {
+        console.warn(
+          `[chatgptImage] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function attemptGenerateReferenceImage(
   prompt: string,
   destDir: string,
   baseFileName: string,
@@ -379,6 +417,25 @@ async function generateReferenceImageInternal(
       }
       latest = messages.last();
       images = generatedImageLocator(latest);
+      if ((await images.count()) === 0) {
+        // Xác nhận qua debug thật (job 808d9e73): debug snapshot lúc lỗi cho
+        // thấy ảnh ĐÃ tạo xong thật, khớp đúng selector — nhưng snapshot đó
+        // được ghi đè LÚC catch (captureErrorSnapshot dùng CHUNG tên file với
+        // snapshot "result" ở trên), tức chụp SAU khi code đã throw. Vậy thẻ
+        // <img src=...estuary/content...> mount TRỄ hơn 1 nhịp so với lúc nút
+        // Stop/khối loading placeholder vừa biến mất ổn định (đã coi là
+        // "xong") — không phải lỗi selector. Poll thêm 1 khoảng ngắn trước
+        // khi kết luận thật sự không có ảnh, tránh throw nhầm vì chỉ thiếu
+        // đúng nhịp render cuối.
+        const imagePollStart = Date.now();
+        const imagePollTimeoutMs = 20_000;
+        while (
+          (await images.count()) === 0 &&
+          Date.now() - imagePollStart < imagePollTimeoutMs
+        ) {
+          await page.waitForTimeout(500);
+        }
+      }
       if ((await images.count()) > 0) break;
 
       const latestText = await latest.innerText().catch(() => "");

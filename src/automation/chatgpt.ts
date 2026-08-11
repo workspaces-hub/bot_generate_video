@@ -235,12 +235,12 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     //   return (await fileAttachmentLocator(messages.last()).count()) > 0;
     // })();
 
-    console.log(
-      "stillGenerating ",
-      stillGenerating,
-      "hasSeenGenerating",
-      hasSeenGenerating,
-    );
+    // console.log(
+    //   "stillGenerating ",
+    //   stillGenerating,
+    //   "hasSeenGenerating",
+    //   hasSeenGenerating,
+    // );
     if (!stillGenerating) {
       if (hasSeenGenerating) return;
       // Chưa từng thấy nút Stop — chỉ coi là xong nếu trang đã thật sự có
@@ -283,7 +283,6 @@ async function downloadAttachedFiles(
       ? downloadLinks
       : fileCardLocator(message);
   const count = await attachments.count();
-  console.log("🚀 ~ downloadAttachedFiles ~ count:", count);
   const savedPaths: string[] = [];
   // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file GPT
   // trả về giống tên file đó (giữ nguyên đuôi thật của file tải về, vd
@@ -562,11 +561,11 @@ export async function askChatGpt(
         promptFileName,
       );
       downloadedFiles = result.downloadedFiles;
-      console.log(
-        "result.isComplete, downloadedFiles.length",
-        result.isComplete,
-        downloadedFiles.length,
-      );
+      // console.log(
+      //   "result.isComplete, downloadedFiles.length",
+      //   result.isComplete,
+      //   downloadedFiles.length,
+      // );
       // if (result.isComplete) {
       if (downloadedFiles.length > 0) {
       }

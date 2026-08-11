@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { generateReferenceImage } from "./chatgptImage";
 import { generateVideo, type GenerateVideoOptions } from "./hailuo";
+import { generateImage } from "./hailuoImage";
 
 /**
  * Logic dùng CHUNG cho cả 2 nơi gọi: script CLI (scripts/generate-reference-images.ts,
@@ -176,9 +177,11 @@ export async function generateReferenceImagesForFile(
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
-    if (entry?.success) continue
+    if (entry?.success) continue;
     const jobId = randomUUID();
-    console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`);
+    console.log(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`,
+    );
     try {
       const result = await generateReferenceImage(
         entry.prompt,
@@ -213,6 +216,129 @@ export async function generateReferenceImagesForFile(
     // Chờ giữa các lần gọi gen ảnh liên tiếp — tránh gửi request quá nhanh
     // lên chatgpt.com (theo yêu cầu người dùng).
     await sleep(REQUEST_THROTTLE_MS);
+  }
+
+  return {
+    outputDir,
+    succeeded,
+    failed,
+    failedEntries,
+  };
+}
+
+/**
+ * GIỐNG generateReferenceImagesForFile (cùng đọc/lọc entry CHARACTER/
+ * LOCATION, cùng quy ước lưu file/success/onEntryDone/resume) nhưng tạo ảnh
+ * qua hailuoai.video (generateImage trong hailuoImage.ts) THAY VÌ hỏi GPT
+ * (chatgpt.com) — dùng khi muốn tránh phụ thuộc chatgpt.com hoặc đổi nguồn
+ * tạo ảnh. Hàm RIÊNG, KHÔNG sửa generateReferenceImagesForFile — cả 2 hàm
+ * cùng ghi vào field "success"/lưu file cùng quy ước (<id>.<đuôi> trong
+ * reference-images/<tên file input>/) nên hoàn toàn tương thích ngược: ảnh
+ * tạo bằng hàm nào cũng dùng được làm ref cho generateSceneImagesForFile/
+ * generateVideosForFile sau đó.
+ *
+ * generateImage() trả về CẢ CỤM ảnh (thường 4 ảnh/lần, xem hailuoImage.ts) —
+ * chỉ lấy ảnh ĐẦU TIÊN đặt tên "<id>.<đuôi>" (khớp đúng 1 file/id như
+ * resolveRefImagePath cần), các ảnh còn lại trong cụm bị xoá luôn (không giữ
+ * làm rác, vì entry.ref chỉ có thể trỏ tới 1 ảnh/id).
+ */
+export async function generateReferenceImagesForFileViaHailuo(
+  inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
+  onEntryError?: (id: string) => Promise<void>,
+): Promise<GenerateImagesResult> {
+  const raw = await fs.promises.readFile(inputPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const outputDir = referenceImagesDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        return false;
+      }
+      return true;
+    },
+  );
+
+  let succeeded = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+  for (const entry of targets) {
+    if (isStopStoryboardRequested()) break;
+    if (entry?.success) continue;
+    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
+    console.log(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (hailuo)...`,
+    );
+    let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
+    try {
+      const imagePaths = await generateImage(
+        entry.prompt,
+        { imageCount: 1 },
+        jobId,
+      );
+      if (imagePaths.length === 0) {
+        throw new Error("Không tạo được ảnh nào");
+      }
+      const [firstImage, ...extraImages] = imagePaths;
+      destPath = path.join(
+        outputDir,
+        `${sanitizeId(entry.id)}${path.extname(firstImage)}`,
+      );
+      try {
+        await fs.promises.rename(firstImage, destPath);
+      } catch {
+        await fs.promises.copyFile(firstImage, destPath);
+        await fs.promises.unlink(firstImage).catch(() => {});
+      }
+      for (const extra of extraImages) {
+        await fs.promises.unlink(extra).catch(() => {});
+      }
+      console.log(
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${destPath}`,
+      );
+      entry.success = true;
+      succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(destPath).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      entry.success = false;
+      failed++;
+      failedEntries.push({ id: entry.id, type: entry.type });
+      if (onEntryError) {
+        await onEntryError(entry.id).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
+    }
+    await saveEntries(inputPath, entries);
   }
 
   return {
@@ -343,10 +469,12 @@ export async function generateVideosForFile(
   let succeeded = 0;
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
-    if (entry?.success) continue
-    const jobId = randomUUID();
+    if (entry?.success) continue;
+    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
     // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video...`);
     try {
       const refs = (entry.ref ?? []).filter(
@@ -363,9 +491,9 @@ export async function generateVideosForFile(
       }
 
       // if (entry.duration) {
-        // console.warn(
-        //   `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên hailuoai.video, bỏ qua.`,
-        // );
+      // console.warn(
+      //   `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên hailuoai.video, bỏ qua.`,
+      // );
       // }
 
       const options: GenerateVideoOptions =
@@ -382,10 +510,7 @@ export async function generateVideosForFile(
 
       const tempFilePath = await generateVideo(entry.prompt, options, jobId);
 
-      const destPath = path.join(
-        outputDir,
-        `${sanitizeId(entry.id)}.mp4`,
-      );
+      const destPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
       try {
         await fs.promises.rename(tempFilePath, destPath);
       } catch {
@@ -473,14 +598,22 @@ export async function generateSceneImagesForFile(
   let succeeded = 0;
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
-    if (entry?.success) continue
-    const jobId = randomUUID();
+    if (entry?.success) continue;
+    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
     try {
+      // Xác nhận qua thực tế (job d1bf82f7, entry SCENE_19_END): JSON
+      // storyboard có thể tự khai báo ref TỚI 1 entry SCENE_SETTING khác (vd
+      // "SCENE_19_START" làm ảnh "opening frame" cho "SCENE_19_END") — chấp
+      // nhận cả type SCENE_SETTING, không chỉ CHARACTER/LOCATION.
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
-          Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
+          Boolean(r.id) &&
+          (r.type === "CHARACTER" ||
+            r.type === "LOCATION" ||
+            r.type === "SCENE_SETTING"),
       );
       const refPaths: string[] = [];
       for (const ref of refs) {
@@ -521,6 +654,135 @@ export async function generateSceneImagesForFile(
     // Chờ giữa các lần gọi gen ảnh liên tiếp — tránh gửi request quá nhanh
     // lên chatgpt.com (theo yêu cầu người dùng).
     await sleep(REQUEST_THROTTLE_MS);
+  }
+
+  return { outputDir, succeeded, failed, failedEntries };
+}
+
+/**
+ * GIỐNG generateSceneImagesForFile (cùng đọc/lọc entry SCENE_SETTING, cùng
+ * quy ước resolve ref CHARACTER/LOCATION/SCENE_SETTING, lưu file/success/
+ * onEntryDone/resume) nhưng tạo ảnh qua hailuoai.video (generateImage trong
+ * hailuoImage.ts, cùng cách generateReferenceImagesForFileViaHailuo đã làm)
+ * THAY VÌ hỏi GPT. Hàm RIÊNG, KHÔNG sửa generateSceneImagesForFile.
+ *
+ * Ảnh ref (nếu có) truyền qua GenerateImageOptions.referenceImagePaths —
+ * hailuoai.video hỗ trợ tối đa 16 ảnh tham chiếu, dư sức cho vài ảnh
+ * CHARACTER/LOCATION/SCENE_SETTING thường gặp mỗi entry.
+ *
+ * generateImage() trả về CẢ CỤM ảnh — chỉ lấy ảnh ĐẦU TIÊN đặt tên
+ * "<id>.<đuôi>", các ảnh còn lại trong cụm bị xoá luôn — cùng lý do đã giải
+ * thích ở generateReferenceImagesForFileViaHailuo.
+ */
+export async function generateSceneImagesForFileViaHailuo(
+  inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
+  onEntryError?: (filePath: string) => Promise<void>,
+): Promise<GenerateImagesResult> {
+  const raw = await fs.promises.readFile(inputPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const outputDir = referenceImagesDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "SCENE_SETTING") return false;
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        return false;
+      }
+      return true;
+    },
+  );
+
+  let succeeded = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+  for (const entry of targets) {
+    if (isStopStoryboardRequested()) break;
+    if (entry?.success) continue;
+    const jobId = `${jsonBaseName}_${entry.id}_${randomUUID()}`;
+    console.log(
+      `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đang tạo ảnh (hailuo)...`,
+    );
+    let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
+    try {
+      const refs = (entry.ref ?? []).filter(
+        (r): r is Required<StoryboardRefItem> =>
+          Boolean(r.id) &&
+          (r.type === "CHARACTER" ||
+            r.type === "LOCATION" ||
+            r.type === "SCENE_SETTING"),
+      );
+      const refPaths: string[] = [];
+      for (const ref of refs) {
+        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+      }
+
+      const imagePaths = await generateImage(
+        entry.prompt,
+        { referenceImagePaths: refPaths, imageCount: 1 },
+        jobId,
+      );
+      if (imagePaths.length === 0) {
+        throw new Error("Không tạo được ảnh nào");
+      }
+      const [firstImage, ...extraImages] = imagePaths;
+      destPath = path.join(
+        outputDir,
+        `${sanitizeId(entry.id)}${path.extname(firstImage)}`,
+      );
+      try {
+        await fs.promises.rename(firstImage, destPath);
+      } catch {
+        await fs.promises.copyFile(firstImage, destPath);
+        await fs.promises.unlink(firstImage).catch(() => {});
+      }
+      for (const extra of extraImages) {
+        await fs.promises.unlink(extra).catch(() => {});
+      }
+      console.log(
+        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đã lưu: ${destPath}`,
+      );
+      entry.success = true;
+      succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(destPath).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      entry.success = false;
+      failed++;
+      failedEntries.push({ id: entry.id, type: "SCENE_SETTING" });
+      if (onEntryError) {
+        await onEntryError(entry.id).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
+    }
+    await saveEntries(inputPath, entries);
   }
 
   return { outputDir, succeeded, failed, failedEntries };

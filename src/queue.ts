@@ -9,8 +9,9 @@ import { generateImage } from "./automation/hailuoImage";
 import { askChatGpt } from "./automation/chatgpt";
 import {
   clearStopStoryboardRequest,
-  generateReferenceImagesForFile,
+  generateReferenceImagesForFileViaHailuo,
   generateSceneImagesForFile,
+  generateSceneImagesForFileViaHailuo,
   generateVideosForFile,
   requestStopStoryboardPipeline,
   sleep,
@@ -72,8 +73,33 @@ export interface StoryboardVideoJob extends BaseJob {
   jsonPath: string;
 }
 
-/** Job dùng chung 1 browser context (hailuoai.video) — video/ảnh/storyboardVideo cùng site nên phải xếp hàng tuần tự. */
-type HailuoJob = VideoGenerationJob | ImageGenerationJob | StoryboardVideoJob;
+/**
+ * Job "tạo ảnh cho 1 file JSON storyboard" — CHARACTER/LOCATION qua
+ * hailuoai.video (generateReferenceImagesForFileViaHailuo) THAY VÌ hỏi GPT,
+ * rồi SCENE_SETTING qua GPT (generateSceneImagesForFile — chưa có bản hailuo)
+ * — dùng chung hàng đợi `jobs` (HailuoJob) với video/ảnh/storyboardVideo
+ * thường, CÙNG cơ chế/lý do với StoryboardVideoJob: generateImage()
+ * (hailuoImage.ts) dùng CHUNG browser context hailuoai.video với
+ * generateVideo(), nên phải xếp hàng tuần tự qua CÙNG 1 hàng đợi để tránh 2
+ * tab thao tác đồng thời trên cùng tài khoản (chấp nhận việc bước
+ * SCENE_SETTING — dùng chatgpt.com, không thật sự cần xếp hàng với
+ * hailuoai.video — vẫn chiếm lượt trong hàng đợi này, đổi lấy 1 hàng đợi duy
+ * nhất đơn giản hơn, theo yêu cầu người dùng).
+ */
+export interface StoryboardImagesHailuoJob extends BaseJob {
+  type: "storyboardImagesHailuo";
+  /** Path file JSON storyboard — truyền cho generateReferenceImagesForFileViaHailuo/generateSceneImagesForFile. */
+  jsonPath: string;
+  /** true = luồng "Tạo video từ kịch bản" (GptJob.skipPipeline=false) — ảnh xong (không lỗi) tự đẩy job "storyboardVideo" luôn. false = luồng "Check prompt kịch bản" (GptJob.skipPipeline=true) — ảnh xong chỉ hỏi xác nhận qua nút "Tạo video" (xem createVideoConfirmation). */
+  autoQueueVideo: boolean;
+}
+
+/** Job dùng chung 1 browser context (hailuoai.video) — video/ảnh/storyboardVideo/storyboardImagesHailuo cùng site nên phải xếp hàng tuần tự. */
+type HailuoJob =
+  | VideoGenerationJob
+  | ImageGenerationJob
+  | StoryboardVideoJob
+  | StoryboardImagesHailuoJob;
 
 export type GenerationJob = HailuoJob | GptJob;
 
@@ -182,32 +208,36 @@ export function enqueueJob(job: GenerationJob): void {
 
 export interface StopAllResult {
   cancelledGptJobs: number;
-  /** Job "video" (characterImagePath, từ CHARACTER_REF_BUTTON_LABEL) VÀ job "storyboardVideo" (từ nút "Tạo video" xác nhận, xem confirmVideoGeneration) còn đang chờ, đã huỷ. */
+  /** Job "video" (characterImagePath, từ CHARACTER_REF_BUTTON_LABEL), "storyboardVideo" (nút "Tạo video" xác nhận) VÀ "storyboardImagesHailuo" có autoQueueVideo=true (từ GPT_BUTTON_LABEL, xem runStoryboardPipeline) còn đang chờ, đã huỷ. */
   cancelledVideoJobs: number;
 }
 
 /**
  * Nút "Stop All" (xem STOP_ALL_BUTTON_LABEL trong keyboard.ts) — dừng SỚM
  * các job của CHARACTER_REF_BUTTON_LABEL (job "video" có characterImagePath),
- * GPT_BUTTON_LABEL (toàn bộ hàng đợi GPT), VÀ job "storyboardVideo" (video
- * gen từ nút "Tạo video" xác nhận sau "Check prompt kịch bản") — cả 2 loại
- * job SAU đều cuối cùng gọi generateVideosForFile (xem storyboardPipeline.ts).
+ * GPT_BUTTON_LABEL (toàn bộ hàng đợi GPT + job "storyboardImagesHailuo" có
+ * autoQueueVideo=true mà nó đẩy ra), VÀ job "storyboardVideo" (video gen từ
+ * nút "Tạo video" xác nhận sau "Check prompt kịch bản"). "storyboardImagesHailuo"
+ * có autoQueueVideo=false (từ Check prompt kịch bản) KHÔNG bị huỷ — ngoài
+ * phạm vi CHARACTER_REF_BUTTON_LABEL/GPT_BUTTON_LABEL yêu cầu ban đầu.
  *
  * 1. requestStopStoryboardPipeline(): báo hiệu vòng lặp generateReferenceImagesForFile/
- *    generateSceneImagesForFile/generateVideosForFile ĐANG CHẠY (nếu có, từ 1
- *    job GPT không skipPipeline HOẶC 1 job "storyboardVideo") dừng SAU KHI
- *    entry đang generate dở xong (không abort giữa chừng) — xem docstring
+ *    generateReferenceImagesForFileViaHailuo/generateSceneImagesForFile/
+ *    generateVideosForFile ĐANG CHẠY (nếu có, từ 1 job GPT không skipPipeline,
+ *    1 job "storyboardImagesHailuo", hoặc 1 job "storyboardVideo") dừng SAU
+ *    KHI entry đang generate dở xong (không abort giữa chừng) — xem docstring
  *    hàm này trong storyboardPipeline.ts.
  * 2. Xoá TOÀN BỘ job GPT còn đang CHỜ trong hàng đợi (chưa tới lượt xử lý) —
  *    job GPT ĐANG xử lý dở (index 0, nếu gptProcessing) không thể huỷ giữa
  *    chừng askChatGpt, chỉ dừng sớm được các vòng lặp gen ảnh/video bên trong
  *    nó qua bước 1.
- * 3. Xoá job "video" có characterImagePath (từ CHARACTER_REF_BUTTON_LABEL) VÀ
- *    job "storyboardVideo" (từ nút "Tạo video" xác nhận) còn đang CHỜ trong
- *    hàng đợi video/ảnh — job ĐANG xử lý dở (index 0, nếu processing) không
- *    thể huỷ giữa chừng generateVideo trên hailuoai.video, để chạy xong/lỗi
- *    tự nhiên (vòng lặp bên trong generateVideosForFile của nó vẫn dừng sớm
- *    được qua bước 1 ở trên).
+ * 3. Xoá job "video" có characterImagePath (từ CHARACTER_REF_BUTTON_LABEL),
+ *    "storyboardVideo" (từ nút "Tạo video" xác nhận), VÀ "storyboardImagesHailuo"
+ *    có autoQueueVideo=true còn đang CHỜ trong hàng đợi video/ảnh — job ĐANG
+ *    xử lý dở (index 0, nếu processing) không thể huỷ giữa chừng
+ *    generateVideo/generateImage trên hailuoai.video, để chạy xong/lỗi tự
+ *    nhiên (vòng lặp gen nhiều entry bên trong nó vẫn dừng sớm được qua bước
+ *    1 ở trên).
  *
  * Báo cho từng user có job bị huỷ biết (reply đúng tin nhắn prompt gốc).
  */
@@ -224,7 +254,8 @@ export function stopAll(): StopAllResult {
     const job = jobs[i];
     if (
       (job.type === "video" && job.characterImagePath) ||
-      job.type === "storyboardVideo"
+      job.type === "storyboardVideo" ||
+      (job.type === "storyboardImagesHailuo" && job.autoQueueVideo)
     ) {
       cancelledVideoJobs.push(job);
       jobs.splice(i, 1);
@@ -300,6 +331,28 @@ export function confirmVideoGeneration(confirmId: string): boolean {
   return true;
 }
 
+/**
+ * Đẩy job "gen ảnh CHARACTER/LOCATION qua hailuoai.video thay vì GPT" cho 1
+ * file JSON storyboard vào hàng đợi `jobs` (xem StoryboardImagesHailuoJob) —
+ * hàm export sẵn để nơi khác (vd handlers.ts, khi cần thêm entry point cho
+ * user) gọi tới, chưa gắn UI/nút bấm nào.
+ */
+export function enqueueStoryboardImagesHailuo(
+  chatId: number,
+  promptMessageId: number,
+  jsonPath: string,
+  autoQueueVideo: boolean,
+): void {
+  enqueueJob({
+    type: "storyboardImagesHailuo",
+    chatId,
+    prompt: "",
+    promptMessageId,
+    jsonPath,
+    autoQueueVideo,
+  });
+}
+
 export function getPendingCount(): number {
   return jobs.length + (processing ? 1 : 0);
 }
@@ -350,7 +403,91 @@ async function processQueue(): Promise<void> {
             },
           );
           await notifyStoryboardVideoResult(job, result);
-        } else {
+        } else if (job.type === "storyboardImagesHailuo") {
+          const jsonBaseName = path.basename(
+            job.jsonPath,
+            path.extname(job.jsonPath),
+          );
+          const sendImageNow = async (imagePath: string): Promise<void> => {
+            const caption = buildResultCaption(jsonBaseName, imagePath);
+            await sendGeneratedImage(
+              job.chatId,
+              imagePath,
+              caption,
+              job.promptMessageId,
+              `${caption}${path.extname(imagePath)}`,
+            );
+          };
+          const notifyError = async (id: string): Promise<void> => {
+            try {
+              const message = buildResultCaption(jsonBaseName, id);
+              await telegram!.sendMessage(job.chatId, message, {
+                reply_parameters: { message_id: job.promptMessageId },
+              });
+            } catch (err) {}
+          };
+
+          // Bước 1: CHARACTER/LOCATION qua hailuoai.video (thay GPT).
+          const failedEntries: FailedEntry[] = [];
+          const imagesResult = await generateReferenceImagesForFileViaHailuo(
+            job.jsonPath,
+            sendImageNow,
+            notifyError
+          );
+          failedEntries.push(...imagesResult.failedEntries);
+
+          // Bước 2: SCENE_SETTING vẫn qua GPT (chưa có bản hailuo) — chỉ
+          // chạy tiếp khi bước 1 không lỗi entry nào.
+          let readyForVideo = false;
+          if (imagesResult.failed === 0) {
+            const sceneResult = await generateSceneImagesForFileViaHailuo(
+              job.jsonPath,
+              sendImageNow,
+              notifyError
+            );
+            failedEntries.push(...sceneResult.failedEntries);
+            readyForVideo = sceneResult.failed === 0;
+          }
+
+          // Bước 3: ảnh xong hết — tự tạo video luôn (luồng "Tạo video từ
+          // kịch bản") hoặc hỏi xác nhận qua nút (luồng "Check prompt kịch
+          // bản") — xem docstring StoryboardImagesHailuoJob.
+          if (readyForVideo) {
+            if (job.autoQueueVideo) {
+              enqueueJob({
+                type: "storyboardVideo",
+                chatId: job.chatId,
+                prompt: "",
+                promptMessageId: job.promptMessageId,
+                jsonPath: job.jsonPath,
+              });
+            } else {
+              const confirmId = createVideoConfirmation(
+                job.chatId,
+                job.promptMessageId,
+                job.jsonPath,
+              );
+              await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
+                reply_parameters: { message_id: job.promptMessageId },
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "Tạo video",
+                        callback_data: `confirmVideo:${confirmId}`,
+                      },
+                    ],
+                  ],
+                },
+              });
+            }
+          }
+
+          await notifyStoryboardImagesHailuoResult(job, {
+            failedEntries,
+            readyForVideo,
+          });
+        } else if (job.type === "image") {
           const filePaths = await generateImage(
             job.prompt,
             { model: job.model, referenceImagePaths: job.referenceImagePaths },
@@ -378,11 +515,15 @@ async function processQueue(): Promise<void> {
             await fsp.unlink(p).catch(() => {});
           }
         }
-        if (job.type === "storyboardVideo") {
+        if (
+          job.type === "storyboardVideo" ||
+          job.type === "storyboardImagesHailuo"
+        ) {
           // Reset cờ "Stop All" SAU KHI job này (có thể đang bị dừng sớm) đã
-          // thực sự thoát hẳn — không reset thì job storyboardVideo/GPT MỚI
-          // sau đó sẽ bị chặn nhầm ngay từ đầu (xem stopAll()/
-          // requestStopStoryboardPipeline, cùng lý do đã xử lý ở processGptQueue).
+          // thực sự thoát hẳn — không reset thì job storyboardVideo/
+          // storyboardImagesHailuo/GPT MỚI sau đó sẽ bị chặn nhầm ngay từ đầu
+          // (xem stopAll()/requestStopStoryboardPipeline, cùng lý do đã xử lý
+          // ở processGptQueue).
           clearStopStoryboardRequest();
         }
         jobs.shift();
@@ -408,6 +549,24 @@ async function processGptQueue(): Promise<void> {
           job.promptFileName,
           job.promptAttachmentPath,
         );
+        // Gửi NGAY file JSON storyboard vừa tải về cho user, TRƯỚC KHI bắt
+        // đầu gen ảnh/video (có thể mất rất lâu) — theo yêu cầu người dùng,
+        // để user xem/kiểm tra được kịch bản ngay, không phải đợi hết cả
+        // pipeline. Lỗi gửi (vd Telegram lỗi) KHÔNG chặn pipeline tiếp theo.
+        for (const filePath of downloadedFiles) {
+          if (path.extname(filePath).toLowerCase() !== ".json") continue;
+          await sendDocumentMaybeSplit(
+            job.chatId,
+            filePath,
+            `✅ prompts`,
+            job.promptMessageId,
+          ).catch((err) => {
+            console.error(
+              `[queue] Gửi file JSON "${filePath}" thất bại (không chặn pipeline):`,
+              err,
+            );
+          });
+        }
         if (job.skipPipeline) {
           const checkResult = await runGptCheckImagePipeline(
             downloadedFiles,
@@ -444,14 +603,13 @@ async function processGptQueue(): Promise<void> {
 }
 
 interface GptPipelineResult {
-  /** Số file JSON storyboard THẬT SỰ được xử lý (bỏ qua file không phải .json) — dùng phân biệt "không có file đính kèm" với "có file nhưng chưa tạo video". */
+  /** Số file JSON storyboard THẬT SỰ được xử lý (bỏ qua file không phải .json) — dùng phân biệt "không có file đính kèm" với "có file nhưng chưa gen ảnh". */
   processedJsonCount: number;
-  /** Số file JSON đã đẩy job "storyboardVideo" vào hàng đợi hailuoai.video (xem enqueueJob trong runStoryboardPipeline) — video tạo/gửi SAU, KHÔNG đồng bộ với job GPT này. */
-  queuedVideoFiles: number;
-  failedImageEntries: FailedEntry[];
+  /** Số file JSON đã đẩy job "storyboardImagesHailuo" vào hàng đợi hailuoai.video (xem enqueueJob trong runStoryboardPipeline) — ảnh/video tạo/gửi SAU, KHÔNG đồng bộ với job GPT này. */
+  queuedImageFiles: number;
 }
 
-/** "<tên file json>__<tên file>" — quy ước caption/tên file dùng chung cho ảnh VÀ video gửi về user, xem runStoryboardPipeline/runGptCheckImagePipeline. */
+/** "<tên file json>__<tên file>" — quy ước caption/tên file dùng chung cho ảnh VÀ video gửi về user, xem processQueue (nhánh "storyboardImagesHailuo"/"storyboardVideo"). */
 function buildResultCaption(
   jsonBaseName: string,
   resultFilePath: string,
@@ -461,39 +619,26 @@ function buildResultCaption(
 
 /**
  * Với MỖI file JSON storyboard GPT tải về (thường chỉ 1, vd meta.json — file
- * KHÔNG phải .json bị bỏ qua, không xử lý):
- * 1. Tạo ảnh cho toàn bộ entry CHARACTER/LOCATION (generateReferenceImagesForFile)
- *    — lưu chung vào reference-images/<tên file json>/ (không tách folder
- *    con characters/locations/videos nữa). MỖI ảnh tạo xong được GỬI NGAY cho
- *    user (onEntryDone callback) thay vì đợi xử lý xong hết mới gửi hàng loạt.
- * 2. Nếu CÓ entry ảnh lỗi: dừng lại, KHÔNG tạo ảnh SCENE_SETTING/video — chỉ
- *    báo lỗi cho user (folder ảnh vẫn còn nguyên trên đĩa để kiểm tra/chạy
- *    lại thủ công).
- * 3. Nếu KHÔNG lỗi ảnh nào: tạo tiếp ảnh cho entry SCENE_SETTING
- *    (generateSceneImagesForFile — upload ảnh CHARACTER/LOCATION liên quan
- *    làm ref nếu entry có "ref") TRƯỚC KHI tạo video, vì video có thể dùng
- *    chính ảnh SCENE_SETTING làm ref (Omni Reference). Cũng gửi ngay từng ảnh.
- * 4. Nếu ảnh SCENE_SETTING cũng KHÔNG lỗi: đẩy job "storyboardVideo" vào
- *    hàng đợi hailuoai.video (CÙNG cơ chế/hàng đợi với nút "Tạo video" xác
- *    nhận sau "Check prompt kịch bản", xem confirmVideoGeneration) — KHÔNG
- *    gọi generateVideosForFile trực tiếp ở đây nữa. Lý do: hàm này chạy BÊN
- *    TRONG job GPT (hàng đợi riêng, xem processGptQueue), trong khi
- *    generateVideosForFile dùng browser context hailuoai.video CHUNG với
- *    hàng đợi `jobs` (video/ảnh/storyboardVideo) — gọi trực tiếp ở đây có
- *    thể chạy CÙNG LÚC với 1 job khác đang xử lý ở hàng đợi kia, mở 2 tab
- *    thao tác đồng thời trên cùng 1 tài khoản, dễ xung đột/crash. Đẩy vào
- *    hàng đợi `jobs` đảm bảo LUÔN xếp hàng tuần tự, dù xuất phát từ job GPT
- *    hay từ nút xác nhận. Video tạo xong được gửi NGAY (không đợi hết cả
- *    loạt) qua chính job "storyboardVideo" đó (xem processQueue), KHÔNG đồng
- *    bộ/không nằm trong kết quả trả về của hàm này.
+ * KHÔNG phải .json bị bỏ qua, không xử lý): đẩy job "storyboardImagesHailuo"
+ * (autoQueueVideo=true) vào hàng đợi hailuoai.video (xem StoryboardImagesHailuoJob)
+ * — KHÔNG tự gen ảnh/video ở đây nữa. Lý do: hàm này chạy BÊN TRONG job GPT
+ * (hàng đợi riêng, xem processGptQueue), trong khi việc gen ảnh/video dùng
+ * browser context hailuoai.video CHUNG với hàng đợi `jobs`
+ * (video/ảnh/storyboardVideo/storyboardImagesHailuo) — gọi trực tiếp ở đây
+ * có thể chạy CÙNG LÚC với 1 job khác đang xử lý ở hàng đợi kia, mở 2 tab
+ * thao tác đồng thời trên cùng 1 tài khoản, dễ xung đột/crash. Đẩy vào hàng
+ * đợi `jobs` đảm bảo LUÔN xếp hàng tuần tự. Job "storyboardImagesHailuo" tự
+ * gen CHARACTER/LOCATION (hailuoai.video) → SCENE_SETTING (GPT) → tự đẩy
+ * tiếp job "storyboardVideo" khi cả 2 bước ảnh xong không lỗi, gửi kết quả
+ * riêng (xem processQueue) — KHÔNG đồng bộ/không nằm trong kết quả trả về
+ * của hàm này.
  */
 async function runStoryboardPipeline(
   downloadedFiles: string[],
   job: GptJob,
 ): Promise<GptPipelineResult> {
   let processedJsonCount = 0;
-  let queuedVideoFiles = 0;
-  const failedImageEntries: FailedEntry[] = [];
+  let queuedImageFiles = 0;
 
   for (const filePath of downloadedFiles) {
     if (path.extname(filePath).toLowerCase() !== ".json") {
@@ -501,48 +646,18 @@ async function runStoryboardPipeline(
     }
     processedJsonCount++;
 
-    const jsonBaseName = path.basename(filePath, path.extname(filePath));
-    const sendImageNow = async (imagePath: string): Promise<void> => {
-      const caption = buildResultCaption(jsonBaseName, imagePath);
-      await sendGeneratedImage(
-        job.chatId,
-        imagePath,
-        caption,
-        job.promptMessageId,
-        `${caption}${path.extname(imagePath)}`,
-      );
-    };
-
-    const imagesResult = await generateReferenceImagesForFile(
-      filePath,
-      sendImageNow,
-    );
-    failedImageEntries.push(...imagesResult.failedEntries);
-
-    // Chỉ tạo ảnh SCENE_SETTING + đẩy job video khi KHÔNG có ảnh
-    // CHARACTER/LOCATION nào lỗi — có lỗi thì dừng ở bước báo lỗi, không tạo
-    // dở dang (folder vẫn còn nguyên trên đĩa để kiểm tra/chạy lại thủ công).
-    if (imagesResult.failed === 0) {
-      const sceneResult = await generateSceneImagesForFile(
-        filePath,
-        sendImageNow,
-      );
-      failedImageEntries.push(...sceneResult.failedEntries);
-
-      if (sceneResult.failed === 0) {
-        enqueueJob({
-          type: "storyboardVideo",
-          chatId: job.chatId,
-          prompt: "",
-          promptMessageId: job.promptMessageId,
-          jsonPath: filePath,
-        });
-        queuedVideoFiles++;
-      }
-    }
+    enqueueJob({
+      type: "storyboardImagesHailuo",
+      chatId: job.chatId,
+      prompt: "",
+      promptMessageId: job.promptMessageId,
+      jsonPath: filePath,
+      autoQueueVideo: true,
+    });
+    queuedImageFiles++;
   }
 
-  return { processedJsonCount, queuedVideoFiles, failedImageEntries };
+  return { processedJsonCount, queuedImageFiles };
 }
 
 function formatFailedEntries(entries: FailedEntry[]): string {
@@ -601,6 +716,50 @@ async function notifyStoryboardVideoResult(
     }
   } catch (err) {
     console.error("[queue] Gửi kết quả tạo video (xác nhận) thất bại:", err);
+    await telegram.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+    await notifyAdmins(err);
+  }
+  await deleteStatusMessage(job);
+}
+
+/**
+ * Báo cáo tổng kết job "storyboardImagesHailuo" (gen ảnh CHARACTER/LOCATION
+ * qua hailuoai.video thay vì GPT, xem generateReferenceImagesForFileViaHailuo)
+ * — từng ảnh đã được gửi NGAY lúc tạo xong rồi (xem onEntryDone callback ở
+ * processQueue), hàm này chỉ còn báo lỗi/tổng kết.
+ */
+interface StoryboardImagesHailuoResult {
+  /** Gộp lỗi từ CẢ 2 bước: CHARACTER/LOCATION (hailuo) VÀ SCENE_SETTING (GPT). */
+  failedEntries: FailedEntry[];
+  /** true nếu cả 2 bước ảnh đều xong không lỗi — job "storyboardVideo" đã được đẩy vào hàng đợi HOẶC nút "Tạo video" đã gửi (xem nơi gọi trong processQueue). */
+  readyForVideo: boolean;
+}
+
+async function notifyStoryboardImagesHailuoResult(
+  job: StoryboardImagesHailuoJob,
+  result: StoryboardImagesHailuoResult,
+): Promise<void> {
+  if (!telegram) return;
+  try {
+    if (result.failedEntries.length > 0) {
+      await telegram.sendMessage(
+        job.chatId,
+        `⚠️ Không tạo được ảnh cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    } else if (result.readyForVideo && job.autoQueueVideo) {
+      await telegram.sendMessage(
+        job.chatId,
+        `✅ Đã tạo xong ảnh — đã đưa vào hàng đợi tạo video, sẽ gửi video ngay khi xong.`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    }
+    // readyForVideo && !autoQueueVideo: nút "Tạo video" đã gửi ở nơi gọi
+    // (processQueue) rồi, không cần báo thêm ở đây.
+  } catch (err) {
+    console.error("[queue] Gửi kết quả tạo ảnh (hailuo) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
     });
@@ -689,6 +848,21 @@ async function sendGeneratedImage(
       },
     );
   }
+}
+
+export async function sendNotifyError(
+  chatId: number,
+  jsonPath: string,
+  fileId: string,
+  promptMessageId: number,
+): Promise<void> {
+  try {
+    const jsonBaseName = path.basename(jsonPath, path.extname(jsonPath));
+    const message = buildResultCaption(jsonBaseName, fileId);
+    await telegram!.sendMessage(chatId, message, {
+      reply_parameters: { message_id: promptMessageId },
+    });
+  } catch (err) {}
 }
 
 /** Gửi 1 video đã tạo — dùng chung cho gửi NGAY lúc tạo (runStoryboardPipeline) và job "storyboardVideo" xác nhận (notifyStoryboardVideoResult). */
@@ -800,67 +974,51 @@ async function sendDocumentMaybeSplit(
 interface GptCheckPipelineResult {
   /** File JSON storyboard GPT trả về — gửi lại nguyên bản để user kiểm tra nội dung. */
   jsonFiles: string[];
-  /** Số ảnh CHARACTER/LOCATION/SCENE_SETTING đã tạo VÀ gửi luôn ngay lúc tạo (xem onEntryDone) — KHÔNG gen video. */
-  imageCount: number;
-  failedImageEntries: FailedEntry[];
+  /** Số file JSON đã đẩy job "storyboardImagesHailuo" (autoQueueVideo=false) vào hàng đợi hailuoai.video — ảnh/nút xác nhận tạo video tự gửi SAU, KHÔNG đồng bộ với job GPT này. */
+  queuedImageFiles: number;
 }
 
 /**
  * Dùng cho job "Check prompt kịch bản" (GptJob.skipPipeline = true): với mỗi
- * file JSON storyboard GPT trả về, gen ảnh CHARACTER/LOCATION
- * (generateReferenceImagesForFile) rồi SCENE_SETTING (generateSceneImagesForFile)
- * — KHÔNG gen video. Ảnh lưu chung vào reference-images/<tên file json>/ như
- * runStoryboardPipeline. MỖI ảnh tạo xong được GỬI NGAY cho user (onEntryDone
- * callback) thay vì đợi xử lý xong hết mới gửi hàng loạt.
+ * file JSON storyboard GPT trả về, đẩy job "storyboardImagesHailuo"
+ * (autoQueueVideo=false — xem StoryboardImagesHailuoJob) vào hàng đợi
+ * hailuoai.video — KHÔNG tự gen ảnh ở đây nữa, CÙNG lý do/cơ chế với
+ * runStoryboardPipeline (tránh 2 tab thao tác đồng thời trên cùng tài
+ * khoản). Job đó tự gen CHARACTER/LOCATION (hailuoai.video) → SCENE_SETTING
+ * (GPT) rồi hỏi xác nhận qua nút "Tạo video" khi cả 2 bước xong không lỗi.
  */
 async function runGptCheckImagePipeline(
   downloadedFiles: string[],
   job: GptJob,
 ): Promise<GptCheckPipelineResult> {
   const jsonFiles: string[] = [];
-  let imageCount = 0;
-  const failedImageEntries: FailedEntry[] = [];
+  let queuedImageFiles = 0;
 
   for (const filePath of downloadedFiles) {
     if (path.extname(filePath).toLowerCase() !== ".json") continue;
     jsonFiles.push(filePath);
 
-    const jsonBaseName = path.basename(filePath, path.extname(filePath));
-    const sendImageNow = async (imagePath: string): Promise<void> => {
-      const caption = buildResultCaption(jsonBaseName, imagePath);
-      await sendGeneratedImage(
-        job.chatId,
-        imagePath,
-        caption,
-        job.promptMessageId,
-        `${caption}${path.extname(imagePath)}`,
-      );
-      imageCount++;
-    };
-
-    const imagesResult = await generateReferenceImagesForFile(
-      filePath,
-      sendImageNow,
-    );
-    failedImageEntries.push(...imagesResult.failedEntries);
-    if (imagesResult.failed > 0) continue;
-
-    const sceneResult = await generateSceneImagesForFile(
-      filePath,
-      sendImageNow,
-    );
-    failedImageEntries.push(...sceneResult.failedEntries);
+    enqueueJob({
+      type: "storyboardImagesHailuo",
+      chatId: job.chatId,
+      prompt: "",
+      promptMessageId: job.promptMessageId,
+      jsonPath: filePath,
+      autoQueueVideo: false,
+    });
+    queuedImageFiles++;
   }
 
-  return { jsonFiles, imageCount, failedImageEntries };
+  return { jsonFiles, queuedImageFiles };
 }
 
 /**
- * Dùng cho job "Check prompt kịch bản" (GptJob.skipPipeline = true) — sau
- * khi gen ảnh xong (xem runGptCheckImagePipeline), gửi lại cho user: file
- * JSON storyboard gốc (reply) và từng ảnh đã tạo, caption VÀ tên file thật
- * "<tên file json>__<tên file ảnh>". KHÔNG gen video. Không xoá file sau khi
- * gửi — giữ làm lưu trữ.
+ * Dùng cho job "Check prompt kịch bản" (GptJob.skipPipeline = true) — job
+ * GPT giờ CHỈ hỏi GPT + gửi JSON + đẩy job "storyboardImagesHailuo" (xem
+ * runGptCheckImagePipeline), KHÔNG gen ảnh đồng bộ trong job này nữa. Ảnh/
+ * nút xác nhận tạo video/lỗi tự báo riêng khi job đó tới lượt xử lý (xem
+ * notifyStoryboardImagesHailuoResult). Hàm này chỉ còn báo "đã đưa vào hàng
+ * đợi" hoặc "không có file đính kèm".
  */
 async function notifyGptCheckSuccess(
   job: GptJob,
@@ -868,15 +1026,7 @@ async function notifyGptCheckSuccess(
 ): Promise<void> {
   if (!telegram) return;
   try {
-    if (result.failedImageEntries.length > 0) {
-      await telegram.sendMessage(
-        job.chatId,
-        `⚠️ Không tạo được ảnh cho ${result.failedImageEntries.length} entry:\n${formatFailedEntries(result.failedImageEntries)}`,
-        { reply_parameters: { message_id: job.promptMessageId } },
-      );
-    }
-
-    if (result.jsonFiles.length === 0 && result.imageCount === 0) {
+    if (result.jsonFiles.length === 0) {
       await telegram.sendMessage(
         job.chatId,
         `✅ GPT đã trả lời xong (không có file đính kèm).`,
@@ -884,41 +1034,12 @@ async function notifyGptCheckSuccess(
           reply_parameters: { message_id: job.promptMessageId },
         },
       );
-    }
-
-    for (const filePath of result.jsonFiles) {
-      await sendDocumentMaybeSplit(
+    } else if (result.queuedImageFiles > 0) {
+      await telegram.sendMessage(
         job.chatId,
-        filePath,
-        `✅ Kết quả check GPT`,
-        job.promptMessageId,
+        `✅ Đã đưa ${result.queuedImageFiles} file vào hàng đợi tạo ảnh (hailuoai.video).`,
+        { reply_parameters: { message_id: job.promptMessageId } },
       );
-    }
-
-    // Chỉ hỏi xác nhận tạo video khi ảnh đã gen ĐỦ, KHÔNG lỗi entry nào —
-    // ảnh lỗi thì user cần sửa/chạy lại trước, tạo video lúc này chắc chắn
-    // lỗi tiếp (thiếu ảnh tham chiếu, xem resolveRefImagePath).
-    if (result.failedImageEntries.length === 0) {
-      for (const filePath of result.jsonFiles) {
-        const confirmId = createVideoConfirmation(
-          job.chatId,
-          job.promptMessageId,
-          filePath,
-        );
-        await telegram.sendMessage(job.chatId, "Xác nhận tạo video", {
-          reply_parameters: { message_id: job.promptMessageId },
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "Tạo video",
-                  callback_data: `confirmVideo:${confirmId}`,
-                },
-              ],
-            ],
-          },
-        });
-      }
     }
   } catch (err) {
     console.error("[queue] Gửi kết quả check GPT thất bại:", err);
@@ -931,12 +1052,11 @@ async function notifyGptCheckSuccess(
 }
 
 /**
- * Báo lỗi ảnh (nếu có) + tổng kết bước ảnh — ảnh đã được gửi NGAY lúc tạo
- * xong rồi (xem runStoryboardPipeline's onEntryDone callback). Video KHÔNG
- * còn tạo đồng bộ trong job này nữa — đã đẩy vào hàng đợi hailuoai.video
- * (job "storyboardVideo", xem runStoryboardPipeline), tự gửi kết quả VÀ báo
- * lỗi riêng khi tới lượt xử lý (xem notifyStoryboardVideoResult). Không xoá
- * các file sau khi gửi — giữ làm lưu trữ.
+ * Job GPT giờ CHỈ hỏi GPT + gửi JSON + đẩy job "storyboardImagesHailuo" vào
+ * hàng đợi hailuoai.video (xem runStoryboardPipeline) — KHÔNG còn gen ảnh/
+ * video đồng bộ trong job này nữa. Ảnh/video/lỗi tự báo riêng khi job đó tới
+ * lượt xử lý (xem notifyStoryboardImagesHailuoResult/notifyStoryboardVideoResult).
+ * Hàm này chỉ còn báo "đã đưa vào hàng đợi" hoặc "không có file đính kèm".
  */
 async function notifyGptSuccess(
   job: GptJob,
@@ -944,14 +1064,6 @@ async function notifyGptSuccess(
 ): Promise<void> {
   if (!telegram) return;
   try {
-    if (result.failedImageEntries.length > 0) {
-      await telegram.sendMessage(
-        job.chatId,
-        `⚠️ Không tạo được ảnh cho ${result.failedImageEntries.length} entry (đã dừng, chưa tạo video):\n${formatFailedEntries(result.failedImageEntries)}`,
-        { reply_parameters: { message_id: job.promptMessageId } },
-      );
-    }
-
     if (result.processedJsonCount === 0) {
       // GPT trả lời xong nhưng không có file JSON storyboard nào — không coi là lỗi.
       await telegram.sendMessage(
@@ -961,12 +1073,12 @@ async function notifyGptSuccess(
           reply_parameters: { message_id: job.promptMessageId },
         },
       );
-    } else if (result.queuedVideoFiles > 0) {
-      // await telegram.sendMessage(
-      //   job.chatId,
-      //   `✅ Đã tạo xong ảnh — đã đưa ${result.queuedVideoFiles} file vào hàng đợi tạo video, sẽ gửi video ngay khi xong.`,
-      //   { reply_parameters: { message_id: job.promptMessageId } },
-      // );
+    } else if (result.queuedImageFiles > 0) {
+      await telegram.sendMessage(
+        job.chatId,
+        `✅ Đã đưa ${result.queuedImageFiles} file vào hàng đợi tạo ảnh (hailuoai.video), sẽ tự tạo video sau khi ảnh xong.`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
     }
   } catch (err) {
     console.error("[queue] Gửi kết quả GPT thất bại:", err);
@@ -980,7 +1092,7 @@ async function notifyGptSuccess(
 
 function jobTypeLabel(type: GenerationJob["type"]): string {
   if (type === "video" || type === "storyboardVideo") return "video";
-  if (type === "image") return "ảnh";
+  if (type === "image" || type === "storyboardImagesHailuo") return "ảnh";
   return "GPT";
 }
 
