@@ -420,7 +420,7 @@ async function processQueue(): Promise<void> {
           };
           const notifyError = async (id: string): Promise<void> => {
             try {
-              const message = buildResultCaption(jsonBaseName, id);
+              const message = buildResultCaption(jsonBaseName, id) + " 404";
               await telegram!.sendMessage(job.chatId, message, {
                 reply_parameters: { message_id: job.promptMessageId },
               });
@@ -432,7 +432,7 @@ async function processQueue(): Promise<void> {
           const imagesResult = await generateReferenceImagesForFileViaHailuo(
             job.jsonPath,
             sendImageNow,
-            notifyError
+            notifyError,
           );
           failedEntries.push(...imagesResult.failedEntries);
 
@@ -443,7 +443,7 @@ async function processQueue(): Promise<void> {
             const sceneResult = await generateSceneImagesForFileViaHailuo(
               job.jsonPath,
               sendImageNow,
-              notifyError
+              notifyError,
             );
             failedEntries.push(...sceneResult.failedEntries);
             readyForVideo = sceneResult.failed === 0;
@@ -1119,3 +1119,16 @@ async function notifyAdmins(err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   await telegram!.sendMessage(config.adminsNotify, message).catch(() => {});
 }
+
+// runGptCheckImagePipeline(
+//   ["/root/vm_ai/bot/storage/chatgpt-results/cay_khe_test.json"],
+//   {
+//     chatId: -1004294978405,
+//     prompt: "Hãy thực hiện yêu cầu trong file",
+//     promptMessageId: 375,
+//     statusMessageId: 376,
+//     type: "gpt",
+//     skipPipeline: false,
+//     promptFileName: "cay_khe_test",
+//   },
+// );

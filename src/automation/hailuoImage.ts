@@ -444,29 +444,59 @@ async function downloadImageByFeedId(
     config.hailuoBaseUrl,
   );
   detailUrl.searchParams.set("source-page", "create");
-  await gotoWithRetry(page, detailUrl.toString());
 
-  // gotoWithRetry chỉ chờ domcontentloaded — trang chi tiết là SPA, có lúc
-  // vẫn còn đang ở màn hình loading trống (đã xác nhận qua debug screenshot
-  // thực tế) khi đọc page.content() ngay, nên đọc hụt downloadURLWithoutWatermark
-  // dù trang sau đó vẫn render đúng. Chờ tới khi flight data thật sự xuất
-  // hiện trong DOM trước khi trích xuất.
-  await page
-    .waitForFunction(
-      () =>
-        document.documentElement.innerHTML.includes(
-          "downloadURLWithoutWatermark",
-        ),
-      {
-        timeout: 600_000,
-      },
-    )
-    .catch(() => {});
+  // Xác nhận qua log lỗi thật (job cay_khe_test_CHAR_MAGIC_BIRD): điều hướng
+  // thẳng tới URL chi tiết đôi khi bị BOUNCE về TRANG CHỦ hailuoai.video
+  // (nút "Create Video"/"Create Image", banner quảng cáo H3) thay vì trang
+  // chi tiết — debug screenshot lúc lỗi xác nhận rõ, kèm 1 popup "Max
+  // Membership Benefits Updated" che 1 phần trang. Trang chủ KHÔNG BAO GIỜ
+  // có "downloadURLWithoutWatermark" trong flight data, nên waitForFunction
+  // (cũ: chờ hết NGUYÊN 600s) rồi vẫn đọc hụt — cực kỳ lãng phí thời gian
+  // trước khi báo lỗi. Thử lại NGUYÊN việc điều hướng vài lần (không chỉ chờ
+  // dài hơn ở CÙNG 1 lần), mỗi lần chờ ngắn hơn nhiều — nghi nguyên nhân là
+  // backend chưa kịp index asset vừa tạo xong đúng lúc điều hướng, tự hết
+  // sau vài giây tới vài chục giây.
+  const maxDetailPageAttempts = 3;
+  let flightData = "";
+  for (let attempt = 1; attempt <= maxDetailPageAttempts; attempt++) {
+    await gotoWithRetry(page, detailUrl.toString());
 
+    // gotoWithRetry chỉ chờ domcontentloaded — trang chi tiết là SPA, có lúc
+    // vẫn còn đang ở màn hình loading trống (đã xác nhận qua debug screenshot
+    // thực tế) khi đọc page.content() ngay, nên đọc hụt downloadURLWithoutWatermark
+    // dù trang sau đó vẫn render đúng. Chờ tới khi flight data thật sự xuất
+    // hiện trong DOM trước khi trích xuất.
+    const found = await page
+      .waitForFunction(
+        () =>
+          document.documentElement.innerHTML.includes(
+            "downloadURLWithoutWatermark",
+          ),
+        { timeout: 60_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+
+    if (found) {
+      flightData = await getFlightDataText(page);
+      break;
+    }
+
+    console.warn(
+      `[hailuoImage] Trang chi tiết ảnh (feedId ${feedId}) chưa có downloadURLWithoutWatermark sau 60s (lần ${attempt}/${maxDetailPageAttempts}, URL hiện tại: ${page.url()}) — thử điều hướng lại.`,
+    );
+    if (attempt < maxDetailPageAttempts) {
+      await page.waitForTimeout(3000);
+    }
+  }
   // Đọc self.__next_f đã nối lại (KHÔNG dùng page.content() thô) — tránh bị
   // cắt ngang URL do Next.js tách string qua nhiều thẻ <script>, xem chú
-  // thích getFlightDataText trong hailuo.ts.
-  const flightData = await getFlightDataText(page);
+  // thích getFlightDataText trong hailuo.ts. Nếu cả maxDetailPageAttempts
+  // lần đều không thấy marker, vẫn đọc thử 1 lần cuối (best-effort) — lỗi
+  // "Không tìm thấy downloadURLWithoutWatermark hợp lệ" ở dưới sẽ tự báo rõ.
+  if (!flightData) {
+    flightData = await getFlightDataText(page);
+  }
   const noWatermarkUrl = extractDownloadUrlWithoutWatermark(flightData, feedId);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
