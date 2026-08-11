@@ -24,6 +24,8 @@ export interface StoryboardEntry {
   duration?: number;
   /** true/false nếu đã từng generate (ảnh hoặc video) THÀNH CÔNG hay không — không có field này nghĩa là CHƯA TỪNG chạy. */
   success?: boolean;
+  /** Id hội thoại chatgpt.com (phần "/c/<id>" trên URL) lúc gen ảnh cho entry này — chỉ có ở entry CHARACTER/LOCATION/SCENE_SETTING (dùng chatgpt.com), VIDEO không có (dùng hailuoai.video). */
+  chatgptSessionId?: string;
   [key: string]: unknown;
 }
 
@@ -140,16 +142,17 @@ export async function generateReferenceImagesForFile(
     const jobId = randomUUID();
     console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`);
     try {
-      const savedPath = await generateReferenceImage(
+      const result = await generateReferenceImage(
         entry.prompt,
         outputDir,
         sanitizeId(entry.id),
         jobId,
       );
       console.log(
-        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`,
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${result.path}`,
       );
       entry.success = true;
+      entry.chatgptSessionId = result.sessionId;
       succeeded++;
     } catch (err) {
       console.error(
@@ -413,7 +416,7 @@ export async function generateSceneImagesForFile(
         refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
       }
 
-      const savedPath = await generateReferenceImage(
+      const result = await generateReferenceImage(
         entry.prompt,
         outputDir,
         sanitizeId(entry.id),
@@ -421,9 +424,10 @@ export async function generateSceneImagesForFile(
         refPaths,
       );
       console.log(
-        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đã lưu: ${savedPath}`,
+        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đã lưu: ${result.path}`,
       );
       entry.success = true;
+      entry.chatgptSessionId = result.sessionId;
       succeeded++;
     } catch (err) {
       console.error(

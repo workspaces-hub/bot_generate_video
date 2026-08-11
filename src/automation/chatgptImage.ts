@@ -253,16 +253,37 @@ function guessImageExtension(url: string): string {
  * storyboardPipeline.ts) để GPT giữ đúng nhận diện nhân vật/địa điểm khi vẽ
  * cảnh mới.
  */
+/** Kết quả 1 lần gọi generateReferenceImage — kèm sessionId (nếu lấy được) để caller lưu lại vào entry JSON tương ứng, xem storyboardPipeline.ts. */
+export interface GenerateReferenceImageResult {
+  path: string;
+  /** Id hội thoại chatgpt.com (phần "/c/<id>" trên URL) lúc tạo ảnh này — undefined nếu không trích được (vd URL chưa kịp đổi sang dạng "/c/..."). */
+  sessionId?: string;
+}
+
 export async function generateReferenceImage(
   prompt: string,
   destDir: string,
   baseFileName: string,
   jobId: string,
   refImagePaths?: string[],
-): Promise<string> {
+): Promise<GenerateReferenceImageResult> {
   return enqueueImageGeneration(() =>
     generateReferenceImageInternal(prompt, destDir, baseFileName, jobId, refImagePaths),
   );
+}
+
+/**
+ * Trích id hội thoại từ URL chatgpt.com dạng "https://chatgpt.com/c/<id>" —
+ * URL trang chuyển từ "chatgpt.com/" (chat mới) sang dạng này NGAY SAU khi
+ * GPT bắt đầu trả lời (xác nhận qua comment sendMessage/hasSeenGenerating:
+ * trang "CHƯA kịp điều hướng sang URL hội thoại /c/..." lúc còn đang tải).
+ * Trả về undefined nếu URL không khớp (vd lỗi xảy ra trước khi kịp điều
+ * hướng) — không throw, đây chỉ là thông tin bổ sung, không phải điều kiện
+ * thành công/thất bại của việc tạo ảnh.
+ */
+function extractChatGptSessionId(url: string): string | undefined {
+  const match = url.match(/\/c\/([a-zA-Z0-9-]+)/);
+  return match?.[1];
 }
 
 /**
@@ -293,7 +314,7 @@ async function generateReferenceImageInternal(
   baseFileName: string,
   jobId: string,
   refImagePaths?: string[],
-): Promise<string> {
+): Promise<GenerateReferenceImageResult> {
   const context = await getChatGptBrowserContext();
   const page = await context.newPage();
   try {
@@ -408,7 +429,7 @@ async function generateReferenceImageInternal(
     );
     await fs.promises.writeFile(destPath, await response.body());
 
-    return destPath;
+    return { path: destPath, sessionId: extractChatGptSessionId(page.url()) };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
     throw err instanceof ChatGptImageError

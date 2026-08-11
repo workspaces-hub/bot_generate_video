@@ -12,6 +12,7 @@ import {
   downloadFileLinkLocator,
   fileAttachmentLocator,
   fileCardLocator,
+  fileUploadInputLocator,
   promptTextareaCandidates,
   regenerateErrorButtonCandidates,
   sendButtonCandidates,
@@ -35,8 +36,24 @@ export class ChatGptError extends Error {}
  * for send-button to be visible" ngay sau khi fill()). insertText() giả lập
  * đúng luồng sự kiện input thật (như gõ tay/paste), ProseMirror nhận diện
  * được bình thường.
+ *
+ * Xác nhận qua debug thật (job ec8f3f90, sau khi thêm tính năng đính kèm
+ * file — xem uploadAttachment): khi composer VỪA có file đính kèm, nội dung
+ * bị gõ TRÙNG LẶP (vd "Hãy thực hiện yêu cầu trong fileHãy thực hiện yêu cầu
+ * trong file") — nghi vấn: sau khi Ctrl+V dán xong, việc chuyển sang nhánh
+ * fallback này (khi so khớp KHÔNG khớp) có thể chạy trong lúc composer chưa
+ * ổn định focus đúng vào ô nhập (attachment vừa xong có thể làm focus lệch),
+ * khiến Ctrl+A/Delete không xoá được nội dung ĐÃ dán trước đó, rồi insertText
+ * chỉ NỐI THÊM text mới vào cuối thay vì thay thế. Click lại thẳng vào
+ * textarea NGAY TRƯỚC khi Ctrl+A để đảm bảo focus đúng chỗ trước khi xoá/gõ,
+ * bất kể trạng thái focus trước đó.
  */
-async function insertPromptText(page: Page, text: string): Promise<void> {
+async function insertPromptText(
+  page: Page,
+  textarea: Locator,
+  text: string,
+): Promise<void> {
+  await textarea.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Delete");
   await page.keyboard.insertText(text);
@@ -44,6 +61,23 @@ async function insertPromptText(page: Page, text: string): Promise<void> {
 
 /** Chặn lặp vô hạn nếu vì lý do gì đó GPT không bao giờ đính kèm file. */
 const MAX_TURNS_WAITING_FOR_FILE = 30;
+
+/**
+ * Đính kèm 1 file lên composer TRƯỚC khi gõ prompt — dùng khi user gửi prompt
+ * qua file (.txt/.md) thay vì gõ/dán trực tiếp: UPLOAD file đó lên GPT rồi chỉ
+ * gõ 1 câu ngắn yêu cầu GPT đọc file, thay vì dán nguyên nội dung file làm
+ * prompt text (tránh dán prompt siêu dài, và để GPT tự đọc file y hệt cách
+ * user thật đính kèm). Cùng cơ chế setInputFiles() đã dùng cho ảnh tham chiếu
+ * (uploadReferenceImages trong chatgptImage.ts) — CHƯA có DOM thật xác nhận
+ * thời gian xử lý upload với file KHÔNG PHẢI ảnh (vd .txt/.md), chờ tạm 3s
+ * trước khi gõ prompt tiếp; cần chỉnh lại nếu qua debug snapshot thấy GPT
+ * generate khi file chưa upload xong (vd còn thumbnail "đang tải" trong
+ * composer).
+ */
+async function uploadAttachment(page: Page, filePath: string): Promise<void> {
+  await fileUploadInputLocator(page).setInputFiles(filePath);
+  await page.waitForTimeout(3000);
+}
 
 /**
  * Gõ text vào ô nhập rồi bấm gửi — prompt có thể RẤT dài, ưu tiên dùng
@@ -105,10 +139,10 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       // console.warn(
       //   "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
       // );
-      await insertPromptText(page, text);
+      await insertPromptText(page, textarea, text);
     }
   } else {
-    await insertPromptText(page, text);
+    await insertPromptText(page, textarea, text);
   }
 
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
@@ -163,8 +197,14 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   const maxRetriesOnError = 10;
   let retriesUsed = 0;
 
-  const start = Date.now();
-  while (Date.now() - start < config.generationTimeoutMs) {
+  // Xác nhận qua thực tế (job ec8f3f90, "Connection interrupted. Waiting for
+  // the complete answer"): mạng chập chờn có thể khiến GPT mất RẤT LÂU mới
+  // trả lời xong thật — không còn giới hạn generationTimeoutMs ở đây nữa,
+  // chờ tới khi nào GPT THỰC SỰ trả lời xong mới thôi (theo yêu cầu người
+  // dùng). Vẫn có 2 lối thoát khác nếu GPT lỗi THẬT: retryButton hết lượt
+  // Retry (maxRetriesOnError) ở dưới, hoặc lỗi ném ra từ chính Playwright
+  // (vd page bị đóng/crash).
+  while (true) {
     const retryButton = await firstVisible(
       regenerateErrorButtonCandidates(page),
       500,
@@ -214,10 +254,6 @@ async function sendMessage(page: Page, text: string): Promise<void> {
 
     await page.waitForTimeout(pollIntervalMs);
   }
-
-  throw new ChatGptError(
-    `Hết thời gian chờ GPT trả lời (timeout ${config.generationTimeoutMs}ms)`,
-  );
 }
 
 /**
@@ -484,6 +520,8 @@ export async function askChatGpt(
   prompt: string,
   jobId: string,
   promptFileName?: string,
+  /** Path local file đính kèm (tuỳ chọn) — nếu có, UPLOAD file này lên composer TRƯỚC khi gõ prompt (xem uploadAttachment), dùng khi user gửi prompt qua file thay vì gõ trực tiếp. */
+  attachmentPath?: string,
 ): Promise<{ downloadedFiles: string[] }> {
   const context = await getChatGptBrowserContext();
   const page = await context.newPage();
@@ -508,6 +546,10 @@ export async function askChatGpt(
     await page
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
+
+    if (attachmentPath) {
+      await uploadAttachment(page, attachmentPath);
+    }
 
     let messageToSend = prompt;
     let downloadedFiles: string[] = [];

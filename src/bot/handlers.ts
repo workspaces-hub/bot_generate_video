@@ -11,7 +11,7 @@ import { MAX_REFERENCE_IMAGES } from "../automation/hailuoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import { referenceImagesDirFor } from "../automation/storyboardPipeline";
 import { config } from "../config";
-import { enqueueJob } from "../queue";
+import { confirmVideoGeneration, enqueueJob } from "../queue";
 import {
   CHARACTER_REF_BUTTON_LABEL,
   GPT_BUTTON_LABEL,
@@ -170,15 +170,13 @@ async function downloadTelegramFile(
   return filePath;
 }
 
-/** Đọc thẳng nội dung text 1 file Telegram (dùng cho chế độ "GPT" khi user gửi prompt qua file .txt thay vì gõ trực tiếp) — không lưu ra đĩa. */
-async function downloadTelegramFileAsText(ctx: Context, fileId: string): Promise<string> {
-  const fileUrl = await ctx.telegram.getFileLink(fileId);
-  const response = await fetch(fileUrl);
-  if (!response.ok) {
-    throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
-  }
-  return response.text();
-}
+/**
+ * Prompt cố định gửi kèm khi user đưa yêu cầu qua file (.txt/.md) thay vì gõ
+ * trực tiếp — file được UPLOAD thẳng lên chatgpt.com (xem askChatGpt,
+ * downloadTelegramFile + submitGptJob), GPT tự đọc nội dung file, không cần
+ * dán nguyên văn bản file làm prompt text nữa (tránh dán prompt siêu dài).
+ */
+const GPT_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file";
 
 /**
  * Caption dạng "<tên file json>__<tên file ảnh/video>.<đuôi>" — ĐÚNG format
@@ -377,6 +375,8 @@ interface SubmitGptParams {
   skipPipeline?: boolean;
   /** Tên file .txt user upload làm prompt (nếu gửi qua file thay vì gõ text) — dùng đặt tên lại file JSON GPT trả về, xem queue.ts. */
   promptFileName?: string;
+  /** Path local file prompt (nếu gửi qua upload file) — UPLOAD file này lên chatgpt.com thay vì dán nội dung làm prompt text, xem GPT_FILE_ATTACHMENT_PROMPT. */
+  promptAttachmentPath?: string;
 }
 
 /** Chế độ "GPT" chỉ nhận text thuần, không có ảnh/model/resolution nào — dùng thẳng rawText làm prompt, không qua parsePromptMessage. */
@@ -387,6 +387,7 @@ async function submitGptJob({
   rawText,
   skipPipeline,
   promptFileName,
+  promptAttachmentPath,
 }: SubmitGptParams): Promise<void> {
   const prompt = rawText.trim();
 
@@ -410,6 +411,7 @@ async function submitGptJob({
     statusMessageId: statusMessage.message_id,
     skipPipeline,
     promptFileName,
+    promptAttachmentPath,
   });
 }
 
@@ -931,15 +933,23 @@ export function registerHandlers(bot: Telegraf): void {
 
     const userId = ctx.from.id;
 
-    // Chế độ "GPT"/"Check prompt kịch bản": user gửi prompt qua file .txt
-    // thay vì gõ trực tiếp (dùng khi prompt quá dài) — đọc thẳng nội dung
-    // file làm prompt, không lưu buffer/ảnh gì cả.
+    // Chế độ "GPT"/"Check prompt kịch bản": user gửi yêu cầu qua file (.txt/.md)
+    // thay vì gõ trực tiếp (dùng khi prompt quá dài) — tải file về đĩa rồi
+    // UPLOAD thẳng lên chatgpt.com (xem askChatGpt), prompt chỉ là 1 câu ngắn
+    // yêu cầu GPT đọc file (GPT_FILE_ATTACHMENT_PROMPT), không dán nguyên nội
+    // dung file làm prompt text nữa.
     const gptMode = waitingMode.get(userId);
     if (gptMode === "gpt" || gptMode === "gptCheck") {
       waitingMode.delete(userId);
-      let promptText: string;
+      const originalFileName = ctx.message.document.file_name ?? "prompt.txt";
+      const ext = path.extname(originalFileName) || ".txt";
+      let promptFilePath: string;
       try {
-        promptText = await downloadTelegramFileAsText(ctx, ctx.message.document.file_id);
+        promptFilePath = await downloadTelegramFile(
+          ctx,
+          ctx.message.document.file_id,
+          ext,
+        );
       } catch (err) {
         console.error("[bot] Tải file prompt GPT thất bại:", err);
         await ctx.reply("Không tải được file prompt từ Telegram, đã huỷ.", promptMenu);
@@ -949,9 +959,10 @@ export function registerHandlers(bot: Telegraf): void {
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
-        rawText: promptText,
+        rawText: GPT_FILE_ATTACHMENT_PROMPT,
         skipPipeline: gptMode === "gptCheck",
-        promptFileName: ctx.message.document.file_name,
+        promptFileName: originalFileName,
+        promptAttachmentPath: promptFilePath,
       });
       return;
     }
@@ -988,5 +999,23 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.caption,
       ctx.message.message_id,
     );
+  });
+
+  // Nút "Tạo video" trong tin nhắn xác nhận sau "Check prompt kịch bản" (xem
+  // notifyGptCheckSuccess/createVideoConfirmation trong queue.ts) —
+  // callback_data dạng "confirmVideo:<id>", tra lại jsonPath tương ứng rồi
+  // đẩy job tạo video vào hàng đợi hailuoai.video.
+  bot.action(/^confirmVideo:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmVideoGeneration(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo video.");
+    await ctx.editMessageText("✅ Đã xác nhận — đang chờ tạo video.").catch(() => {});
   });
 }
