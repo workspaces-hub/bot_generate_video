@@ -48,6 +48,35 @@ export function sleep(ms: number): Promise<void> {
 const REQUEST_THROTTLE_MS = 15000;
 
 /**
+ * Cờ dừng SỚM toàn cục cho 3 vòng lặp generateReferenceImagesForFile/
+ * generateSceneImagesForFile/generateVideosForFile — dùng cho nút "Stop All"
+ * (xem stopAll() trong queue.ts). Entry ĐANG generate dở (đã gọi
+ * generateReferenceImage/generateVideo, còn đang chờ Playwright chạy xong)
+ * được để chạy XONG BÌNH THƯỜNG, không bị abort giữa chừng — chỉ các entry
+ * CHƯA bắt đầu (lượt lặp KẾ TIẾP của vòng for) mới bị bỏ qua, giữ nguyên
+ * "success" chưa xác định để lần chạy lại sau (resume) vẫn xử lý tiếp được.
+ *
+ * Cờ CHUNG cho mọi file/job (không phân biệt theo jobId) — đúng ý nghĩa
+ * "Stop All" (dừng tất cả), đơn giản hơn nhiều so với theo dõi riêng từng
+ * job. Phải gọi clearStopStoryboardRequest() SAU KHI job đang dừng đã thực
+ * sự thoát hẳn (xem processGptQueue trong queue.ts), nếu không các job MỚI
+ * sau đó sẽ bị chặn nhầm ngay từ đầu.
+ */
+let stopStoryboardRequested = false;
+
+export function requestStopStoryboardPipeline(): void {
+  stopStoryboardRequested = true;
+}
+
+export function clearStopStoryboardRequest(): void {
+  stopStoryboardRequested = false;
+}
+
+export function isStopStoryboardRequested(): boolean {
+  return stopStoryboardRequested;
+}
+
+/**
  * Ghi đè lại TOÀN BỘ mảng entries vào file input — gọi lại NGAY sau MỖI entry
  * xử lý xong (không đợi hết cả loạt), để nếu tiến trình bị dừng/crash giữa
  * chừng (vd hết credit, mất mạng ở entry sau) thì các entry ĐÃ generate trước
@@ -97,9 +126,17 @@ export interface GenerateImagesResult {
  * "success": false — LUÔN ghi tường minh (không xoá field), để phân biệt được
  * với entry CHƯA TỪNG chạy. Ghi đè lại TOÀN BỘ mảng vào đúng file input gốc
  * NGAY sau MỖI entry (xem saveEntries) — không đợi xử lý xong hết cả loạt.
+ *
+ * onEntryDone (tuỳ chọn): gọi NGAY sau MỖI entry generate ảnh THÀNH CÔNG (path
+ * ảnh vừa lưu) — dùng để gửi file về cho user NGAY LÚC ĐÓ (xem queue.ts) thay
+ * vì đợi xử lý xong hết cả file mới gửi hàng loạt. Lỗi từ callback này (vd
+ * gửi Telegram thất bại) KHÔNG được coi là lỗi generate — chỉ log cảnh báo,
+ * không đánh dấu entry.success = false (ảnh đã tạo thành công thật, chỉ gửi
+ * lỗi thôi, không nên bắt generate lại tốn credit).
  */
 export async function generateReferenceImagesForFile(
   inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
 ): Promise<GenerateImagesResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
@@ -138,6 +175,7 @@ export async function generateReferenceImagesForFile(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
+    if (isStopStoryboardRequested()) break;
     if (entry?.success) continue
     const jobId = randomUUID();
     console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`);
@@ -154,6 +192,14 @@ export async function generateReferenceImagesForFile(
       entry.success = true;
       entry.chatgptSessionId = result.sessionId;
       succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(result.path).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Gửi file "${result.path}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
     } catch (err) {
       console.error(
         `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
@@ -255,9 +301,13 @@ function assignStartEndFrames(
  *
  * Chạy TUẦN TỰ, đánh dấu "success" trên từng entry, ghi đè lại file input gốc
  * NGAY sau MỖI entry — cùng quy tắc với generateReferenceImagesForFile.
+ *
+ * onEntryDone (tuỳ chọn): gọi NGAY sau MỖI video tạo THÀNH CÔNG (path video
+ * vừa lưu) — cùng cơ chế/lý do với generateReferenceImagesForFile.
  */
 export async function generateVideosForFile(
   inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
 ): Promise<GenerateVideosResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
@@ -294,6 +344,7 @@ export async function generateVideosForFile(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
+    if (isStopStoryboardRequested()) break;
     if (entry?.success) continue
     const jobId = randomUUID();
     // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video...`);
@@ -322,6 +373,13 @@ export async function generateVideosForFile(
           ? { omniReferencePaths: refPaths }
           : assignStartEndFrames(refPaths);
 
+      // Check lại NGAY TRƯỚC khi gọi generateVideo (không chỉ ở đầu vòng for)
+      // — resolveRefImagePath ở trên là async (đọc đĩa), Stop All có thể vừa
+      // được bấm đúng lúc đang chờ đoạn đó. Entry CHƯA gọi generateVideo (chưa
+      // tốn credit hailuoai.video) nên bỏ qua an toàn — giữ "success" chưa xác
+      // định để resume sau, đúng ý "chưa gen thì ko gen nữa".
+      if (isStopStoryboardRequested()) break;
+
       const tempFilePath = await generateVideo(entry.prompt, options, jobId);
 
       const destPath = path.join(
@@ -338,6 +396,14 @@ export async function generateVideosForFile(
       // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đã lưu: ${destPath}`);
       entry.success = true;
       succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(destPath).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
     } catch (err) {
       console.error(
         `[storyboardPipeline] [VIDEO] ${entry.id} — lỗi:`,
@@ -369,9 +435,13 @@ export async function generateVideosForFile(
  *
  * Chạy TUẦN TỰ, đánh dấu "success" trên từng entry, ghi đè lại file input gốc
  * NGAY sau MỖI entry — cùng quy tắc với generateReferenceImagesForFile.
+ *
+ * onEntryDone (tuỳ chọn): gọi NGAY sau MỖI entry generate ảnh THÀNH CÔNG —
+ * cùng cơ chế/lý do với generateReferenceImagesForFile.
  */
 export async function generateSceneImagesForFile(
   inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
 ): Promise<GenerateImagesResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
@@ -404,6 +474,7 @@ export async function generateSceneImagesForFile(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
+    if (isStopStoryboardRequested()) break;
     if (entry?.success) continue
     const jobId = randomUUID();
     try {
@@ -429,6 +500,14 @@ export async function generateSceneImagesForFile(
       entry.success = true;
       entry.chatgptSessionId = result.sessionId;
       succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(result.path).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Gửi file "${result.path}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
     } catch (err) {
       console.error(
         `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — lỗi:`,

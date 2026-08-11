@@ -11,7 +11,7 @@ import { MAX_REFERENCE_IMAGES } from "../automation/hailuoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import { referenceImagesDirFor } from "../automation/storyboardPipeline";
 import { config } from "../config";
-import { confirmVideoGeneration, enqueueJob } from "../queue";
+import { confirmVideoGeneration, enqueueJob, stopAll } from "../queue";
 import {
   CHARACTER_REF_BUTTON_LABEL,
   GPT_BUTTON_LABEL,
@@ -19,6 +19,7 @@ import {
   IMAGE_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
+  STOP_ALL_BUTTON_LABEL,
   VIDEO_REF_BUTTON_LABEL,
   promptMenu,
 } from "./keyboard";
@@ -397,7 +398,7 @@ async function submitGptJob({
   }
 
   const statusMessage = await ctx.reply(
-    '⏳ Đang hỏi GPT',
+    '⏳ Đang xử lý',
     {
       reply_parameters: { message_id: promptMessageId },
     },
@@ -695,6 +696,15 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "gptCheck");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, Gửi file .txt kịch bản kèm prompt`,
+    );
+  });
+
+  bot.hears(STOP_ALL_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const { cancelledGptJobs, cancelledVideoJobs } = stopAll();
+    await ctx.reply(
+      `🛑 Đã dừng — huỷ ${cancelledGptJobs} job "${GPT_BUTTON_LABEL}" và ${cancelledVideoJobs} job video (Tham chiếu nhân vật/xác nhận tạo video) đang chờ trong hàng đợi. ` +
+        `Job đang xử lý dở (nếu có) sẽ dừng sau khi xong entry hiện tại, không huỷ giữa chừng.`,
     );
   });
 
