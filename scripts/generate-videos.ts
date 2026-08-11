@@ -13,8 +13,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const { videosDir, succeeded, failed } = await generateVideosForFile(inputPath);
-  console.log(`\nHoàn tất: ${succeeded} thành công, ${failed} lỗi. Output: ${videosDir}`);
+  const { outputDir, succeeded, failed } = await generateVideosForFile(inputPath);
+  console.log(`\nHoàn tất: ${succeeded} thành công, ${failed} lỗi. Output: ${outputDir}`);
 }
 
 main()

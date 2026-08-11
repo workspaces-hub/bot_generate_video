@@ -8,6 +8,7 @@ import {
 } from "./chatgptBrowser";
 import {
   assistantMessageLocator,
+  fileUploadInputLocator,
   promptTextareaCandidates,
   regenerateErrorButtonCandidates,
   sendButtonCandidates,
@@ -107,9 +108,9 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
     const normalizeForCompare = (s: string) => s.replace(/\s+/g, " ").trim();
     const pasted = await textarea.innerText().catch(() => "");
     if (normalizeForCompare(pasted) !== normalizeForCompare(text)) {
-      console.warn(
-        "[chatgptImage] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
-      );
+      // console.warn(
+      //   "[chatgptImage] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
+      // );
       await insertPromptText(page, text);
     }
   } else {
@@ -143,7 +144,7 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
   // Tự bấm Retry (giới hạn số lần) trước khi chịu thua, vì nguyên nhân hay
   // gặp là quá tải server nhất thời, thử lại thường tự qua.
-  const maxRetriesOnError = 2;
+  const maxRetriesOnError = 10;
   let retriesUsed = 0;
   const start = Date.now();
   let stableSince: number | null = null;
@@ -212,6 +213,25 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
   );
 }
 
+/**
+ * Upload ảnh tham chiếu (CHARACTER/LOCATION đã generate trước đó) lên
+ * composer TRƯỚC khi gõ prompt — dùng cho entry SCENE_SETTING có "ref" (xem
+ * generateSceneImagesForFile trong storyboardPipeline.ts): GPT nhìn thấy các
+ * ảnh này làm ảnh tham chiếu khi tạo ảnh bối cảnh mới, giữ đúng nhận diện
+ * nhân vật/địa điểm đã có.
+ *
+ * CHƯA có DOM thật xác nhận thời gian xử lý upload — chờ tạm 3s/ảnh trước
+ * khi gõ prompt tiếp; cần chỉnh lại nếu qua debug snapshot thấy GPT generate
+ * khi ảnh chưa upload xong (vd còn thumbnail "đang tải" trong composer).
+ */
+async function uploadReferenceImages(
+  page: Page,
+  refImagePaths: string[],
+): Promise<void> {
+  await fileUploadInputLocator(page).setInputFiles(refImagePaths);
+  await page.waitForTimeout(3000 * refImagePaths.length);
+}
+
 /** Đoán đuôi file từ URL ảnh — mặc định "png" nếu không xác định được. */
 function guessImageExtension(url: string): string {
   try {
@@ -226,20 +246,75 @@ function guessImageExtension(url: string): string {
 /**
  * Mở chatgpt.com (chat mới), nhờ GPT tạo 1 ảnh theo prompt, chờ xong rồi tải
  * ảnh về destDir/<baseFileName>.<đuôi thật>. Trả về path file đã lưu.
+ *
+ * refImagePaths (tuỳ chọn): ảnh tham chiếu (CHARACTER/LOCATION đã generate
+ * trước đó) upload lên composer TRƯỚC khi gõ prompt — dùng cho entry
+ * SCENE_SETTING có "ref" (xem generateSceneImagesForFile trong
+ * storyboardPipeline.ts) để GPT giữ đúng nhận diện nhân vật/địa điểm khi vẽ
+ * cảnh mới.
  */
 export async function generateReferenceImage(
   prompt: string,
   destDir: string,
   baseFileName: string,
   jobId: string,
+  refImagePaths?: string[],
+): Promise<string> {
+  return enqueueImageGeneration(() =>
+    generateReferenceImageInternal(prompt, destDir, baseFileName, jobId, refImagePaths),
+  );
+}
+
+/**
+ * Hàng đợi (queue) đảm bảo CHỈ 1 tab chatgpt.com được mở tại 1 thời điểm cho
+ * MỌI lời gọi generateReferenceImage — dùng chung cho CẢ 3 loại entry
+ * CHARACTER, LOCATION, SCENE_SETTING (đều gọi qua hàm này, xem
+ * storyboardPipeline.ts). Dù storyboardPipeline hiện đã gọi tuần tự (for-loop
+ * có await) nên về lý thuyết không mở 2 tab cùng lúc, hàng đợi này đảm bảo
+ * chắc chắn không xảy ra dù code gọi thay đổi sau này (vd lỡ đổi sang
+ * Promise.all) hoặc có thêm nơi khác cùng gọi hàm này — tránh mở nhiều tab
+ * Chrome cùng lúc trên CÙNG 1 browser context dùng chung (getChatGptBrowserContext),
+ * dễ gây xung đột/crash.
+ */
+let generateImageQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueImageGeneration<T>(task: () => Promise<T>): Promise<T> {
+  const result = generateImageQueue.then(task, task);
+  // .catch(() => {}) chỉ để KHÔNG chặn task tiếp theo trong hàng đợi khi 1
+  // task lỗi — lỗi thật vẫn được throw lại đầy đủ qua promise "result" trả
+  // về cho caller.
+  generateImageQueue = result.catch(() => {});
+  return result;
+}
+
+async function generateReferenceImageInternal(
+  prompt: string,
+  destDir: string,
+  baseFileName: string,
+  jobId: string,
+  refImagePaths?: string[],
 ): Promise<string> {
   const context = await getChatGptBrowserContext();
   const page = await context.newPage();
   try {
-    await page.goto(config.chatGptBaseUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60_000,
-    });
+    // Xác nhận qua log lỗi thật (job 95227a24): thoáng qua mạng/Cloudflare
+    // chập chờn khiến 1 lần goto timeout 600s dù các job trước/sau vẫn chạy
+    // bình thường — retry thêm 1 lần thay vì fail hẳn cả job ngay lập tức.
+    try {
+      await page.goto(config.chatGptBaseUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 600_000,
+      });
+    } catch (err) {
+      console.warn(
+        "[chatgptImage] page.goto lỗi lần 1, thử lại lần 2:",
+        err instanceof Error ? err.message : err,
+      );
+      await page.goto(config.chatGptBaseUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 600_000,
+      });
+    }
     await dismissCloudflareChallengeIfPresent(page);
 
     const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
@@ -257,20 +332,49 @@ export async function generateReferenceImage(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await sendImagePrompt(page, `Generate an image: ${prompt}`);
-    await captureSnapshot(page, jobId, "result");
-
-    const messages = assistantMessageLocator(page);
-    if ((await messages.count()) === 0) {
-      throw new ChatGptImageError(
-        "Không tìm thấy câu trả lời nào từ ChatGPT trên trang",
-      );
+    if (refImagePaths && refImagePaths.length > 0) {
+      await uploadReferenceImages(page, refImagePaths);
     }
-    const latest = messages.last();
-    const images = generatedImageLocator(latest);
-    if ((await images.count()) === 0) {
+
+    // Xác nhận qua log lỗi thật (job 75724184): GPT đôi khi trả lời XONG bình
+    // thường (không phải lỗi UI "Something went wrong" có nút Retry đã xử lý
+    // ở trên) nhưng nội dung chỉ là 1 câu xin lỗi dạng "I wasn't able to
+    // generate the image due to an error on my side." — không có ảnh nào,
+    // không phải lỗi selector. Coi đây là lỗi TẠM THỜI phía GPT, tự gõ lại
+    // NGUYÊN prompt (gọi lại sendImagePrompt) để thử lại vài lần trước khi
+    // chịu thua, vì không có nút Retry sẵn cho case này như case kia.
+    const maxGptTextFailureRetries = 5;
+    let images: Locator;
+    let latest: Locator;
+    for (let attempt = 0; ; attempt++) {
+      await sendImagePrompt(page, `Generate an image: ${prompt}`);
+      await captureSnapshot(page, jobId, "result");
+
+      const messages = assistantMessageLocator(page);
+      if ((await messages.count()) === 0) {
+        throw new ChatGptImageError(
+          "Không tìm thấy câu trả lời nào từ ChatGPT trên trang",
+        );
+      }
+      latest = messages.last();
+      images = generatedImageLocator(latest);
+      if ((await images.count()) > 0) break;
+
+      const latestText = await latest.innerText().catch(() => "");
+      const isGptSideFailure = /wasn'?t able to generate|error on (my|our) side/i.test(
+        latestText,
+      );
+      if (isGptSideFailure && attempt < maxGptTextFailureRetries) {
+        console.warn(
+          `[chatgptImage] GPT báo lỗi phía họ (lần ${attempt + 1}/${maxGptTextFailureRetries}), gõ lại prompt để thử lại: "${latestText.slice(0, 200)}"`,
+        );
+        continue;
+      }
+
       throw new ChatGptImageError(
-        "GPT trả lời xong nhưng không thấy ảnh nào được tạo",
+        isGptSideFailure
+          ? `GPT báo lỗi phía họ khi tạo ảnh (đã thử lại ${attempt} lần vẫn lỗi): "${latestText.slice(0, 200)}"`
+          : "GPT trả lời xong nhưng không thấy ảnh nào được tạo",
       );
     }
 
@@ -284,7 +388,13 @@ export async function generateReferenceImage(
     // Ảnh do ChatGPT tạo thường phục vụ qua URL đã ký sẵn (pre-signed) —
     // fetch thẳng qua request context (dùng chung cookie/session với page)
     // thay vì phải bấm hover/click UI để kích hoạt sự kiện download.
-    const response = await page.context().request.get(src);
+    //
+    // Xác nhận qua log lỗi thật (job e887e23c): mặc định request.get() chỉ
+    // chờ 30s — response header đã về 200 OK nhưng ảnh dung lượng lớn tải qua
+    // mạng VPS chậm chưa đọc xong body thì đã bị coi là timeout. timeout: 0
+    // = tắt hẳn giới hạn thời gian (Playwright chờ tới khi xong hoặc lỗi
+    // mạng thật, không tự huỷ giữa chừng).
+    const response = await page.context().request.get(src, { timeout: 0 });
     if (!response.ok()) {
       throw new ChatGptImageError(
         `Tải ảnh thất bại: HTTP ${response.status()}`,

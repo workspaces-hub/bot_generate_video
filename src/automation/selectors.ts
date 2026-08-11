@@ -141,6 +141,21 @@ export const startFrameButtonCandidates = (page: Page): Array<() => Locator> => 
 ];
 
 /**
+ * Nút "End Frame" (upload ảnh kết thúc video) — cạnh nút "Start" trong cùng
+ * khung nhập prompt (xem startFrameButtonCandidates). Locale key thật của
+ * "Start" là "start_frame_upload_btn":"Start" (không phải "Start Frame") —
+ * suy ra theo cùng quy ước, nhãn nút thật nhiều khả năng là "End" (không
+ * phải "End Frame"). Ưu tiên match "End" trước, giữ "End Frame" làm fallback
+ * phòng site đặt khác — CHƯA có DOM thật xác nhận riêng cho nút này, cần
+ * chỉnh lại qua debug snapshot nếu sai.
+ */
+export const endFrameButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^end$/i }),
+  () => page.getByRole("button", { name: /end frame/i }),
+  () => page.getByText(/^end frame$/i),
+];
+
+/**
  * Popover mở ra sau khi bấm chip model/resolution là Ant Design popover
  * (class "ant-popover-content"). Chỉ 1 popover mở tại 1 thời điểm, nên scope
  * tìm kiếm vào đây giúp tránh khớp nhầm chữ ẩn ở nơi khác trên trang.

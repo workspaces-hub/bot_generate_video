@@ -9,6 +9,7 @@ import {
 } from "../automation/hailuo";
 import { MAX_REFERENCE_IMAGES } from "../automation/hailuoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
+import { referenceImagesDirFor } from "../automation/storyboardPipeline";
 import { config } from "../config";
 import { enqueueJob } from "../queue";
 import {
@@ -177,6 +178,77 @@ async function downloadTelegramFileAsText(ctx: Context, fileId: string): Promise
     throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
   }
   return response.text();
+}
+
+/**
+ * Caption dạng "<tên file json>__<tên file ảnh/video>.<đuôi>" — ĐÚNG format
+ * bot tự đặt tên khi gửi kết quả cho user (xem queue.ts, dấu "__" phân tách
+ * tên file json và tên file ảnh/video). Tách theo dấu "__" ĐẦU TIÊN —
+ * jsonBaseName lấy từ sanitizeId (storyboardPipeline.ts) chỉ có gạch dưới
+ * ĐƠN, không có "__", nên phần còn lại sau "__" đầu tiên chắc chắn là tên
+ * file gốc (kèm đuôi).
+ */
+const REPLACEMENT_CAPTION_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
+
+/**
+ * User gửi lại ảnh/video kèm caption ĐÚNG format bot tự đặt tên khi gửi kết
+ * quả — coi đây là yêu cầu THAY THẾ file đã generate trước đó bằng file mới
+ * (sửa tay 1 ảnh/video bị lỗi mà không cần chạy lại cả job GPT). Backup file
+ * cũ (nếu có) thành "<tên>_bk.<đuôi>" trước khi ghi đè — không mất dữ liệu
+ * cũ. Trả về true nếu ĐÃ xử lý (caption khớp format) — handler gọi hàm này
+ * phải dừng lại ngay, không xử lý tiếp theo luồng ảnh/video tham chiếu
+ * thường.
+ */
+async function tryReplaceGeneratedFile(
+  ctx: Context,
+  fileId: string,
+  caption: string | undefined,
+  promptMessageId: number,
+): Promise<boolean> {
+  if (!caption) return false;
+  const match = caption.trim().match(REPLACEMENT_CAPTION_PATTERN);
+  if (!match) return false;
+
+  const [, jsonBaseName, targetFileName] = match;
+  const dir = referenceImagesDirFor(jsonBaseName);
+  const targetPath = path.join(dir, targetFileName);
+
+  try {
+    await fs.mkdir(dir, { recursive: true });
+
+    let backupNote = "";
+    const targetExists = await fs
+      .access(targetPath)
+      .then(() => true)
+      .catch(() => false);
+    if (targetExists) {
+      const { name, ext } = path.parse(targetFileName);
+      const backupFileName = `${name}_bk${ext}`;
+      await fs.copyFile(targetPath, path.join(dir, backupFileName));
+      backupNote = ` (đã sao lưu bản cũ thành "${backupFileName}")`;
+    }
+
+    const fileUrl = await ctx.telegram.getFileLink(fileId);
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.writeFile(targetPath, buffer);
+
+    await ctx.reply(
+      `✅ Đã thay thế "${targetFileName}" trong "${jsonBaseName}"${backupNote}.`,
+      { reply_parameters: { message_id: promptMessageId } },
+    );
+  } catch (err) {
+    console.error("[bot] Thay thế file thất bại:", err);
+    await ctx.reply(
+      `❌ Không thay thế được file "${targetFileName}" trong "${jsonBaseName}": ${err instanceof Error ? err.message : err}`,
+      { reply_parameters: { message_id: promptMessageId } },
+    );
+  }
+
+  return true;
 }
 
 interface SubmitVideoParams {
@@ -611,8 +683,7 @@ export function registerHandlers(bot: Telegraf): void {
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "gpt");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn hỏi GPT ở tin nhắn tiếp theo, ` +
-        `hoặc gửi 1 file .txt chứa prompt (dùng khi prompt quá dài).`,
+      `${ctx.from.first_name ?? "Bạn"}, gửi file .txt kịch bản kèm prompt`,
     );
   });
 
@@ -621,9 +692,7 @@ export function registerHandlers(bot: Telegraf): void {
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "gptCheck");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt kịch bản ở tin nhắn tiếp theo, ` +
-        `hoặc gửi 1 file .txt chứa prompt (dùng khi prompt quá dài). ` +
-        `Bot sẽ hỏi GPT rồi gửi lại NGUYÊN file JSON tải về để bạn kiểm tra — KHÔNG gen ảnh/video.`,
+      `${ctx.from.first_name ?? "Bạn"}, Gửi file .txt kịch bản kèm prompt`,
     );
   });
 
@@ -715,6 +784,20 @@ export function registerHandlers(bot: Telegraf): void {
   bot.on(message("photo"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
+    // Caption đúng format "<tên file json>__<tên file ảnh/video>.<đuôi>" —
+    // yêu cầu THAY THẾ file đã generate, ưu tiên xử lý TRƯỚC mọi mode ảnh
+    // tham chiếu thường (không cần bấm nút nào trước, hoạt động độc lập).
+    if (
+      await tryReplaceGeneratedFile(
+        ctx,
+        ctx.message.photo[ctx.message.photo.length - 1].file_id,
+        ctx.message.caption,
+        ctx.message.message_id,
+      )
+    ) {
+      return;
+    }
+
     const userId = ctx.from.id;
 
     // "omniRef" chấp nhận ảnh/video/audio làm file tham chiếu — buffer riêng
@@ -773,6 +856,17 @@ export function registerHandlers(bot: Telegraf): void {
   bot.on(message("video"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
+    if (
+      await tryReplaceGeneratedFile(
+        ctx,
+        ctx.message.video.file_id,
+        ctx.message.caption,
+        ctx.message.message_id,
+      )
+    ) {
+      return;
+    }
+
     const userId = ctx.from.id;
     if (
       !pendingOmniRefBuffers.has(userId) &&
@@ -823,6 +917,17 @@ export function registerHandlers(bot: Telegraf): void {
   // mime_type; bỏ qua (báo lại cho user) nếu không phải 1 trong 3 loại này.
   bot.on(message("document"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
+
+    if (
+      await tryReplaceGeneratedFile(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.message.caption,
+        ctx.message.message_id,
+      )
+    ) {
+      return;
+    }
 
     const userId = ctx.from.id;
 

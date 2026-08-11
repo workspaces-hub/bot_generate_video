@@ -9,10 +9,11 @@ import { generateImage } from "./automation/hailuoImage";
 import { askChatGpt } from "./automation/chatgpt";
 import {
   generateReferenceImagesForFile,
+  generateSceneImagesForFile,
   generateVideosForFile,
+  sleep,
   type FailedEntry,
 } from "./automation/storyboardPipeline";
-import { zipFiles as zipFilesToArchive } from "./automation/zip";
 
 interface BaseJob {
   chatId: number;
@@ -237,7 +238,8 @@ async function processGptQueue(): Promise<void> {
       try {
         const { downloadedFiles } = await askChatGpt(job.prompt, jobId, job.promptFileName);
         if (job.skipPipeline) {
-          await notifyGptCheckSuccess(job, downloadedFiles);
+          const checkResult = await runGptCheckImagePipeline(downloadedFiles);
+          await notifyGptCheckSuccess(job, checkResult);
         } else {
           const result = await runStoryboardPipeline(downloadedFiles);
           await notifyGptSuccess(job, result);
@@ -247,6 +249,12 @@ async function processGptQueue(): Promise<void> {
       } finally {
         gptJobs.shift();
         persistGptJobs();
+        // Chờ giữa các lần gọi gen json (askChatGpt) liên tiếp — tránh gửi
+        // request quá nhanh lên chatgpt.com (theo yêu cầu người dùng). Chỉ
+        // chờ khi còn job kế tiếp, tránh delay vô ích lúc hàng đợi đã hết.
+        if (gptJobs.length > 0) {
+          await sleep(15000);
+        }
       }
     }
   } finally {
@@ -254,82 +262,82 @@ async function processGptQueue(): Promise<void> {
   }
 }
 
+/** 1 video đã tạo xong, kèm caption + tên file hiển thị khi gửi lên Telegram. */
+interface StoryboardVideoFile {
+  path: string;
+  caption: string;
+  /** Tên file THẬT hiện ra khi user tải về trên Telegram — "<tên file json>__<tên file video>.<đuôi>". */
+  fileName: string;
+}
+
 interface GptPipelineResult {
-  /** File tải về KHÔNG phải .json — gửi thẳng như cũ, không qua pipeline ảnh/video. */
-  otherFiles: string[];
-  /** 1 file .zip cho mỗi file JSON storyboard ĐÃ tạo video thành công (không có ảnh lỗi). */
-  zipFiles: string[];
+  /** Từng video đã tạo xong (gửi trực tiếp, KHÔNG nén zip nữa) — xem runStoryboardPipeline. */
+  videoFiles: StoryboardVideoFile[];
   failedImageEntries: FailedEntry[];
   failedVideoEntries: FailedEntry[];
 }
 
-/** Số video tối đa gộp chung trong 1 file zip khi gửi kết quả — xem runStoryboardPipeline. */
-const VIDEOS_PER_ZIP_PART = 3;
-
 /**
- * Với MỖI file JSON storyboard GPT tải về (thường chỉ 1, vd meta.json):
+ * Với MỖI file JSON storyboard GPT tải về (thường chỉ 1, vd meta.json — file
+ * KHÔNG phải .json bị bỏ qua, không xử lý):
  * 1. Tạo ảnh cho toàn bộ entry CHARACTER/LOCATION (generateReferenceImagesForFile)
- *    — lưu vào reference-images/<tên file json>/characters|locations/.
- * 2. Nếu CÓ entry ảnh lỗi: dừng lại, KHÔNG tạo video, KHÔNG nén/gửi file —
- *    chỉ báo lỗi cho user (folder ảnh vẫn còn nguyên trên đĩa để kiểm tra/
- *    chạy lại thủ công).
- * 3. Nếu KHÔNG lỗi ảnh nào: tiếp tục tạo toàn bộ video (generateVideosForFile)
- *    — lưu vào reference-images/<tên file json>/videos/, rồi nén file trong
- *    đó (không nén cả folder reference-images/<tên file json>) thành nhiều
- *    file .zip, mỗi file gồm tối đa VIDEOS_PER_ZIP_PART video, đặt tên
- *    "<tên file json>_partX.zip" để gửi.
- * File KHÔNG phải .json (hiếm khi xảy ra) gửi thẳng như trước, không qua các
- * bước trên.
+ *    — lưu chung vào reference-images/<tên file json>/ (không tách folder
+ *    con characters/locations/videos nữa).
+ * 2. Nếu CÓ entry ảnh lỗi: dừng lại, KHÔNG tạo ảnh SCENE_SETTING/video, KHÔNG
+ *    gửi file — chỉ báo lỗi cho user (folder ảnh vẫn còn nguyên trên đĩa để
+ *    kiểm tra/chạy lại thủ công).
+ * 3. Nếu KHÔNG lỗi ảnh nào: tạo tiếp ảnh cho entry SCENE_SETTING
+ *    (generateSceneImagesForFile — upload ảnh CHARACTER/LOCATION liên quan
+ *    làm ref nếu entry có "ref") TRƯỚC KHI tạo video, vì video có thể dùng
+ *    chính ảnh SCENE_SETTING làm ref (Omni Reference).
+ * 4. Nếu ảnh SCENE_SETTING cũng KHÔNG lỗi: tiếp tục tạo toàn bộ video
+ *    (generateVideosForFile) — lưu vào CÙNG folder trên, rồi gửi TRỰC TIẾP
+ *    từng video (không nén zip) kèm caption VÀ tên file thật "<tên file
+ *    json>__<tên file video>" để dễ biết video thuộc storyboard/clip nào.
  */
 async function runStoryboardPipeline(
   downloadedFiles: string[],
 ): Promise<GptPipelineResult> {
-  const otherFiles: string[] = [];
-  const zipFiles: string[] = [];
+  const videoFiles: StoryboardVideoFile[] = [];
   const failedImageEntries: FailedEntry[] = [];
   const failedVideoEntries: FailedEntry[] = [];
 
   for (const filePath of downloadedFiles) {
-    console.log("🚀 ~ runStoryboardPipeline ~ filePath:", filePath);
     if (path.extname(filePath).toLowerCase() !== ".json") {
-      otherFiles.push(filePath);
       continue;
     }
 
     const imagesResult = await generateReferenceImagesForFile(filePath);
-    console.log("🚀 ~ runStoryboardPipeline ~ imagesResult:", imagesResult)
     failedImageEntries.push(...imagesResult.failedEntries);
 
-    // Chỉ nén + gửi kết quả khi KHÔNG có ảnh nào lỗi và đã tạo được video —
-    // có lỗi ảnh thì dừng ở bước báo lỗi, không gửi file zip dở dang (folder
-    // vẫn còn nguyên trên đĩa để kiểm tra/chạy lại thủ công nếu cần).
+    // Chỉ tạo ảnh SCENE_SETTING + video + gửi kết quả khi KHÔNG có ảnh
+    // CHARACTER/LOCATION nào lỗi — có lỗi thì dừng ở bước báo lỗi, không tạo
+    // dở dang (folder vẫn còn nguyên trên đĩa để kiểm tra/chạy lại thủ công).
     if (imagesResult.failed === 0) {
-      const videosResult = await generateVideosForFile(filePath);
-      failedVideoEntries.push(...videosResult.failedEntries);
+      const sceneResult = await generateSceneImagesForFile(filePath);
+      failedImageEntries.push(...sceneResult.failedEntries);
 
-      // Chỉ nén file trong folder "videos" (không nén cả folder
-      // reference-images/<tên file json> — bên trong còn có
-      // characters/locations/file json gốc, không cần gửi lại) — chia thành
-      // nhiều phần, MỖI PHẦN gồm tối đa VIDEOS_PER_ZIP_PART video, tên file
-      // "<tên file json>_partX.zip" — tránh 1 file zip duy nhất quá nặng khi
-      // có nhiều video (dễ vượt giới hạn upload 50MB của Telegram Bot API,
-      // xem sendDocumentMaybeSplit).
-      const videoFileNames = (await fsp.readdir(videosResult.videosDir))
-        .filter((f) => f.toLowerCase().endsWith(".mp4"))
-        .sort();
-      for (let i = 0; i < videoFileNames.length; i += VIDEOS_PER_ZIP_PART) {
-        const chunk = videoFileNames
-          .slice(i, i + VIDEOS_PER_ZIP_PART)
-          .map((f) => path.join(videosResult.videosDir, f));
-        const partIndex = i / VIDEOS_PER_ZIP_PART + 1;
-        const zipPath = `${imagesResult.outputDir}_part${partIndex}.zip`;
-        await zipFilesToArchive(chunk, zipPath);
-        zipFiles.push(zipPath);
+      if (sceneResult.failed === 0) {
+        const videosResult = await generateVideosForFile(filePath);
+        failedVideoEntries.push(...videosResult.failedEntries);
+
+        const jsonBaseName = path.basename(filePath, path.extname(filePath));
+        const videoFileNames = (await fsp.readdir(videosResult.outputDir))
+          .filter((f) => f.toLowerCase().endsWith(".mp4"))
+          .sort();
+        for (const videoFileName of videoFileNames) {
+          const caption = `${jsonBaseName}__${path.parse(videoFileName).name}`;
+          videoFiles.push({
+            path: path.join(videosResult.outputDir, videoFileName),
+            caption,
+            fileName: `${caption}${path.extname(videoFileName)}`,
+          });
+        }
       }
     }
   }
 
-  return { otherFiles, zipFiles, failedImageEntries, failedVideoEntries };
+  return { videoFiles, failedImageEntries, failedVideoEntries };
 }
 
 function formatFailedEntries(entries: FailedEntry[]): string {
@@ -403,37 +411,35 @@ async function sendGeneratedImages(
   } catch (err) {
     // console.warn("[queue] sendMediaGroup thất bại, gửi lần lượt từng ảnh:", err);
     for (const filePath of filePaths) {
-      await sendGeneratedImage(job, filePath, caption);
+      await sendGeneratedImage(job.chatId, filePath, caption, job.promptMessageId);
     }
   }
 }
 
 async function sendGeneratedImage(
-  job: ImageGenerationJob,
+  chatId: number,
   filePath: string,
   caption: string,
+  promptMessageId: number,
+  /** Tên file THẬT hiện ra khi user tải về (tuỳ chọn) — không truyền thì Telegram dùng tên file gốc trên đĩa. */
+  fileName?: string,
 ): Promise<void> {
   try {
     await telegram!.sendPhoto(
-      job.chatId,
-      { source: filePath },
+      chatId,
+      { source: filePath, filename: fileName },
       {
         caption,
-        reply_parameters: { message_id: job.promptMessageId },
+        reply_parameters: { message_id: promptMessageId },
       },
     );
   } catch (err) {
-    console.warn(
-      "[queue] sendPhoto thất bại, thử lại bằng sendDocument (gửi file gốc, không nén):",
-      filePath,
-      err,
-    );
     await telegram!.sendDocument(
-      job.chatId,
-      { source: filePath },
+      chatId,
+      { source: filePath, filename: fileName },
       {
         caption,
-        reply_parameters: { message_id: job.promptMessageId },
+        reply_parameters: { message_id: promptMessageId },
       },
     );
   }
@@ -527,29 +533,106 @@ async function sendDocumentMaybeSplit(
   }
 }
 
+/** 1 ảnh đã tạo cho job "Check prompt kịch bản", kèm caption + tên file hiển thị khi gửi lên Telegram. */
+interface GptCheckImageFile {
+  path: string;
+  caption: string;
+  /** Tên file THẬT hiện ra khi user tải về trên Telegram — "<tên file json>__<tên file ảnh>.<đuôi>". */
+  fileName: string;
+}
+
+interface GptCheckPipelineResult {
+  /** File JSON storyboard GPT trả về — gửi lại nguyên bản để user kiểm tra nội dung. */
+  jsonFiles: string[];
+  /** Ảnh CHARACTER/LOCATION/SCENE_SETTING đã tạo — KHÔNG gen video. */
+  imageFiles: GptCheckImageFile[];
+  failedImageEntries: FailedEntry[];
+}
+
 /**
- * Dùng cho job "Check prompt kịch bản" (GptJob.skipPipeline = true) — GPT trả
- * lời xong thì gửi lại NGUYÊN các file tải về (thường là 1 file JSON
- * storyboard) để user kiểm tra nội dung nhanh, KHÔNG gen ảnh/video, KHÔNG nén
- * zip. Không xoá file sau khi gửi — giữ làm lưu trữ.
+ * Dùng cho job "Check prompt kịch bản" (GptJob.skipPipeline = true): với mỗi
+ * file JSON storyboard GPT trả về, gen ảnh CHARACTER/LOCATION
+ * (generateReferenceImagesForFile) rồi SCENE_SETTING (generateSceneImagesForFile)
+ * — KHÔNG gen video. Ảnh lưu chung vào reference-images/<tên file json>/ như
+ * runStoryboardPipeline.
+ */
+async function runGptCheckImagePipeline(
+  downloadedFiles: string[],
+): Promise<GptCheckPipelineResult> {
+  const jsonFiles: string[] = [];
+  const imageFiles: GptCheckImageFile[] = [];
+  const failedImageEntries: FailedEntry[] = [];
+
+  for (const filePath of downloadedFiles) {
+    if (path.extname(filePath).toLowerCase() !== ".json") continue;
+    jsonFiles.push(filePath);
+
+    const imagesResult = await generateReferenceImagesForFile(filePath);
+    failedImageEntries.push(...imagesResult.failedEntries);
+    if (imagesResult.failed > 0) continue;
+
+    const sceneResult = await generateSceneImagesForFile(filePath);
+    failedImageEntries.push(...sceneResult.failedEntries);
+
+    const jsonBaseName = path.basename(filePath, path.extname(filePath));
+    const imageFileNames = (await fsp.readdir(imagesResult.outputDir))
+      .filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f))
+      .sort();
+    for (const imageFileName of imageFileNames) {
+      const caption = `${jsonBaseName}__${path.parse(imageFileName).name}`;
+      imageFiles.push({
+        path: path.join(imagesResult.outputDir, imageFileName),
+        caption,
+        fileName: `${caption}${path.extname(imageFileName)}`,
+      });
+    }
+  }
+
+  return { jsonFiles, imageFiles, failedImageEntries };
+}
+
+/**
+ * Dùng cho job "Check prompt kịch bản" (GptJob.skipPipeline = true) — sau
+ * khi gen ảnh xong (xem runGptCheckImagePipeline), gửi lại cho user: file
+ * JSON storyboard gốc (reply) và từng ảnh đã tạo, caption VÀ tên file thật
+ * "<tên file json>__<tên file ảnh>". KHÔNG gen video. Không xoá file sau khi
+ * gửi — giữ làm lưu trữ.
  */
 async function notifyGptCheckSuccess(
   job: GptJob,
-  downloadedFiles: string[],
+  result: GptCheckPipelineResult,
 ): Promise<void> {
   if (!telegram) return;
   try {
-    if (downloadedFiles.length === 0) {
+    if (result.failedImageEntries.length > 0) {
+      await telegram.sendMessage(
+        job.chatId,
+        `⚠️ Không tạo được ảnh cho ${result.failedImageEntries.length} entry:\n${formatFailedEntries(result.failedImageEntries)}`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    }
+
+    if (result.jsonFiles.length === 0 && result.imageFiles.length === 0) {
       await telegram.sendMessage(job.chatId, `✅ GPT đã trả lời xong (không có file đính kèm).`, {
         reply_parameters: { message_id: job.promptMessageId },
       });
     }
-    for (const [i, filePath] of downloadedFiles.entries()) {
+
+    for (const filePath of result.jsonFiles) {
       await sendDocumentMaybeSplit(
         job.chatId,
         filePath,
-        i === 0 ? `✅ Kết quả check GPT` : `📎 ${path.basename(filePath)}`,
+        `✅ Kết quả check GPT`,
         job.promptMessageId,
+      );
+    }
+    for (const image of result.imageFiles) {
+      await sendGeneratedImage(
+        job.chatId,
+        image.path,
+        image.caption,
+        job.promptMessageId,
+        image.fileName,
       );
     }
   } catch (err) {
@@ -591,8 +674,7 @@ async function notifyGptSuccess(
       );
     }
 
-    const allFiles = result.zipFiles;
-    if (allFiles.length === 0) {
+    if (result.videoFiles.length === 0) {
       // GPT trả lời xong nhưng không có file đính kèm nào — không coi là lỗi.
       await telegram.sendMessage(
         job.chatId,
@@ -602,12 +684,17 @@ async function notifyGptSuccess(
         },
       );
     }
-    for (const [i, filePath] of allFiles.entries()) {
-      await sendDocumentMaybeSplit(
+    // Gửi TRỰC TIẾP từng video (không nén zip) — caption VÀ tên file thật
+    // "<tên file json>__<tên file video>" để biết video thuộc storyboard/clip
+    // nào (kể cả khi user tải file về, không chỉ xem caption trên Telegram).
+    for (const video of result.videoFiles) {
+      await telegram.sendVideo(
         job.chatId,
-        filePath,
-        i === 0 ? `✅ Kết quả GPT"` : `📎 ${path.basename(filePath)}`,
-        job.promptMessageId,
+        { source: video.path, filename: video.fileName },
+        {
+          caption: video.caption,
+          reply_parameters: { message_id: job.promptMessageId },
+        },
       );
     }
   } catch (err) {

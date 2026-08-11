@@ -16,6 +16,19 @@ export const promptTextareaCandidates = (page: Page): Array<() => Locator> => [
   () => page.locator('[contenteditable="true"]'),
 ];
 
+/**
+ * CHƯA có DOM thật xác nhận (tính năng upload ảnh tham chiếu mới, chưa chạy
+ * qua debug snapshot thực tế) — <input type="file"> phục vụ nút "+"/"Add
+ * photos & files" trong composer thường bị ẨN (display:none/aria-hidden),
+ * KHÔNG cần click mở menu trước — set thẳng file lên input này bằng
+ * setInputFiles() (cách chuẩn của Playwright cho input file ẩn, bỏ qua bước
+ * mở dialog OS). Có thể cần chỉnh lại qua debug snapshot ở lần chạy thử đầu
+ * nếu chatgpt.com dùng cấu trúc khác (vd nhiều input file cho nhiều mục đích
+ * khác nhau trên trang).
+ */
+export const fileUploadInputLocator = (page: Page): Locator =>
+  page.locator('input[type="file"]').first();
+
 /** Nút gửi prompt (icon mũi tên) cạnh ô nhập. */
 export const sendButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.locator('button[data-testid="send-button"]'),
@@ -114,3 +127,28 @@ export const signInIndicatorCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/^log in$/i),
   () => page.getByRole("button", { name: /^log in$/i }),
 ];
+
+/**
+ * Nút chọn mức "reasoning effort" hiện ở toolbar cạnh ô nhập (vd "Medium" —
+ * thấy lặp lại trong nhiều ảnh debug thật). CHỈ LÀ NHÃN HIỂN THỊ (mức độ suy
+ * luận), KHÔNG PHẢI tên model đầy đủ — muốn biết CHÍNH XÁC model nào thực sự
+ * xử lý 1 câu trả lời, đọc attribute data-message-model-slug trên tin nhắn
+ * trả lời thật (xem assistantTextMessageLocator) thay vì dựa vào nút này.
+ * CHƯA có DOM thật xác nhận data-testid cụ thể của nút — chỉ đoán qua text
+ * hiển thị, có thể cần chỉnh lại qua debug snapshot.
+ */
+export const modelSelectorButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: /^(auto|fast|medium|thinking|extended thinking)$/i }),
+];
+
+/**
+ * Tin nhắn trả lời TEXT thường (KHÔNG dùng cho phản hồi tạo ảnh — xem
+ * assistantMessageLocator không có attribute này) — DOM thật xác nhận (job
+ * b38b1151): `<div data-message-author-role="assistant" ...
+ * data-message-model-slug="gpt-5-6-thinking">` — attribute
+ * data-message-model-slug ghi đúng tên model THẬT đã xử lý câu trả lời đó,
+ * đáng tin cậy hơn hẳn nhãn hiển thị trên nút chọn model (nhãn đó chỉ là mức
+ * độ suy luận, không phải tên model).
+ */
+export const assistantTextMessageLocator = (page: Page): Locator =>
+  page.locator('[data-message-author-role="assistant"]');

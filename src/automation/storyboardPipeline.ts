@@ -22,8 +22,8 @@ export interface StoryboardEntry {
   ref?: StoryboardRefItem[];
   prompt?: string;
   duration?: number;
-  /** true/false nếu đã từng generate (ảnh hoặc video) — không có field này nghĩa là CHƯA TỪNG chạy. */
-  error?: boolean;
+  /** true/false nếu đã từng generate (ảnh hoặc video) THÀNH CÔNG hay không — không có field này nghĩa là CHƯA TỪNG chạy. */
+  success?: boolean;
   [key: string]: unknown;
 }
 
@@ -33,10 +33,23 @@ export function sanitizeId(id: string): string {
 }
 
 /**
+ * Chờ ms mili giây — dùng giữa các lần gọi generateReferenceImage/askChatGpt
+ * liên tiếp (xem generateReferenceImagesForFile/generateSceneImagesForFile
+ * bên dưới, và processGptQueue trong queue.ts), tránh gửi request quá nhanh
+ * liên tiếp lên chatgpt.com (theo yêu cầu người dùng, giảm rủi ro rate-limit
+ * hoặc bị nghi ngờ bot).
+ */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const REQUEST_THROTTLE_MS = 15000;
+
+/**
  * Ghi đè lại TOÀN BỘ mảng entries vào file input — gọi lại NGAY sau MỖI entry
  * xử lý xong (không đợi hết cả loạt), để nếu tiến trình bị dừng/crash giữa
  * chừng (vd hết credit, mất mạng ở entry sau) thì các entry ĐÃ generate trước
- * đó không bị mất field "error" đã cập nhật.
+ * đó không bị mất field "success" đã cập nhật.
  */
 async function saveEntries(
   inputPath: string,
@@ -62,8 +75,6 @@ export interface FailedEntry {
 
 export interface GenerateImagesResult {
   outputDir: string;
-  charactersDir: string;
-  locationsDir: string;
   succeeded: number;
   failed: number;
   failedEntries: FailedEntry[];
@@ -74,13 +85,14 @@ export interface GenerateImagesResult {
  * của tính năng GPT storyboard, xem askChatGpt/downloadAttachedFiles trong
  * chatgpt.ts), lọc entry CHARACTER/LOCATION (bỏ qua VIDEO vì đó là prompt tạo
  * VIDEO, không phải ảnh), rồi lần lượt nhờ GPT tạo ảnh cho từng entry và tải
- * về reference-images/<tên file input>/characters|locations/<id>.<đuôi>.
+ * về CHUNG 1 folder reference-images/<tên file input>/<id>.<đuôi> — không
+ * chia riêng characters/locations nữa (đơn giản hoá, dễ duyệt file).
  *
  * Chạy TUẦN TỰ từng entry (không song song) — cùng 1 browser context
  * chatgpt.com dùng chung, tránh nhiều tab cùng thao tác gây xung đột.
  *
- * Entry nào generate lỗi được đánh dấu "error": true, thành công thì
- * "error": false — LUÔN ghi tường minh (không xoá field), để phân biệt được
+ * Entry nào generate thành công được đánh dấu "success": true, lỗi thì
+ * "success": false — LUÔN ghi tường minh (không xoá field), để phân biệt được
  * với entry CHƯA TỪNG chạy. Ghi đè lại TOÀN BỘ mảng vào đúng file input gốc
  * NGAY sau MỖI entry (xem saveEntries) — không đợi xử lý xong hết cả loạt.
  */
@@ -94,10 +106,7 @@ export async function generateReferenceImagesForFile(
   }
 
   const outputDir = referenceImagesDirFor(inputPath);
-  const charactersDir = path.join(outputDir, "characters");
-  const locationsDir = path.join(outputDir, "locations");
-  await fs.promises.mkdir(charactersDir, { recursive: true });
-  await fs.promises.mkdir(locationsDir, { recursive: true });
+  await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
     path.join(outputDir, path.basename(inputPath)),
@@ -127,37 +136,38 @@ export async function generateReferenceImagesForFile(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
-    const destDir = entry.type === "CHARACTER" ? charactersDir : locationsDir;
+    if (entry?.success) continue
     const jobId = randomUUID();
-    // console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`);
+    console.log(`[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh...`);
     try {
       const savedPath = await generateReferenceImage(
         entry.prompt,
-        destDir,
+        outputDir,
         sanitizeId(entry.id),
         jobId,
       );
       console.log(
         `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${savedPath}`,
       );
-      entry.error = false;
+      entry.success = true;
       succeeded++;
     } catch (err) {
       console.error(
         `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
         err instanceof Error ? err.message : err,
       );
-      entry.error = true;
+      entry.success = false;
       failed++;
       failedEntries.push({ id: entry.id, type: entry.type });
     }
     await saveEntries(inputPath, entries);
+    // Chờ giữa các lần gọi gen ảnh liên tiếp — tránh gửi request quá nhanh
+    // lên chatgpt.com (theo yêu cầu người dùng).
+    await sleep(REQUEST_THROTTLE_MS);
   }
 
   return {
     outputDir,
-    charactersDir,
-    locationsDir,
     succeeded,
     failed,
     failedEntries,
@@ -184,10 +194,38 @@ async function resolveRefImagePath(dir: string, id: string): Promise<string> {
 }
 
 export interface GenerateVideosResult {
-  videosDir: string;
+  outputDir: string;
   succeeded: number;
   failed: number;
   failedEntries: FailedEntry[];
+}
+
+/**
+ * Quyết định ảnh nào đi vào start frame/end frame từ danh sách refPaths ĐÃ
+ * lọc (0-2 ảnh — 3+ ảnh dùng Omni Reference thay vì hàm này, xem
+ * generateVideosForFile):
+ * - 1 ảnh: LUÔN dùng làm start frame.
+ * - 2 ảnh: ảnh nào có tên file (basename) chứa "start" → start frame, chứa
+ *   "end" → end frame. Nếu không xác định được qua tên (không ảnh nào khớp
+ *   "start"/"end"), fallback theo đúng THỨ TỰ khai báo trong "ref": ảnh đầu
+ *   → start, ảnh sau → end.
+ * - 0 ảnh: trả về rỗng (video thuần từ prompt, không upload ảnh nào).
+ */
+function assignStartEndFrames(
+  refPaths: string[],
+): Pick<GenerateVideoOptions, "startFramePath" | "endFramePath"> {
+  if (refPaths.length === 0) return {};
+  if (refPaths.length === 1) return { startFramePath: refPaths[0] };
+
+  const startPath = refPaths.find((p) => /start/i.test(path.basename(p)));
+  const endPath = refPaths.find((p) => /end/i.test(path.basename(p)));
+  if (startPath || endPath) {
+    return {
+      startFramePath: startPath ?? refPaths.find((p) => p !== endPath),
+      endFramePath: endPath,
+    };
+  }
+  return { startFramePath: refPaths[0], endFramePath: refPaths[1] };
 }
 
 /**
@@ -195,16 +233,24 @@ export interface GenerateVideosResult {
  * generateReferenceImagesForFile), lọc entry type "VIDEO", rồi lần lượt gọi
  * generateVideo trên hailuoai.video cho từng entry.
  *
- * Chọn mode theo ref:
- * - ref.length > 0: mode "Omni Reference", ảnh/file ref lấy từ
- *   reference-images/<tên file input>/characters|locations/<ref.id>.png
- *   (tuỳ ref.type) — PHẢI đã chạy generateReferenceImagesForFile trước đó.
- * - ref.length === 0 (hoặc không có): mode "Start/End Frame" — KHÔNG upload
- *   ảnh start frame nào (chỉ tạo video thuần từ prompt).
+ * ref có thể trỏ tới entry CHARACTER, LOCATION hoặc SCENE_SETTING (đều đã
+ * generate ảnh trước đó, cùng lưu trong reference-images/<tên file input>/).
  *
- * Video tạo xong lưu vào reference-images/<tên file input>/videos/<id>.mp4.
+ * Chọn mode theo số ảnh ref resolve được:
+ * - >= 3 ảnh: mode "Omni Reference".
+ * - 1-2 ảnh: mode "Start/End Frame", ảnh lấy từ
+ *   reference-images/<tên file input>/<ref.id>.png (xem assignStartEndFrames
+ *   để biết cách chọn ảnh nào vào start/end) — PHẢI đã chạy
+ *   generateReferenceImagesForFile/generateSceneImagesForFile trước đó (tuỳ
+ *   type của ref).
+ * - 0 ảnh (không có ref): mode "Start/End Frame" nhưng KHÔNG upload ảnh nào
+ *   (chỉ tạo video thuần từ prompt).
  *
- * Chạy TUẦN TỰ, đánh dấu "error" trên từng entry, ghi đè lại file input gốc
+ * Video tạo xong lưu CHUNG vào reference-images/<tên file input>/<id>.mp4 —
+ * cùng 1 folder với ảnh character/location/scene setting (không tách riêng
+ * folder "videos").
+ *
+ * Chạy TUẦN TỰ, đánh dấu "success" trên từng entry, ghi đè lại file input gốc
  * NGAY sau MỖI entry — cùng quy tắc với generateReferenceImagesForFile.
  */
 export async function generateVideosForFile(
@@ -216,14 +262,11 @@ export async function generateVideosForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const refImagesDir = referenceImagesDirFor(inputPath);
-  const charactersDir = path.join(refImagesDir, "characters");
-  const locationsDir = path.join(refImagesDir, "locations");
-  const videosDir = path.join(refImagesDir, "videos");
-  await fs.promises.mkdir(videosDir, { recursive: true });
+  const outputDir = referenceImagesDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(refImagesDir, path.basename(inputPath)),
+    path.join(outputDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -248,33 +291,38 @@ export async function generateVideosForFile(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
+    if (entry?.success) continue
     const jobId = randomUUID();
     // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video...`);
     try {
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
-          Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
+          Boolean(r.id) &&
+          (r.type === "CHARACTER" ||
+            r.type === "LOCATION" ||
+            r.type === "SCENE_SETTING"),
       );
 
       const refPaths: string[] = [];
       for (const ref of refs) {
-        const dir = ref.type === "CHARACTER" ? charactersDir : locationsDir;
-        refPaths.push(await resolveRefImagePath(dir, sanitizeId(ref.id)));
+        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
       }
 
-      if (entry.duration) {
+      // if (entry.duration) {
         // console.warn(
         //   `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên hailuoai.video, bỏ qua.`,
         // );
-      }
+      // }
 
       const options: GenerateVideoOptions =
-        refPaths.length > 0 ? { omniReferencePaths: refPaths } : {};
+        refPaths.length >= 3
+          ? { omniReferencePaths: refPaths }
+          : assignStartEndFrames(refPaths);
 
       const tempFilePath = await generateVideo(entry.prompt, options, jobId);
 
       const destPath = path.join(
-        videosDir,
+        outputDir,
         `${sanitizeId(entry.id)}.mp4`,
       );
       try {
@@ -285,19 +333,112 @@ export async function generateVideosForFile(
       }
 
       // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đã lưu: ${destPath}`);
-      entry.error = false;
+      entry.success = true;
       succeeded++;
     } catch (err) {
       console.error(
         `[storyboardPipeline] [VIDEO] ${entry.id} — lỗi:`,
         err instanceof Error ? err.message : err,
       );
-      entry.error = true;
+      entry.success = false;
       failed++;
       failedEntries.push({ id: entry.id, type: "VIDEO" });
     }
     await saveEntries(inputPath, entries);
   }
 
-  return { videosDir, succeeded, failed, failedEntries };
+  return { outputDir, succeeded, failed, failedEntries };
+}
+
+/**
+ * Đọc 1 file JSON storyboard (CÙNG file input dùng chung với
+ * generateReferenceImagesForFile/generateVideosForFile), lọc entry type
+ * "SCENE_SETTING", rồi nhờ GPT tạo ảnh bối cảnh cho từng entry.
+ *
+ * Nếu entry có "ref" (trỏ tới CHARACTER/LOCATION đã generate trước đó bằng
+ * generateReferenceImagesForFile), upload các ảnh ref đó lên chatgpt.com
+ * TRƯỚC khi gõ prompt (xem generateReferenceImage's refImagePaths) để GPT vẽ
+ * cảnh giữ đúng nhận diện nhân vật/địa điểm đã có. Không có "ref" thì generate
+ * thuần từ prompt (giống CHARACTER/LOCATION).
+ *
+ * Ảnh lưu CHUNG vào reference-images/<tên file input>/<id>.<đuôi> — cùng 1
+ * folder với ảnh CHARACTER/LOCATION/video (không tách folder riêng).
+ *
+ * Chạy TUẦN TỰ, đánh dấu "success" trên từng entry, ghi đè lại file input gốc
+ * NGAY sau MỖI entry — cùng quy tắc với generateReferenceImagesForFile.
+ */
+export async function generateSceneImagesForFile(
+  inputPath: string,
+): Promise<GenerateImagesResult> {
+  const raw = await fs.promises.readFile(inputPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const outputDir = referenceImagesDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "SCENE_SETTING") return false;
+      // Chỉ gen khi "prompt" là string thật — xem lý do ở generateReferenceImagesForFile.
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        return false;
+      }
+      return true;
+    },
+  );
+
+  let succeeded = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  for (const entry of targets) {
+    if (entry?.success) continue
+    const jobId = randomUUID();
+    try {
+      const refs = (entry.ref ?? []).filter(
+        (r): r is Required<StoryboardRefItem> =>
+          Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
+      );
+      const refPaths: string[] = [];
+      for (const ref of refs) {
+        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+      }
+
+      const savedPath = await generateReferenceImage(
+        entry.prompt,
+        outputDir,
+        sanitizeId(entry.id),
+        jobId,
+        refPaths,
+      );
+      console.log(
+        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đã lưu: ${savedPath}`,
+      );
+      entry.success = true;
+      succeeded++;
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      entry.success = false;
+      failed++;
+      failedEntries.push({ id: entry.id, type: "SCENE_SETTING" });
+    }
+    await saveEntries(inputPath, entries);
+    // Chờ giữa các lần gọi gen ảnh liên tiếp — tránh gửi request quá nhanh
+    // lên chatgpt.com (theo yêu cầu người dùng).
+    await sleep(REQUEST_THROTTLE_MS);
+  }
+
+  return { outputDir, succeeded, failed, failedEntries };
 }

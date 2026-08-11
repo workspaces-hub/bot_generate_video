@@ -20,6 +20,17 @@ import { config } from "../config";
  * hẳn headed dù mọi cờ ẩn automation khác đều giống nhau. Vì vậy trên VPS,
  * NÊN chạy headed thật qua Xvfb (npm run start:xvfb + HEADLESS=false trong
  * .env) thay vì headless:true, dù không có màn hình vật lý.
+ *
+ * npm run start:xvfb đã cấu hình Xvfb giống màn hình thật hơn mặc định —
+ * xvfb-run KHÔNG chỉnh gì thì Xvfb mặc định 1280x1024 ở độ sâu màu 8-bit
+ * (screen.colorDepth = 8), gần như KHÔNG máy thật nào chạy 8-bit color
+ * ngày nay — 1 tín hiệu giả mạo (fingerprint) rất dễ bị soi ra. Script
+ * "start:xvfb" đặt lại độ phân giải/độ sâu màu qua --server-args: "-screen 0
+ * 1920x1080x24" (độ phân giải desktop phổ biến nhất, 24-bit color giống máy
+ * thật), "-dpi 96" (DPI chuẩn phổ biến), cùng "+extension RANDR +extension
+ * GLX +render" (RANDR: hỗ trợ đổi độ phân giải runtime, browser thật hay
+ * query; GLX/render: cần cho WebGL/canvas rendering không bị thiếu extension
+ * bất thường so với X server thật).
  */
 export async function launchRealChrome(useProxy = true): Promise<Browser> {
   if (

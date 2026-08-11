@@ -10,8 +10,8 @@ export const GPT_BUTTON_LABEL = "Tạo video từ kịch bản";
 export const GPT_CHECK_BUTTON_LABEL = "Check prompt kịch bản";
 
 export const promptMenu = Markup.keyboard([
+  [GPT_CHECK_BUTTON_LABEL, GPT_BUTTON_LABEL],
   [IMAGE_BUTTON_LABEL, PROMPT_BUTTON_LABEL],
   [VIDEO_REF_BUTTON_LABEL, CHARACTER_REF_BUTTON_LABEL],
-  [OMNI_REF_BUTTON_LABEL, GPT_BUTTON_LABEL],
-  [GPT_CHECK_BUTTON_LABEL],
+  [OMNI_REF_BUTTON_LABEL],
 ]).resize();

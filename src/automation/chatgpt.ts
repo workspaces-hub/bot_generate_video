@@ -102,9 +102,9 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     const normalizeForCompare = (s: string) => s.replace(/\s+/g, " ").trim();
     const pasted = await textarea.innerText().catch(() => "");
     if (normalizeForCompare(pasted) !== normalizeForCompare(text)) {
-      console.warn(
-        "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
-      );
+      // console.warn(
+      //   "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
+      // );
       await insertPromptText(page, text);
     }
   } else {
@@ -160,7 +160,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
   // Tự bấm Retry (giới hạn số lần) trước khi chịu thua, vì nguyên nhân hay
   // gặp là quá tải server nhất thời, thử lại thường tự qua.
-  const maxRetriesOnError = 2;
+  const maxRetriesOnError = 10;
   let retriesUsed = 0;
 
   const start = Date.now();
@@ -195,14 +195,20 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     //   return (await fileAttachmentLocator(messages.last()).count()) > 0;
     // })();
 
-    console.log("stillGenerating ", stillGenerating, "hasSeenGenerating", hasSeenGenerating);
+    console.log(
+      "stillGenerating ",
+      stillGenerating,
+      "hasSeenGenerating",
+      hasSeenGenerating,
+    );
     if (!stillGenerating) {
       if (hasSeenGenerating) return;
       // Chưa từng thấy nút Stop — chỉ coi là xong nếu trang đã thật sự có
       // tin nhắn trả lời (trường hợp hiếm: GPT trả lời quá nhanh). Không có
       // gì cả thì vẫn phải chờ tiếp, không được kết luận "xong" (xem job
       // 1beafb45 ở trên).
-      const hasAssistantTurn = (await assistantMessageLocator(page).count()) > 0;
+      const hasAssistantTurn =
+        (await assistantMessageLocator(page).count()) > 0;
       if (hasAssistantTurn) return;
     }
 
@@ -295,7 +301,88 @@ async function downloadAttachedFiles(
         }
         download = await secondaryDownloadPromise;
       }
-      if (!download) continue;
+
+      if (!download) {
+        // Xác nhận qua debug thật (job 0c2ee0e8, b38b1151): bấm file (dù
+        // qua thẻ card hay link "Download file <tên>") đều có thể chỉ mở ra
+        // panel xem trước dạng "Library" (data-testid="screen-threadFlyOut")
+        // — nút "Download" trong panel này KHÔNG BAO GIỜ bắn sự kiện
+        // "download" mà Playwright bắt được (nghi dùng File System Access
+        // API/showSaveFilePicker — hộp thoại lưu file NATIVE của hệ điều
+        // hành, không hoạt động trong môi trường tự động hoá). Chờ panel
+        // xuất hiện lâu hơn (tới 20s — panel có thể chậm render sau khi vừa
+        // bấm) rồi lấy nội dung.
+        const panelContent = page.locator(
+          '[data-testid="screen-threadFlyOut"] .cm-content',
+        );
+        const panelAppeared = await panelContent
+          .first()
+          .waitFor({ state: "visible", timeout: 20_000 })
+          .then(() => true)
+          .catch(() => false);
+
+        let previewText: string | null = null;
+        if (panelAppeared) {
+          // Chọn hết + copy thay vì .innerText() trực tiếp — CodeMirror
+          // (editor panel này dùng) có thể ẢO HOÁ (virtualize) nội dung file
+          // dài, .innerText() khi đó chỉ đọc được đúng phần đang cuộn tới
+          // màn hình chứ KHÔNG PHẢI toàn bộ file. Ctrl+A/Ctrl+C mô phỏng
+          // thao tác "chọn hết" thật của CodeMirror (chọn theo MODEL dữ liệu
+          // đầy đủ, không phải theo DOM đang render), đọc lại từ clipboard
+          // ra được TOÀN BỘ nội dung bất kể có ảo hoá hay không.
+          await page
+            .context()
+            .grantPermissions(["clipboard-read", "clipboard-write"], {
+              origin: config.chatGptBaseUrl,
+            })
+            .catch(() => {});
+          await panelContent
+            .first()
+            .click()
+            .catch(() => {});
+          await page.keyboard.press("ControlOrMeta+A");
+          await page.keyboard.press("ControlOrMeta+C");
+          previewText = await page
+            .evaluate(() => navigator.clipboard.readText())
+            .catch(() => null);
+          // Fallback cuối nếu clipboard đọc lỗi (vd bị chặn Permissions-Policy
+          // — xem lý do tương tự ở sendMessage): dùng innerText(), chấp nhận
+          // rủi ro thiếu nội dung nếu panel có ảo hoá, còn hơn không có gì.
+          if (!previewText) {
+            previewText = await panelContent
+              .first()
+              .innerText({ timeout: 5000 })
+              .catch(() => null);
+          }
+        }
+
+        if (previewText) {
+          await fs.promises.mkdir(config.chatGptResultsDir, {
+            recursive: true,
+          });
+          const suggestedName =
+            (await attachments
+              .nth(i)
+              .getAttribute("aria-label")
+              .catch(() => null)) || `attachment-${i}.json`;
+          const fileName = promptFileBaseName
+            ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggestedName) || ".json"}`
+            : `${jobId}-${suggestedName}`;
+          const filePath = path.join(config.chatGptResultsDir, fileName);
+          await fs.promises.writeFile(filePath, previewText, "utf-8");
+          savedPaths.push(filePath);
+          // Đóng panel xem trước lại cho gọn trước khi xử lý file tiếp theo
+          // (nếu có) — best-effort, không throw nếu không tìm thấy nút Close.
+          await page
+            .locator(
+              '[data-testid="screen-threadFlyOut"] [data-testid="close-button"]',
+            )
+            .first()
+            .click({ timeout: 2000 })
+            .catch(() => {});
+        }
+        continue;
+      }
 
       await fs.promises.mkdir(config.chatGptResultsDir, { recursive: true });
       const suggested = download.suggestedFilename() || `attachment-${i}`;
@@ -363,13 +450,21 @@ async function readLatestAssistantMessage(
   }
   const latest: Locator = messages.last();
 
-  const downloadedFiles = await downloadAttachedFiles(page, latest, jobId, promptFileName);
+  const downloadedFiles = await downloadAttachedFiles(
+    page,
+    latest,
+    jobId,
+    promptFileName,
+  );
   const text = await latest.innerText().catch(() => "");
   // Tên file "full.json" chỉ tính là dấu hiệu hoàn thiện khi có 1 file THẬT
   // đã tải về mang tên đó (xem comment isCompletionText).
   const hasFullJsonFile = downloadedFiles.some((p) => /full\.json$/i.test(p));
 
-  return { downloadedFiles, isComplete: hasFullJsonFile || isCompletionText(text) };
+  return {
+    downloadedFiles,
+    isComplete: hasFullJsonFile || isCompletionText(text),
+  };
 }
 
 /**
@@ -419,28 +514,23 @@ export async function askChatGpt(
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
       await sendMessage(page, messageToSend);
 
-      const result = await readLatestAssistantMessage(page, jobId, promptFileName);
+      const result = await readLatestAssistantMessage(
+        page,
+        jobId,
+        promptFileName,
+      );
       downloadedFiles = result.downloadedFiles;
       console.log(
         "result.isComplete, downloadedFiles.length",
         result.isComplete,
         downloadedFiles.length,
       );
-      if (result.isComplete) {
-        if (downloadedFiles.length === 0) {
-          // Hiếm: GPT xác nhận hoàn thiện bằng LỜI (vd "Đã hoàn thiện bản
-          // JSON") nhưng lượt trả lời NÀY lại không có file đính kèm — có
-          // thể file đã đính kèm ở lượt TRƯỚC, lượt này chỉ là xác nhận bằng
-          // text. Không chặn lại gửi tiếp "yes" nữa (đã coi là xong theo yêu
-          // cầu "chỉ dừng khi isComplete = true"), chỉ log cảnh báo để biết
-          // nếu job trả về downloadedFiles rỗng dù isComplete = true.
-          console.warn(
-            "[chatgpt] isComplete = true nhưng lượt này không có file đính kèm nào — có thể file đã đính kèm ở lượt trước.",
-          );
-        }
-        await captureSnapshot(page, jobId, "result");
-        break;
+      // if (result.isComplete) {
+      if (downloadedFiles.length > 0) {
       }
+      await captureSnapshot(page, jobId, "result");
+      break;
+      // }
 
       // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
       // có) chỉ là bản nháp/trung gian (xem docstring askChatGpt), KHÔNG phải

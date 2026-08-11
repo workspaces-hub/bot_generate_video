@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/src/index.js",
-    "start:xvfb": "xvfb-run -a node dist/src/index.js",
+    "start:xvfb": "xvfb-run -a --server-args='-screen 0 1920x1080x24 -dpi 96 +extension RANDR +extension GLX +render' node dist/src/index.js",
     "build": "tsc -p tsconfig.json",
     "login": "tsx scripts/login.ts",
     "login-chatgpt": "tsx scripts/login-chatgpt.ts",
@@ -16,7 +16,9 @@
     "download-video": "tsx scripts/download-video-by-feed-id.ts",
     "check-session": "tsx scripts/check-session.ts",
     "check-credit": "tsx scripts/check-credit.ts",
+    "check-chatgpt-model": "tsx scripts/check-chatgpt-model.ts",
     "generate-reference-images": "tsx scripts/generate-reference-images.ts",
+    "generate-scene-images": "tsx scripts/generate-scene-images.ts",
     "generate-videos": "tsx scripts/generate-videos.ts",
     "playwright:install": "playwright install chromium"
   },
