@@ -2,9 +2,13 @@ node_modules/
 dist/
 .env
 storage/session.json
+storage/chatgpt-session.json
 storage/manual-cookies.json
 storage/manual-localstorage.json
 storage/downloads/
 storage/uploads/
 storage/debug/
+storage/chatgpt-results/
+storage/reference-images/
 storage/queue.json
+storage/gpt-queue.json

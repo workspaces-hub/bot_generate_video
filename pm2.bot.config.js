@@ -1,6 +1,7 @@
 module.exports = {
   apps: [{
-    script: "dist/src/index.js",
+    script: "npm",
+    args: "run start:xvfb",
     name: 'bot_generate',
     watch: false,
     // max_memory_restart: '5000M',

@@ -17,6 +17,7 @@ import {
   creditPaywallModalCandidates,
   deleteAllFailedButtonLocator,
   dropdownOptionCandidates,
+  endFrameButtonCandidates,
   errorIndicatorCandidates,
   exactVideoInputModeChipCandidates,
   firstVisible,
@@ -25,6 +26,7 @@ import {
   getOmniReferenceCount,
   getReferenceImageCount,
   historyVideoLocator,
+  isPageCrashError,
   modelChipCandidates,
   openPopoverLocator,
   promptInputCandidates,
@@ -45,6 +47,8 @@ export interface GenerateVideoOptions {
   model?: string;
   /** Ảnh start frame (tuỳ chọn) — nếu không có, tạo video thuần từ text như bình thường. */
   startFramePath?: string;
+  /** Ảnh end frame (tuỳ chọn, chỉ có tác dụng khi dùng cùng startFramePath — mode "Start/End Frame"). */
+  endFramePath?: string;
   /** Ảnh tham chiếu (tuỳ chọn, tối đa 3) — dùng trang riêng config.hailuoCreateVideoRefPath. */
   referenceImagePaths?: string[];
   /** Ảnh nhân vật (bắt buộc đúng 1 ảnh) — dùng mode "Character Reference". */
@@ -53,12 +57,43 @@ export interface GenerateVideoOptions {
   omniReferencePaths?: string[];
 }
 
+/**
+ * Xác nhận qua log lỗi thật ("page.screenshot: Target crashed"): Chrome
+ * renderer của tab đôi khi CRASH THẬT giữa chừng (nghi do OOM dưới Xvfb, xem
+ * launch.ts) — page đã crash không dùng lại được nữa (mọi thao tác tiếp theo
+ * đều throw), không phải lỗi selector/timeout thường. Tự mở tab MỚI (gọi lại
+ * attemptGenerateVideo từ đầu — hàm đó tự tạo page riêng) thử lại 1 lần
+ * trước khi chịu thua, vì phần lớn là sự cố thoáng qua.
+ */
 export async function generateVideo(
+  prompt: string,
+  options: GenerateVideoOptions,
+  jobId: string,
+): Promise<string> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptGenerateVideo(prompt, options, jobId);
+    } catch (err) {
+      if (isPageCrashError(err) && attempt < maxCrashRetries) {
+        // console.warn(
+        //   `[hailuo] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+        //   err instanceof Error ? err.message : err,
+        // );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function attemptGenerateVideo(
   prompt: string,
   {
     resolution,
     model,
     startFramePath,
+    endFramePath,
     referenceImagePaths = [],
     characterImagePath,
     omniReferencePaths = [],
@@ -95,7 +130,9 @@ export async function generateVideo(
     // — mode mặc định của chính trang này), nên dùng trang này cho MỌI job
     // video, không phân biệt có dùng mode tham chiếu hay không.
     const url = new URL(
-      config.hailuoCreateVideoRefPath,
+      usingOmniReference
+        ? config.hailuoCreateVideoRefPath
+        : config.hailuoCreateVideoPath,
       config.hailuoBaseUrl,
     ).toString();
     await gotoWithRetry(page, url);
@@ -161,6 +198,9 @@ export async function generateVideo(
     if (startFramePath) {
       await uploadStartFrame(page, startFramePath);
     }
+    if (endFramePath) {
+      await uploadEndFrame(page, endFramePath);
+    }
 
     if (model) {
       await selectChipOption(page, modelChipCandidates(page), model, "model");
@@ -218,6 +258,39 @@ export async function generateVideo(
 }
 
 /**
+ * Chờ thumbnail ảnh vừa upload (start/end frame) hết "aria-busy" trước khi
+ * coi như upload xong — dùng chung cho cả uploadStartFrame và uploadEndFrame.
+ * Thực tế xác nhận qua debug HTML: bấm Generate khi ảnh còn "aria-busy"
+ * khiến site âm thầm từ chối bằng toast "Wait until picture upload
+ * completes" (không khớp bất kỳ error indicator nào), khiến bot chờ vô ích
+ * hết nguyên generationTimeoutMs (5 phút) rồi mới timeout.
+ */
+async function waitForFrameUploadToSettle(
+  page: Page,
+  label: string,
+): Promise<void> {
+  try {
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(
+          '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
+        ).length === 0,
+      { timeout: 60_000 },
+    );
+  } catch {
+    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
+    if (stillBusy > 0) {
+      throw new GenerationError(
+        `Ảnh ${label} vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh bị site từ chối.`,
+      );
+    }
+  }
+  await page
+    .waitForLoadState("networkidle", { timeout: 15_000 })
+    .catch(() => {});
+}
+
+/**
  * Upload ảnh "Start Frame" cho video (tuỳ chọn, người dùng yêu cầu rõ ràng
  * nên fail cứng nếu không tải lên được, thay vì âm thầm bỏ qua như
  * selectChipOption — khác model/resolution, start frame ảnh hưởng trực tiếp
@@ -241,32 +314,35 @@ async function uploadStartFrame(page: Page, imagePath: string): Promise<void> {
     );
   }
 
-  // Thực tế xác nhận qua debug HTML: thumbnail start frame mang CÙNG marker
-  // đã dùng cho ảnh tham chiếu (aria-label="Uploaded image, click to
-  // preview" + aria-busy="true"). Bấm Generate khi ảnh còn "aria-busy"
-  // khiến site âm thầm từ chối bằng toast "Wait until picture upload
-  // completes" (không khớp bất kỳ error indicator nào), khiến bot chờ vô
-  // ích hết nguyên generationTimeoutMs (5 phút) rồi mới timeout. Phải đợi
-  // hết busy trước khi coi như upload xong.
+  await waitForFrameUploadToSettle(page, "start frame");
+}
+
+/**
+ * Upload ảnh "End Frame" cho video — cùng cơ chế uploadStartFrame, chỉ khác
+ * nút bấm (endFrameButtonCandidates). Gọi SAU uploadStartFrame (xem
+ * generateVideo) — mode "Start/End Frame" yêu cầu upload start frame trước
+ * mới thấy/dùng được nút End Frame trên 1 số phiên bản UI (chưa xác nhận
+ * DOM thật, giữ đúng thứ tự gọi để an toàn).
+ */
+async function uploadEndFrame(page: Page, imagePath: string): Promise<void> {
+  await dismissBlockingOverlays(page);
   try {
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(
-          '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
-        ).length === 0,
-      { timeout: 60_000 },
+    const button = await firstVisible(endFrameButtonCandidates(page), 8000);
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent("filechooser", { timeout: 10_000 }),
+      clickDismissingModals(page, button),
+    ]);
+    await fileChooser.setFiles(imagePath);
+    await page.waitForTimeout(1500);
+  } catch (err) {
+    throw new GenerationError(
+      `Không tải được ảnh end frame lên — site có thể đã đổi giao diện upload: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
     );
-  } catch {
-    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
-    if (stillBusy > 0) {
-      throw new GenerationError(
-        "Ảnh start frame vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh bị site từ chối.",
-      );
-    }
   }
-  await page
-    .waitForLoadState("networkidle", { timeout: 15_000 })
-    .catch(() => {});
+
+  await waitForFrameUploadToSettle(page, "end frame");
 }
 
 /**
@@ -379,10 +455,10 @@ async function switchVideoInputMode(
       const outerHtml = await alreadyMatchedChip
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
-      console.warn(
-        `[hailuo] switchVideoInputMode(${modeName}): alreadyInTargetMode=true, phần tử khớp outerHTML=`,
-        outerHtml,
-      );
+      // console.warn(
+      //   `[hailuo] switchVideoInputMode(${modeName}): alreadyInTargetMode=true, phần tử khớp outerHTML=`,
+      //   outerHtml,
+      // );
       return;
     }
 
@@ -401,7 +477,11 @@ async function switchVideoInputMode(
 
     const maxClickAttempts = 3;
     let popoverOpened = false;
-    for (let attempt = 1; attempt <= maxClickAttempts && !popoverOpened; attempt++) {
+    for (
+      let attempt = 1;
+      attempt <= maxClickAttempts && !popoverOpened;
+      attempt++
+    ) {
       const chip = await pollForOnscreenLocator(
         anyVideoInputModeChipCandidates(page),
         page,
@@ -425,12 +505,12 @@ async function switchVideoInputMode(
       const outerHtml = await chip
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
-      console.warn(
-        `[hailuo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
-        box,
-        "outerHTML=",
-        outerHtml,
-      );
+      // console.warn(
+      //   `[hailuo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
+      //   box,
+      //   "outerHTML=",
+      //   outerHtml,
+      // );
       // Rê chuột qua trước rồi mới bấm (tách riêng, không chỉ để .click() tự
       // làm) — 1 số popover chỉ "arm" sau mousemove/mouseenter thật, và click
       // ngay sau khi vừa hydrate có thể bị bỏ lỡ nếu chưa có bước hover riêng.
@@ -488,10 +568,10 @@ async function switchVideoInputMode(
       const outerHtml = await switchedChip
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
-      console.warn(
-        `[hailuo] switchVideoInputMode(${modeName}): switchedOk=true, phần tử khớp outerHTML=`,
-        outerHtml,
-      );
+      // console.warn(
+      //   `[hailuo] switchVideoInputMode(${modeName}): switchedOk=true, phần tử khớp outerHTML=`,
+      //   outerHtml,
+      // );
     }
     const switchedOk = Boolean(switchedChip);
     if (!switchedOk) {
@@ -521,10 +601,10 @@ async function uploadCharacterImage(
   try {
     await attemptUploadCharacterImage(page, imagePath);
   } catch (err) {
-    console.warn(
-      "[hailuo] Upload ảnh nhân vật lần đầu thất bại, thử đóng popup rồi thử lại:",
-      err,
-    );
+    // console.warn(
+    //   "[hailuo] Upload ảnh nhân vật lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   err,
+    // );
     await dismissBlockingOverlays(page);
     await attemptUploadCharacterImage(page, imagePath);
   }
@@ -650,10 +730,10 @@ async function uploadVideoRefImage(
   try {
     await attemptUploadVideoRefImage(page, imagePath, expectedCountAfter);
   } catch (err) {
-    console.warn(
-      "[hailuo] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
-      err,
-    );
+    // console.warn(
+    //   "[hailuo] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   err,
+    // );
     await dismissBlockingOverlays(page);
     await attemptUploadVideoRefImage(page, imagePath, expectedCountAfter);
   }
@@ -733,10 +813,10 @@ async function uploadOmniReferenceFile(
   try {
     await attemptUploadOmniReferenceFile(page, filePath, expectedCountAfter);
   } catch (err) {
-    console.warn(
-      "[hailuo] Upload file tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
-      err,
-    );
+    // console.warn(
+    //   "[hailuo] Upload file tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   err,
+    // );
     await dismissBlockingOverlays(page);
     await attemptUploadOmniReferenceFile(page, filePath, expectedCountAfter);
   }
@@ -885,10 +965,10 @@ export async function selectChipOption(
     );
     await clickWithForceFallback(option);
   } catch (err) {
-    console.warn(
-      `[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
-      err,
-    );
+    // console.warn(
+    //   `[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
+    //   err,
+    // );
   }
 }
 
@@ -910,10 +990,10 @@ export async function gotoWithRetry(
       return;
     } catch (err) {
       lastErr = err;
-      console.warn(
-        `[hailuo] page.goto lỗi (lần ${attempt}/${attempts}):`,
-        err instanceof Error ? err.message : err,
-      );
+      // console.warn(
+      //   `[hailuo] page.goto lỗi (lần ${attempt}/${attempts}):`,
+      //   err instanceof Error ? err.message : err,
+      // );
       if (attempt < attempts) {
         await page.waitForTimeout(3000);
       }
@@ -937,12 +1017,15 @@ export async function fetchWithRetry(
 ): Promise<import("playwright").APIResponse> {
   let lastStatus = 0;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const response = await page.context().request.get(url);
+    // timeout: 0 = tắt hẳn giới hạn thời gian (cùng lý do đã sửa cho tải ảnh
+    // GPT ở chatgptImage.ts, job e887e23c) — video dung lượng lớn qua mạng
+    // VPS chậm không nên bị huỷ giữa chừng chỉ vì quá 30s mặc định.
+    const response = await page.context().request.get(url, { timeout: 0 });
     if (response.ok()) return response;
     lastStatus = response.status();
-    console.warn(
-      `[hailuo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
-    );
+    // console.warn(
+    //   `[hailuo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
+    // );
     if (attempt < attempts) {
       await page.waitForTimeout(delayMs);
     }
@@ -1225,10 +1308,11 @@ async function waitForNewVideo(
       throw new GenerationError("Website báo lỗi khi tạo video");
     }
 
-    const currentFailedMarkerCount = await deleteAllFailedButtonLocator(page).count();
+    const currentFailedMarkerCount =
+      await deleteAllFailedButtonLocator(page).count();
     if (currentFailedMarkerCount > baseline.failedMarkerCount) {
       throw new GenerationError(
-        "Website báo lỗi khi tạo video (card mới xuất hiện với nút \"Delete All Failed\") — không cần đợi hết timeout",
+        'Website báo lỗi khi tạo video (card mới xuất hiện với nút "Delete All Failed") — không cần đợi hết timeout',
       );
     }
 
@@ -1344,7 +1428,7 @@ export async function downloadVideo(
   // hơn vì là dữ liệu thô, không phải giao diện).
   const flightData = await getFlightDataText(page);
   const noWatermarkUrl = extractDownloadUrlWithoutWatermark(flightData, feedId);
-  console.log(`Đã tìm thấy URL không watermark: ${noWatermarkUrl}`);
+  // console.log(`Đã tìm thấy URL không watermark: ${noWatermarkUrl}`);
 
   const response = await fetchWithRetry(page, noWatermarkUrl);
   await fs.promises.writeFile(filePath, await response.body());
@@ -1367,8 +1451,9 @@ export async function downloadVideo(
 export async function getFlightDataText(page: Page): Promise<string> {
   const flightData = await page
     .evaluate(() => {
-      const chunks = (window as unknown as { __next_f?: Array<[number, unknown]> })
-        .__next_f;
+      const chunks = (
+        window as unknown as { __next_f?: Array<[number, unknown]> }
+      ).__next_f;
       if (!Array.isArray(chunks)) return "";
       return chunks
         .map((chunk) => (typeof chunk[1] === "string" ? chunk[1] : ""))
@@ -1406,8 +1491,13 @@ export async function getFlightDataText(page: Page): Promise<string> {
  * GẦN vị trí đó NHẤT (cùng khối JSON, khoảng cách rất nhỏ so với data của
  * video/ảnh khác) — đáng tin cậy hơn nhiều so với đoán theo thứ tự xuất hiện.
  */
-export function extractDownloadUrlWithoutWatermark(html: string, feedId: string): string {
-  const matches = [...html.matchAll(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/g)]
+export function extractDownloadUrlWithoutWatermark(
+  html: string,
+  feedId: string,
+): string {
+  const matches = [
+    ...html.matchAll(/downloadURLWithoutWatermark[\\"]*:[\\"]*([^"\\]+)/g),
+  ]
     .map((m) => ({ index: m.index ?? -1, url: m[1] }))
     .filter((m) => /^https?:\/\//i.test(m.url));
 
@@ -1420,7 +1510,9 @@ export function extractDownloadUrlWithoutWatermark(html: string, feedId: string)
   const feedIdIndex = html.indexOf(feedId);
   if (feedIdIndex !== -1) {
     const closest = matches.reduce((best, current) =>
-      Math.abs(current.index - feedIdIndex) < Math.abs(best.index - feedIdIndex) ? current : best,
+      Math.abs(current.index - feedIdIndex) < Math.abs(best.index - feedIdIndex)
+        ? current
+        : best,
     );
     return closest.url;
   }
@@ -1449,9 +1541,9 @@ export async function captureSnapshot(
 ): Promise<void> {
   try {
     await writeSnapshotFiles(page, jobId);
-    console.log(
-      `[hailuo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
-    );
+    // console.log(
+    //   `[hailuo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
+    // );
   } catch (debugErr) {
     console.error("[hailuo] Không thể lưu debug snapshot:", debugErr);
   }
