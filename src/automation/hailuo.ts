@@ -99,14 +99,6 @@ async function attemptGenerateVideo(
   }: GenerateVideoOptions,
   jobId: string,
 ): Promise<string> {
-  console.log({
-    model,
-    startFramePath,
-    endFramePath,
-    referenceImagePaths,
-    characterImagePath,
-    omniReferencePaths,
-  });
   if (referenceImagePaths.length > MAX_VIDEO_REF_IMAGES) {
     throw new GenerationError(
       `Chỉ hỗ trợ tối đa ${MAX_VIDEO_REF_IMAGES} ảnh tham chiếu.`,

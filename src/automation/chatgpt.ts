@@ -187,8 +187,8 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // timeout dù GPT xong từ lâu. Vì vậy: nếu tin nhắn trả lời MỚI NHẤT đã có
   // file đính kèm hiện ra (fileAttachmentLocator), coi đó là dấu hiệu xong
   // THAY THẾ cho việc chờ nút Stop biến mất.
-  const stableRequiredMs = 3000;
-  const pollIntervalMs = 1000;
+  const stableRequiredMs = 5000;
+  const pollIntervalMs = 5000;
   // Xác nhận qua debug thật (job d077805e, chatgptImage.ts): GPT đôi khi báo
   // lỗi THẬT ("Something went wrong. Please try again." kèm nút Retry,
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
@@ -204,6 +204,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // dùng). Vẫn có 2 lối thoát khác nếu GPT lỗi THẬT: retryButton hết lượt
   // Retry (maxRetriesOnError) ở dưới, hoặc lỗi ném ra từ chính Playwright
   // (vd page bị đóng/crash).
+  let stableSince: number | null = null;
   while (true) {
     const retryButton = await firstVisible(
       regenerateErrorButtonCandidates(page),
@@ -217,6 +218,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       }
       await retryButton.click().catch(() => {});
       retriesUsed++;
+      stableSince = null;
       await page.waitForTimeout(pollIntervalMs);
       continue;
     }
@@ -227,7 +229,19 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     )
       .then(() => true)
       .catch(() => false);
-    if (stillGenerating) hasSeenGenerating = true;
+    if (stillGenerating) {
+      hasSeenGenerating = true;
+      // Xác nhận qua log lỗi thật (job 3b19ebae, model "High" reasoning
+      // effort): nút Stop vẫn hiện thật ("Planning storyboard" — reasoning
+      // model đang suy luận), nhưng đoạn code TRƯỚC ĐÂY thiếu hẳn phần dùng
+      // stableRequiredMs (biến khai báo nhưng KHÔNG hề dùng để chặn return)
+      // — chỉ cần 1 lần poll thấy Stop vắng mặt là return NGAY, khiến bot
+      // báo "đã trả lời xong (không có file)" dù GPT còn đang generate thật
+      // (Stop chớp tắt giữa các bước suy luận, xem job ebca2517 ở trên).
+      // Reset lại mốc ổn định mỗi khi THẤY Stop lại — bắt buộc phải vắng mặt
+      // LIÊN TỤC đủ stableRequiredMs mới coi là xong thật.
+      stableSince = null;
+    }
 
     // const hasFileReady = await (async () => {
     //   const messages = assistantMessageLocator(page);
@@ -242,14 +256,18 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     //   hasSeenGenerating,
     // );
     if (!stillGenerating) {
-      if (hasSeenGenerating) return;
-      // Chưa từng thấy nút Stop — chỉ coi là xong nếu trang đã thật sự có
-      // tin nhắn trả lời (trường hợp hiếm: GPT trả lời quá nhanh). Không có
-      // gì cả thì vẫn phải chờ tiếp, không được kết luận "xong" (xem job
-      // 1beafb45 ở trên).
-      const hasAssistantTurn =
-        (await assistantMessageLocator(page).count()) > 0;
-      if (hasAssistantTurn) return;
+      if (hasSeenGenerating) {
+        if (stableSince === null) stableSince = Date.now();
+        if (Date.now() - stableSince >= stableRequiredMs) return;
+      } else {
+        // Chưa từng thấy nút Stop — chỉ coi là xong nếu trang đã thật sự có
+        // tin nhắn trả lời (trường hợp hiếm: GPT trả lời quá nhanh). Không có
+        // gì cả thì vẫn phải chờ tiếp, không được kết luận "xong" (xem job
+        // 1beafb45 ở trên).
+        const hasAssistantTurn =
+          (await assistantMessageLocator(page).count()) > 0;
+        if (hasAssistantTurn) return;
+      }
     }
 
     await page.waitForTimeout(pollIntervalMs);

@@ -421,7 +421,7 @@ async function processQueue(): Promise<void> {
           const notifyError = async (id: string): Promise<void> => {
             try {
               const message = buildResultCaption(jsonBaseName, id) + " 404";
-              await telegram!.sendMessage(job.chatId, message, {
+              await telegram!.sendMessage(config.adminsNotify, message, {
                 reply_parameters: { message_id: job.promptMessageId },
               });
             } catch (err) {}
