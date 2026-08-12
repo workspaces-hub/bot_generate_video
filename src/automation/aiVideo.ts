@@ -48,7 +48,7 @@ export interface GenerateVideoOptions {
   startFramePath?: string;
   /** Ảnh end frame (tuỳ chọn, chỉ có tác dụng khi dùng cùng startFramePath — mode "Start/End Frame"). */
   endFramePath?: string;
-  /** Ảnh tham chiếu (tuỳ chọn, tối đa 3) — dùng trang riêng config.hailuoCreateVideoRefPath. */
+  /** Ảnh tham chiếu (tuỳ chọn, tối đa 3) — dùng trang riêng config.aiVideoCreateVideoRefPath. */
   referenceImagePaths?: string[];
   /** Ảnh nhân vật (bắt buộc đúng 1 ảnh) — dùng mode "Character Reference". */
   characterImagePath?: string;
@@ -76,7 +76,7 @@ export async function generateVideo(
     } catch (err) {
       if (isPageCrashError(err) && attempt < maxCrashRetries) {
         // console.warn(
-        //   `[hailuo] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+        //   `[aiVideo] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
         //   err instanceof Error ? err.message : err,
         // );
         continue;
@@ -116,23 +116,23 @@ async function attemptGenerateVideo(
     const usingReferenceImages = referenceImagePaths.length > 0;
     const usingCharacterReference = Boolean(characterImagePath);
     const usingOmniReference = omniReferencePaths.length > 0;
-    // LUÔN dùng hailuoCreateVideoRefPath, kể cả cho job "Start/End Frame"
+    // LUÔN dùng aiVideoCreateVideoRefPath, kể cả cho job "Start/End Frame"
     // thường (không có ảnh/video/audio tham chiếu nào) — 2 lần xác nhận qua
-    // debug HTML thật: (1) trang hailuoCreateVideoPath (trang tạo video
+    // debug HTML thật: (1) trang aiVideoCreateVideoPath (trang tạo video
     // thường) — bấm chip mode KHÔNG mở popover chọn mode nào cả (chỉ có
     // .ant-popover-content rỗng từ CSS, không có option nào để chọn); (2) mode
     // là trạng thái STICKY theo tài khoản, không reset khi đổi URL — 1 job
-    // Start/End Frame thường vẫn load ra trang hailuoCreateVideoPath đang kẹt
+    // Start/End Frame thường vẫn load ra trang aiVideoCreateVideoPath đang kẹt
     // ở mode "Image Reference" còn sót từ job trước, và trên trang đó KHÔNG
     // có cách nào bấm quay lại "Start/End Frame" được. Trang
-    // hailuoCreateVideoRefPath hỗ trợ đủ cả 4 mode (kể cả "Start/End Frame"
+    // aiVideoCreateVideoRefPath hỗ trợ đủ cả 4 mode (kể cả "Start/End Frame"
     // — mode mặc định của chính trang này), nên dùng trang này cho MỌI job
     // video, không phân biệt có dùng mode tham chiếu hay không.
     const url = new URL(
       usingOmniReference
-        ? config.hailuoCreateVideoRefPath
-        : config.hailuoCreateVideoPath,
-      config.hailuoBaseUrl,
+        ? config.aiVideoCreateVideoRefPath
+        : config.aiVideoCreateVideoPath,
+      config.aiVideoBaseUrl,
     ).toString();
     await gotoWithRetry(page, url);
 
@@ -184,7 +184,7 @@ async function attemptGenerateVideo(
       // có ở mode "Start/End Frame"). Chủ động ép về đúng mode mặc định
       // trước khi làm gì khác — switchVideoInputMode tự bỏ qua (no-op) nếu
       // đã đúng mode. Chỉ hoạt động đúng vì giờ MỌI job video đều dùng
-      // hailuoCreateVideoRefPath (trang duy nhất mode-switch thật sự hoạt
+      // aiVideoCreateVideoRefPath (trang duy nhất mode-switch thật sự hoạt
       // động, xem chú thích chọn url phía trên).
       await switchVideoInputMode(page, "Start/End Frame", jobId);
     }
@@ -455,7 +455,7 @@ async function switchVideoInputMode(
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
       // console.warn(
-      //   `[hailuo] switchVideoInputMode(${modeName}): alreadyInTargetMode=true, phần tử khớp outerHTML=`,
+      //   `[aiVideo] switchVideoInputMode(${modeName}): alreadyInTargetMode=true, phần tử khớp outerHTML=`,
       //   outerHtml,
       // );
       return;
@@ -505,7 +505,7 @@ async function switchVideoInputMode(
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
       // console.warn(
-      //   `[hailuo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
+      //   `[aiVideo] switchVideoInputMode(${modeName}) attempt ${attempt}: chip boundingBox=`,
       //   box,
       //   "outerHTML=",
       //   outerHtml,
@@ -568,7 +568,7 @@ async function switchVideoInputMode(
         .evaluate((el) => el.outerHTML.slice(0, 500))
         .catch((err) => `<lỗi đọc outerHTML: ${err}>`);
       // console.warn(
-      //   `[hailuo] switchVideoInputMode(${modeName}): switchedOk=true, phần tử khớp outerHTML=`,
+      //   `[aiVideo] switchVideoInputMode(${modeName}): switchedOk=true, phần tử khớp outerHTML=`,
       //   outerHtml,
       // );
     }
@@ -601,7 +601,7 @@ async function uploadCharacterImage(
     await attemptUploadCharacterImage(page, imagePath);
   } catch (err) {
     // console.warn(
-    //   "[hailuo] Upload ảnh nhân vật lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   "[aiVideo] Upload ảnh nhân vật lần đầu thất bại, thử đóng popup rồi thử lại:",
     //   err,
     // );
     await dismissBlockingOverlays(page);
@@ -730,7 +730,7 @@ async function uploadVideoRefImage(
     await attemptUploadVideoRefImage(page, imagePath, expectedCountAfter);
   } catch (err) {
     // console.warn(
-    //   "[hailuo] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   "[aiVideo] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
     //   err,
     // );
     await dismissBlockingOverlays(page);
@@ -813,7 +813,7 @@ async function uploadOmniReferenceFile(
     await attemptUploadOmniReferenceFile(page, filePath, expectedCountAfter);
   } catch (err) {
     // console.warn(
-    //   "[hailuo] Upload file tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
+    //   "[aiVideo] Upload file tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:",
     //   err,
     // );
     await dismissBlockingOverlays(page);
@@ -946,7 +946,7 @@ async function waitForOmniReferenceUploadsToSettle(
  * khớp với giá trị mong muốn. Không throw nếu không tìm thấy — chỉ log
  * cảnh báo và giữ nguyên lựa chọn mặc định của site, để 1 chip lỗi không
  * làm hỏng cả job (video vẫn tạo được, chỉ sai model/resolution).
- * Xuất ra để hailuoImage.ts (tạo ảnh) dùng lại — cùng cơ chế chip/dropdown.
+ * Xuất ra để aiVideoImage.ts (tạo ảnh) dùng lại — cùng cơ chế chip/dropdown.
  */
 export async function selectChipOption(
   page: Page,
@@ -965,7 +965,7 @@ export async function selectChipOption(
     await clickWithForceFallback(option);
   } catch (err) {
     // console.warn(
-    //   `[hailuo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
+    //   `[aiVideo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
     //   err,
     // );
   }
@@ -976,7 +976,7 @@ export async function selectChipOption(
  * phổ biến khi chạy qua proxy — thử lại vài lần trước khi báo lỗi hẳn, thay
  * vì fail job ngay ở lần đầu.
  */
-/** Xuất ra để hailuoImage.ts (tạo ảnh) dùng lại — cùng site, cùng vấn đề mạng/proxy. */
+/** Xuất ra để aiVideoImage.ts (tạo ảnh) dùng lại — cùng site, cùng vấn đề mạng/proxy. */
 export async function gotoWithRetry(
   page: Page,
   url: string,
@@ -990,7 +990,7 @@ export async function gotoWithRetry(
     } catch (err) {
       lastErr = err;
       // console.warn(
-      //   `[hailuo] page.goto lỗi (lần ${attempt}/${attempts}):`,
+      //   `[aiVideo] page.goto lỗi (lần ${attempt}/${attempts}):`,
       //   err instanceof Error ? err.message : err,
       // );
       if (attempt < attempts) {
@@ -1017,13 +1017,13 @@ export async function fetchWithRetry(
   let lastStatus = 0;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     // timeout: 0 = tắt hẳn giới hạn thời gian (cùng lý do đã sửa cho tải ảnh
-    // GPT ở chatgptImage.ts, job e887e23c) — video dung lượng lớn qua mạng
+    // ChatAI ở chatAIImage.ts, job e887e23c) — video dung lượng lớn qua mạng
     // VPS chậm không nên bị huỷ giữa chừng chỉ vì quá 30s mặc định.
     const response = await page.context().request.get(url, { timeout: 0 });
     if (response.ok()) return response;
     lastStatus = response.status();
     // console.warn(
-    //   `[hailuo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
+    //   `[aiVideo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
     // );
     if (attempt < attempts) {
       await page.waitForTimeout(delayMs);
@@ -1165,7 +1165,7 @@ export async function ensureLoggedIn(page: Page): Promise<void> {
     .catch(() => false);
   if (signedOut) {
     throw new GenerationError(
-      "Chưa đăng nhập hailuoai.video hoặc session đã hết hạn. Chạy lại: npm run login",
+      "Chưa đăng nhập AIVideo hoặc session đã hết hạn. Chạy lại: npm run login",
     );
   }
 }
@@ -1195,7 +1195,7 @@ export async function dismissPaywallIfBlocking(page: Page): Promise<void> {
   if (stillVisible) {
     throw new GenerationError(
       "Popup quảng cáo/nâng cấp gói đang che khung tạo video và không tự đóng được — " +
-        "thử lại sau; nếu lặp lại nhiều lần, kiểm tra credit tài khoản trên hailuoai.video",
+        "thử lại sau; nếu lặp lại nhiều lần, kiểm tra credit tài khoản trên AIVideo",
     );
   }
 }
@@ -1259,7 +1259,7 @@ async function waitForNewVideo(
       .catch(() => false);
     if (paywall) {
       throw new GenerationError(
-        "Tài khoản hết credit hoặc bị popup nâng cấp gói chặn — cần nạp thêm credit/nâng cấp gói trên hailuoai.video",
+        "Tài khoản hết credit hoặc bị popup nâng cấp gói chặn — cần nạp thêm credit/nâng cấp gói trên AIVideo",
       );
     }
 
@@ -1319,7 +1319,7 @@ export async function downloadVideo(
 
   const detailUrl = new URL(
     `/my-work-detail/ai-video/${feedId}`,
-    config.hailuoBaseUrl,
+    config.aiVideoBaseUrl,
   );
   detailUrl.searchParams.set("source-page", "create");
   await gotoWithRetry(page, detailUrl.toString());
@@ -1359,7 +1359,7 @@ export async function downloadVideo(
  * nằm trong 1 thẻ <script> RIÊNG — page.content() (HTML source thô) giữ
  * nguyên ranh giới các thẻ tách rời này, trong khi 1 giá trị string (vd URL)
  * có thể bị CẮT NGANG giữa 2 lần push liên tiếp. Xác nhận qua debug HTML
- * thật: 1 URL bị cắt còn "https://cdn.hailuoai.video/mo", phần còn lại
+ * thật: 1 URL bị cắt còn "https://cdn.AIVideo/mo", phần còn lại
  * "ss/prod/..." nằm ở <script> KẾ TIẾP — khiến regex trên page.content() bắt
  * được 1 URL cụt, fetch 404 dù URL thật hoàn toàn hợp lệ. Đọc thẳng mảng
  * self.__next_f trong browser rồi NỐI LẠI các đoạn string trước khi chạy
@@ -1389,7 +1389,7 @@ export async function getFlightDataText(page: Page): Promise<string> {
 /**
  * Trích downloadURLWithoutWatermark từ HTML trang chi tiết — dùng chung cho
  * cả tải video (downloadVideo) và tải ảnh (downloadImageByFeedId trong
- * hailuoImage.ts). html.match() (không có flag "g") chỉ lấy KHỚP ĐẦU TIÊN
+ * aiVideoImage.ts). html.match() (không có flag "g") chỉ lấy KHỚP ĐẦU TIÊN
  * trong toàn trang — thực tế xác nhận: khớp đầu tiên có thể là 1 định nghĩa
  * schema/placeholder rỗng (vd `"downloadURLWithoutWatermark":""` nằm trong
  * dữ liệu khai báo type, không phải data thật), khiến regex cũ "tràn" qua
@@ -1461,10 +1461,10 @@ export async function captureSnapshot(
   try {
     await writeSnapshotFiles(page, jobId);
     // console.log(
-    //   `[hailuo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
+    //   `[aiVideo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
     // );
   } catch (debugErr) {
-    console.error("[hailuo] Không thể lưu debug snapshot:", debugErr);
+    console.error("[aiVideo] Không thể lưu debug snapshot:", debugErr);
   }
 }
 
@@ -1477,7 +1477,7 @@ export async function captureErrorSnapshot(
   try {
     await writeSnapshotFiles(page, jobId);
   } catch (debugErr) {
-    console.error("[hailuo] Không thể lưu debug snapshot:", debugErr);
+    console.error("[aiVideo] Không thể lưu debug snapshot:", debugErr);
   }
-  console.error(`[hailuo] Job ${jobId} lỗi:`, err);
+  console.error(`[aiVideo] Job ${jobId} lỗi:`, err);
 }

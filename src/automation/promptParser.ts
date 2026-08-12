@@ -6,14 +6,13 @@ export interface ParsedPrompt {
 
 const RESOLUTION_LINE = /^resolution\s*:\s*(.+)$/i;
 const MODEL_LINE = /^model\s*:\s*(.+)$/i;
-export const DEFAULT_MODEL = ""
+export const DEFAULT_MODEL = "";
 
 /**
  * Tách nội dung prompt user gửi thành phần text + tuỳ chọn Resolution/Model,
  * theo format:
  *   video xe thể thao đi
  *   Resolution: 1080
- *   Model: Hailuo 2.0
  */
 export function parsePromptMessage(raw: string): ParsedPrompt {
   const promptLines: string[] = [];
@@ -36,7 +35,7 @@ export function parsePromptMessage(raw: string): ParsedPrompt {
   return {
     text: promptLines.join("\n").trim(),
     resolution,
-    model: model || '',
+    model: model || "",
   };
 }
 

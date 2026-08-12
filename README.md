@@ -1,4 +1,4 @@
-# Hailuo Telegram Bot
+# AIVideo Telegram Bot
 
 Bot Telegram (Telegraf) được add làm admin của 1 group cố định
 (`GROUP_CHAT_ID`). Trong group, gõ `/start` để hiện menu với nút
@@ -148,12 +148,6 @@ dung prompt → gõ prompt ngay trong group. Kết quả (hoặc `404` nếu l�
 Có thể chỉ định thêm **Model**/**Resolution** bằng cách thêm 2 dòng sau nội
 dung prompt:
 
-```
-video xe thể thao đi
-Resolution: 1080
-Model: Hailuo 2.0
-```
-
 - `Resolution`: nhập số (vd `1080`, `768`) — bot tự thêm hậu tố `p`.
 - `Model`: nhập đúng tên hiển thị trên hailuoai.video (vd `Hailuo 2.3`,
   `Hailuo 2.0`, `Hailuo 2.3 Fast`).
@@ -161,7 +155,7 @@ Model: Hailuo 2.0
   trên site.
 - Nếu bot không bấm chọn được đúng chip (site đổi giao diện), job **vẫn
   chạy tiếp với lựa chọn mặc định của site** thay vì báo lỗi toàn bộ — xem
-  log `[hailuo] Không chọn được model/resolution ...` và debug snapshot để
+  log `[aiVideo] Không chọn được model/resolution ...` và debug snapshot để
   chỉnh `modelChipCandidates`/`resolutionChipCandidates` trong
   `src/automation/selectors.ts` nếu cần.
 
@@ -177,7 +171,7 @@ Bấm nút **Image** trong menu để chuyển sang chế độ tạo ảnh:
 
 **⚠️ Tính năng này CHƯA ĐƯỢC TEST THẬT.** Khác với tạo video (đã tinh chỉnh
 qua nhiều lần debug thực tế với DOM thật của hailuoai.video), phần tự động
-hoá tạo ảnh trong `src/automation/hailuoImage.ts` và các selector liên quan
+hoá tạo ảnh trong `src/automation/aiVideoImage.ts` và các selector liên quan
 trong `src/automation/selectors.ts`
 (`imageModeTabCandidates`, `addReferenceImageButtonCandidates`,
 `historyImageLocator`) đều là **phỏng đoán ban đầu** dựa trên suy luận từ
@@ -188,7 +182,7 @@ năng khác trong project này đã được hoàn thiện dần qua thực tế
 
 Cũng chưa rõ ảnh tạo ra có bị watermark hay không (video thì có, và có
 field `downloadURLWithoutWatermark` riêng để tải bản sạch — xem
-`downloadVideo()` trong `hailuo.ts`). `downloadImage()` hiện đang fetch
+`downloadVideo()` trong `aiVideo.ts`). `downloadImage()` hiện đang fetch
 thẳng `src` của ảnh; nếu ảnh tải về có watermark, cần áp dụng lại kỹ thuật
 đọc dữ liệu từ trang chi tiết tương tự video.
 
@@ -237,7 +231,7 @@ trình duyệt hiển thị thật để né bị chặn. Cách làm:
 5. Chạy nền bằng `pm2` hoặc `systemd`, ví dụ với pm2:
    ```bash
    npm run build
-   npx pm2 start dist/index.js --name hailuo-bot
+   npx pm2 start dist/index.js --name aivideo-bot
    npx pm2 save
    ```
 6. Nếu Chrome báo lỗi sandbox (`No usable sandbox`, thường gặp khi chạy

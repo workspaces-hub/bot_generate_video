@@ -1,6 +1,6 @@
 import { config } from "../src/config";
 import { getBrowserContext } from "../src/automation/browser";
-import { ensureLoggedIn } from "../src/automation/hailuo";
+import { ensureLoggedIn } from "../src/automation/aiVideo";
 import { creditBalanceLocator, firstVisible } from "../src/automation/selectors";
 
 /**
@@ -12,7 +12,7 @@ async function main(): Promise<void> {
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
-    const url = new URL(config.hailuoCreateVideoPath, config.hailuoBaseUrl).toString();
+    const url = new URL(config.aiVideoCreateVideoPath, config.aiVideoBaseUrl).toString();
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await ensureLoggedIn(page);
 

@@ -6,16 +6,16 @@ import { message } from "telegraf/filters";
 import {
   MAX_OMNI_REFERENCE_ITEMS,
   MAX_VIDEO_REF_IMAGES,
-} from "../automation/hailuo";
-import { MAX_REFERENCE_IMAGES } from "../automation/hailuoImage";
+} from "../automation/aiVideo";
+import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import { referenceImagesDirFor } from "../automation/storyboardPipeline";
 import { config } from "../config";
 import { confirmVideoGeneration, enqueueJob, stopAll } from "../queue";
 import {
   CHARACTER_REF_BUTTON_LABEL,
-  GPT_BUTTON_LABEL,
-  GPT_CHECK_BUTTON_LABEL,
+  CHATAI_BUTTON_LABEL,
+  CHATAI_CHECK_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
@@ -30,8 +30,8 @@ type PendingMode =
   | "videoRef"
   | "characterRef"
   | "omniRef"
-  | "gpt"
-  | "gptCheck";
+  | "chatAI"
+  | "chatAICheck";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -131,7 +131,7 @@ async function checkAdmin(
   }
 }
 
-/** Tải ảnh Telegram (độ phân giải cao nhất) về local để upload lên hailuoai.video. */
+/** Tải ảnh Telegram (độ phân giải cao nhất) về local để upload lên AIVideo. */
 async function downloadTelegramPhoto(
   ctx: Context,
   photos: Array<{ file_id: string }>,
@@ -173,11 +173,11 @@ async function downloadTelegramFile(
 
 /**
  * Prompt cố định gửi kèm khi user đưa yêu cầu qua file (.txt/.md) thay vì gõ
- * trực tiếp — file được UPLOAD thẳng lên chatgpt.com (xem askChatGpt,
- * downloadTelegramFile + submitGptJob), GPT tự đọc nội dung file, không cần
+ * trực tiếp — file được UPLOAD thẳng lên ChatAI (xem askChatAI,
+ * downloadTelegramFile + submitChatAIJob), ChatAI tự đọc nội dung file, không cần
  * dán nguyên văn bản file làm prompt text nữa (tránh dán prompt siêu dài).
  */
-const GPT_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file";
+const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file";
 
 /**
  * Caption dạng "<tên file json>__<tên file ảnh/video>.<đuôi>" — ĐÚNG format
@@ -192,7 +192,7 @@ const REPLACEMENT_CAPTION_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
 /**
  * User gửi lại ảnh/video kèm caption ĐÚNG format bot tự đặt tên khi gửi kết
  * quả — coi đây là yêu cầu THAY THẾ file đã generate trước đó bằng file mới
- * (sửa tay 1 ảnh/video bị lỗi mà không cần chạy lại cả job GPT). Backup file
+ * (sửa tay 1 ảnh/video bị lỗi mà không cần chạy lại cả job ChatAI). Backup file
  * cũ (nếu có) thành "<tên>_bk.<đuôi>" trước khi ghi đè — không mất dữ liệu
  * cũ. Trả về true nếu ĐÃ xử lý (caption khớp format) — handler gọi hàm này
  * phải dừng lại ngay, không xử lý tiếp theo luồng ảnh/video tham chiếu
@@ -367,21 +367,21 @@ async function submitImageJob({
   });
 }
 
-interface SubmitGptParams {
+interface SubmitChatAIParams {
   ctx: Context;
   groupChatId: number;
   promptMessageId: number;
   rawText: string;
-  /** true = chế độ "Check prompt kịch bản" — chỉ hỏi GPT + gửi lại file tải về, không gen ảnh/video. */
+  /** true = chế độ "Check prompt kịch bản" — chỉ hỏi ChatAI + gửi lại file tải về, không gen ảnh/video. */
   skipPipeline?: boolean;
-  /** Tên file .txt user upload làm prompt (nếu gửi qua file thay vì gõ text) — dùng đặt tên lại file JSON GPT trả về, xem queue.ts. */
+  /** Tên file .txt user upload làm prompt (nếu gửi qua file thay vì gõ text) — dùng đặt tên lại file JSON ChatAI trả về, xem queue.ts. */
   promptFileName?: string;
-  /** Path local file prompt (nếu gửi qua upload file) — UPLOAD file này lên chatgpt.com thay vì dán nội dung làm prompt text, xem GPT_FILE_ATTACHMENT_PROMPT. */
+  /** Path local file prompt (nếu gửi qua upload file) — UPLOAD file này lên ChatAI thay vì dán nội dung làm prompt text, xem CHATAI_FILE_ATTACHMENT_PROMPT. */
   promptAttachmentPath?: string;
 }
 
-/** Chế độ "GPT" chỉ nhận text thuần, không có ảnh/model/resolution nào — dùng thẳng rawText làm prompt, không qua parsePromptMessage. */
-async function submitGptJob({
+/** Chế độ "ChatAI" chỉ nhận text thuần, không có ảnh/model/resolution nào — dùng thẳng rawText làm prompt, không qua parsePromptMessage. */
+async function submitChatAIJob({
   ctx,
   groupChatId,
   promptMessageId,
@@ -389,7 +389,7 @@ async function submitGptJob({
   skipPipeline,
   promptFileName,
   promptAttachmentPath,
-}: SubmitGptParams): Promise<void> {
+}: SubmitChatAIParams): Promise<void> {
   const prompt = rawText.trim();
 
   if (!prompt) {
@@ -402,7 +402,7 @@ async function submitGptJob({
   });
 
   enqueueJob({
-    type: "gpt",
+    type: "chatAI",
     chatId: groupChatId,
     prompt,
     promptMessageId,
@@ -678,19 +678,19 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
-  bot.hears(GPT_BUTTON_LABEL, async (ctx) => {
+  bot.hears(CHATAI_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
-    waitingMode.set(ctx.from.id, "gpt");
+    waitingMode.set(ctx.from.id, "chatAI");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi file .txt kịch bản kèm prompt`,
     );
   });
 
-  bot.hears(GPT_CHECK_BUTTON_LABEL, async (ctx) => {
+  bot.hears(CHATAI_CHECK_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
-    waitingMode.set(ctx.from.id, "gptCheck");
+    waitingMode.set(ctx.from.id, "chatAICheck");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, Gửi file .txt kịch bản kèm prompt`,
     );
@@ -711,8 +711,8 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === VIDEO_REF_BUTTON_LABEL ||
       ctx.message.text === CHARACTER_REF_BUTTON_LABEL ||
       ctx.message.text === OMNI_REF_BUTTON_LABEL ||
-      ctx.message.text === GPT_BUTTON_LABEL ||
-      ctx.message.text === GPT_CHECK_BUTTON_LABEL
+      ctx.message.text === CHATAI_BUTTON_LABEL ||
+      ctx.message.text === CHATAI_CHECK_BUTTON_LABEL
     ) {
       return next();
     }
@@ -760,13 +760,13 @@ export function registerHandlers(bot: Telegraf): void {
         userId,
         rawText: ctx.message.text,
       });
-    } else if (mode === "gpt" || mode === "gptCheck") {
-      await submitGptJob({
+    } else if (mode === "chatAI" || mode === "chatAICheck") {
+      await submitChatAIJob({
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
         rawText: ctx.message.text,
-        skipPipeline: mode === "gptCheck",
+        skipPipeline: mode === "chatAICheck",
       });
     } else {
       await submitImageJob({
@@ -937,13 +937,13 @@ export function registerHandlers(bot: Telegraf): void {
 
     const userId = ctx.from.id;
 
-    // Chế độ "GPT"/"Check prompt kịch bản": user gửi yêu cầu qua file (.txt/.md)
+    // Chế độ "ChatAI"/"Check prompt kịch bản": user gửi yêu cầu qua file (.txt/.md)
     // thay vì gõ trực tiếp (dùng khi prompt quá dài) — tải file về đĩa rồi
-    // UPLOAD thẳng lên chatgpt.com (xem askChatGpt), prompt chỉ là 1 câu ngắn
-    // yêu cầu GPT đọc file (GPT_FILE_ATTACHMENT_PROMPT), không dán nguyên nội
+    // UPLOAD thẳng lên ChatAI (xem askChatAI), prompt chỉ là 1 câu ngắn
+    // yêu cầu ChatAI đọc file (CHATAI_FILE_ATTACHMENT_PROMPT), không dán nguyên nội
     // dung file làm prompt text nữa.
-    const gptMode = waitingMode.get(userId);
-    if (gptMode === "gpt" || gptMode === "gptCheck") {
+    const chatAIMode = waitingMode.get(userId);
+    if (chatAIMode === "chatAI" || chatAIMode === "chatAICheck") {
       waitingMode.delete(userId);
       const originalFileName = ctx.message.document.file_name ?? "prompt.txt";
       const ext = path.extname(originalFileName) || ".txt";
@@ -955,19 +955,19 @@ export function registerHandlers(bot: Telegraf): void {
           ext,
         );
       } catch (err) {
-        console.error("[bot] Tải file prompt GPT thất bại:", err);
+        console.error("[bot] Tải file prompt ChatAI thất bại:", err);
         await ctx.reply(
           "Không tải được file prompt từ Telegram, đã huỷ.",
           promptMenu,
         );
         return;
       }
-      await submitGptJob({
+      await submitChatAIJob({
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
-        rawText: GPT_FILE_ATTACHMENT_PROMPT,
-        skipPipeline: gptMode === "gptCheck",
+        rawText: CHATAI_FILE_ATTACHMENT_PROMPT,
+        skipPipeline: chatAIMode === "chatAICheck",
         promptFileName: originalFileName,
         promptAttachmentPath: promptFilePath,
       });
@@ -1009,9 +1009,9 @@ export function registerHandlers(bot: Telegraf): void {
   });
 
   // Nút "Tạo video" trong tin nhắn xác nhận sau "Check prompt kịch bản" (xem
-  // notifyGptCheckSuccess/createVideoConfirmation trong queue.ts) —
+  // notifyChatAICheckSuccess/createVideoConfirmation trong queue.ts) —
   // callback_data dạng "confirmVideo:<id>", tra lại jsonPath tương ứng rồi
-  // đẩy job tạo video vào hàng đợi hailuoai.video.
+  // đẩy job tạo video vào hàng đợi AIVideo.
   bot.action(/^confirmVideo:(.+)$/, async (ctx) => {
     if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     const confirmId = ctx.match[1];

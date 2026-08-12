@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { config } from "../src/config";
 import { getBrowserContext } from "../src/automation/browser";
-import { ensureLoggedIn } from "../src/automation/hailuo";
+import { ensureLoggedIn } from "../src/automation/aiVideo";
 
 interface StorageStateCookie {
   name: string;
@@ -10,7 +10,7 @@ interface StorageStateCookie {
 }
 
 /**
- * Đọc hạn cookie "_token" (cookie phiên đăng nhập chính của hailuoai.video)
+ * Đọc hạn cookie "_token" (cookie phiên đăng nhập chính của AIVideo)
  * trực tiếp từ file session — nhanh, không cần mở trình duyệt. Chỉ là ước
  * lượng: cookie còn hạn không có nghĩa server chưa vô hiệu hoá phiên vì lý
  * do khác (đổi mật khẩu, đăng nhập máy khác...) — xem thêm checkLiveLogin().
@@ -48,18 +48,18 @@ function checkCookieExpiry(): void {
 
 /**
  * Kiểm tra thực tế: mở trang tạo video bằng đúng session đang cấu hình, xem
- * hailuoai.video có yêu cầu đăng nhập lại không — đáng tin cậy hơn chỉ đọc
+ * AIVideo có yêu cầu đăng nhập lại không — đáng tin cậy hơn chỉ đọc
  * hạn cookie, vì server có thể vô hiệu hoá phiên trước khi cookie hết hạn.
  */
 async function checkLiveLogin(): Promise<void> {
-  console.log("\nĐang kiểm tra thực tế bằng cách mở hailuoai.video...");
+  console.log("\nĐang kiểm tra thực tế bằng cách mở AIVideo...");
   const context = await getBrowserContext();
   const page = await context.newPage();
   try {
-    const url = new URL(config.hailuoCreateVideoPath, config.hailuoBaseUrl).toString();
+    const url = new URL(config.aiVideoCreateVideoPath, config.aiVideoBaseUrl).toString();
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await ensureLoggedIn(page);
-    console.log("✅ Session còn hợp lệ — vẫn đăng nhập được vào hailuoai.video.");
+    console.log("✅ Session còn hợp lệ — vẫn đăng nhập được vào AIVideo.");
   } catch (err) {
     console.log("❌ Session đã hết hạn hoặc không hợp lệ:", err instanceof Error ? err.message : err);
     console.log("Chạy lại: npm run login (hoặc npm run login -- --no-proxy nếu proxy chặn Google)");

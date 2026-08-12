@@ -2,7 +2,7 @@ import { generateVideosForFile } from "../src/automation/storyboardPipeline";
 
 /**
  * CLI mỏng cho generateVideosForFile (xem src/automation/storyboardPipeline.ts
- * — logic dùng chung với bước xử lý job "gpt" trong src/queue.ts).
+ * — logic dùng chung với bước xử lý job "chatAI" trong src/queue.ts).
  *
  * Cách dùng: npm run generate-videos -- <inputJsonPath>
  */

@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { generateReferenceImage } from "./chatgptImage";
-import { generateVideo, type GenerateVideoOptions } from "./hailuo";
-import { generateImage } from "./hailuoImage";
+import { generateReferenceImage } from "./chatAIImage";
+import { generateVideo, type GenerateVideoOptions } from "./aiVideo";
+import { generateImage } from "./aiVideoImage";
 
 /**
  * Logic dùng CHUNG cho cả 2 nơi gọi: script CLI (scripts/generate-reference-images.ts,
- * scripts/generate-videos.ts) và bot Telegram (xử lý job "gpt" trong
- * src/queue.ts, sau khi askChatGpt tải về file JSON storyboard) — tránh viết
+ * scripts/generate-videos.ts) và bot Telegram (xử lý job "chatAI" trong
+ * src/queue.ts, sau khi askChatAI tải về file JSON storyboard) — tránh viết
  * trùng cùng 1 logic ở 2 chỗ.
  */
 
@@ -25,8 +25,8 @@ export interface StoryboardEntry {
   duration?: number;
   /** true/false nếu đã từng generate (ảnh hoặc video) THÀNH CÔNG hay không — không có field này nghĩa là CHƯA TỪNG chạy. */
   success?: boolean;
-  /** Id hội thoại chatgpt.com (phần "/c/<id>" trên URL) lúc gen ảnh cho entry này — chỉ có ở entry CHARACTER/LOCATION/SCENE_SETTING (dùng chatgpt.com), VIDEO không có (dùng hailuoai.video). */
-  chatgptSessionId?: string;
+  /** Id hội thoại ChatAI (phần "/c/<id>" trên URL) lúc gen ảnh cho entry này — chỉ có ở entry CHARACTER/LOCATION/SCENE_SETTING (dùng ChatAI), VIDEO không có (dùng AIVideo). */
+  chatAISessionId?: string;
   [key: string]: unknown;
 }
 
@@ -36,10 +36,10 @@ export function sanitizeId(id: string): string {
 }
 
 /**
- * Chờ ms mili giây — dùng giữa các lần gọi generateReferenceImage/askChatGpt
+ * Chờ ms mili giây — dùng giữa các lần gọi generateReferenceImage/askChatAI
  * liên tiếp (xem generateReferenceImagesForFile/generateSceneImagesForFile
- * bên dưới, và processGptQueue trong queue.ts), tránh gửi request quá nhanh
- * liên tiếp lên chatgpt.com (theo yêu cầu người dùng, giảm rủi ro rate-limit
+ * bên dưới, và processChatAIQueue trong queue.ts), tránh gửi request quá nhanh
+ * liên tiếp lên ChatAI (theo yêu cầu người dùng, giảm rủi ro rate-limit
  * hoặc bị nghi ngờ bot).
  */
 export function sleep(ms: number): Promise<void> {
@@ -60,7 +60,7 @@ const REQUEST_THROTTLE_MS = 15000;
  * Cờ CHUNG cho mọi file/job (không phân biệt theo jobId) — đúng ý nghĩa
  * "Stop All" (dừng tất cả), đơn giản hơn nhiều so với theo dõi riêng từng
  * job. Phải gọi clearStopStoryboardRequest() SAU KHI job đang dừng đã thực
- * sự thoát hẳn (xem processGptQueue trong queue.ts), nếu không các job MỚI
+ * sự thoát hẳn (xem processChatAIQueue trong queue.ts), nếu không các job MỚI
  * sau đó sẽ bị chặn nhầm ngay từ đầu.
  */
 let stopStoryboardRequested = false;
@@ -114,14 +114,14 @@ export interface GenerateImagesResult {
 
 /**
  * Đọc 1 file JSON storyboard (list entry {type, id, prompt, ...} — output
- * của tính năng GPT storyboard, xem askChatGpt/downloadAttachedFiles trong
- * chatgpt.ts), lọc entry CHARACTER/LOCATION (bỏ qua VIDEO vì đó là prompt tạo
- * VIDEO, không phải ảnh), rồi lần lượt nhờ GPT tạo ảnh cho từng entry và tải
+ * của tính năng ChatAI storyboard, xem askChatAI/downloadAttachedFiles trong
+ * chatAI.ts), lọc entry CHARACTER/LOCATION (bỏ qua VIDEO vì đó là prompt tạo
+ * VIDEO, không phải ảnh), rồi lần lượt nhờ ChatAI tạo ảnh cho từng entry và tải
  * về CHUNG 1 folder reference-images/<tên file input>/<id>.<đuôi> — không
  * chia riêng characters/locations nữa (đơn giản hoá, dễ duyệt file).
  *
  * Chạy TUẦN TỰ từng entry (không song song) — cùng 1 browser context
- * chatgpt.com dùng chung, tránh nhiều tab cùng thao tác gây xung đột.
+ * ChatAI dùng chung, tránh nhiều tab cùng thao tác gây xung đột.
  *
  * Entry nào generate thành công được đánh dấu "success": true, lỗi thì
  * "success": false — LUÔN ghi tường minh (không xoá field), để phân biệt được
@@ -193,7 +193,7 @@ export async function generateReferenceImagesForFile(
         `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${result.path}`,
       );
       entry.success = true;
-      entry.chatgptSessionId = result.sessionId;
+      entry.chatAISessionId = result.sessionId;
       succeeded++;
       if (onEntryDone) {
         await onEntryDone(result.path).catch((err) => {
@@ -214,7 +214,7 @@ export async function generateReferenceImagesForFile(
     }
     await saveEntries(inputPath, entries);
     // Chờ giữa các lần gọi gen ảnh liên tiếp — tránh gửi request quá nhanh
-    // lên chatgpt.com (theo yêu cầu người dùng).
+    // lên ChatAI (theo yêu cầu người dùng).
     await sleep(REQUEST_THROTTLE_MS);
   }
 
@@ -229,20 +229,20 @@ export async function generateReferenceImagesForFile(
 /**
  * GIỐNG generateReferenceImagesForFile (cùng đọc/lọc entry CHARACTER/
  * LOCATION, cùng quy ước lưu file/success/onEntryDone/resume) nhưng tạo ảnh
- * qua hailuoai.video (generateImage trong hailuoImage.ts) THAY VÌ hỏi GPT
- * (chatgpt.com) — dùng khi muốn tránh phụ thuộc chatgpt.com hoặc đổi nguồn
+ * qua AIVideo (generateImage trong aiVideoImage.ts) THAY VÌ hỏi ChatAI
+ * (ChatAI) — dùng khi muốn tránh phụ thuộc ChatAI hoặc đổi nguồn
  * tạo ảnh. Hàm RIÊNG, KHÔNG sửa generateReferenceImagesForFile — cả 2 hàm
  * cùng ghi vào field "success"/lưu file cùng quy ước (<id>.<đuôi> trong
  * reference-images/<tên file input>/) nên hoàn toàn tương thích ngược: ảnh
  * tạo bằng hàm nào cũng dùng được làm ref cho generateSceneImagesForFile/
  * generateVideosForFile sau đó.
  *
- * generateImage() trả về CẢ CỤM ảnh (thường 4 ảnh/lần, xem hailuoImage.ts) —
+ * generateImage() trả về CẢ CỤM ảnh (thường 4 ảnh/lần, xem aiVideoImage.ts) —
  * chỉ lấy ảnh ĐẦU TIÊN đặt tên "<id>.<đuôi>" (khớp đúng 1 file/id như
  * resolveRefImagePath cần), các ảnh còn lại trong cụm bị xoá luôn (không giữ
  * làm rác, vì entry.ref chỉ có thể trỏ tới 1 ảnh/id).
  */
-export async function generateReferenceImagesForFileViaHailuo(
+export async function generateReferenceImagesForFileViaAIVideo(
   inputPath: string,
   onEntryDone?: (filePath: string) => Promise<void>,
   onEntryError?: (id: string) => Promise<void>,
@@ -282,7 +282,7 @@ export async function generateReferenceImagesForFileViaHailuo(
     if (entry?.success) continue;
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     console.log(
-      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (hailuo)...`,
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (aiVideo)...`,
     );
     let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
     try {
@@ -352,8 +352,8 @@ export async function generateReferenceImagesForFileViaHailuo(
 /**
  * Tìm file ảnh ref theo id trong 1 folder — ưu tiên đúng "<id>.png", fallback
  * dò bất kỳ đuôi nào khác nếu không có (generate-reference-images lưu theo
- * đuôi THẬT của ảnh GPT trả về, có thể không phải .png — xem
- * guessImageExtension trong chatgptImage.ts).
+ * đuôi THẬT của ảnh ChatAI trả về, có thể không phải .png — xem
+ * guessImageExtension trong chatAIImage.ts).
  */
 async function resolveRefImagePath(dir: string, id: string): Promise<string> {
   const exact = path.join(dir, `${id}.png`);
@@ -406,7 +406,7 @@ function assignStartEndFrames(
 /**
  * Đọc 1 file JSON storyboard (CÙNG file input dùng chung với
  * generateReferenceImagesForFile), lọc entry type "VIDEO", rồi lần lượt gọi
- * generateVideo trên hailuoai.video cho từng entry.
+ * generateVideo trên AIVideo cho từng entry.
  *
  * ref có thể trỏ tới entry CHARACTER, LOCATION hoặc SCENE_SETTING (đều đã
  * generate ảnh trước đó, cùng lưu trong reference-images/<tên file input>/).
@@ -492,7 +492,7 @@ export async function generateVideosForFile(
 
       // if (entry.duration) {
       // console.warn(
-      //   `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên hailuoai.video, bỏ qua.`,
+      //   `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên AIVideo, bỏ qua.`,
       // );
       // }
 
@@ -504,7 +504,7 @@ export async function generateVideosForFile(
       // Check lại NGAY TRƯỚC khi gọi generateVideo (không chỉ ở đầu vòng for)
       // — resolveRefImagePath ở trên là async (đọc đĩa), Stop All có thể vừa
       // được bấm đúng lúc đang chờ đoạn đó. Entry CHƯA gọi generateVideo (chưa
-      // tốn credit hailuoai.video) nên bỏ qua an toàn — giữ "success" chưa xác
+      // tốn credit AIVideo) nên bỏ qua an toàn — giữ "success" chưa xác
       // định để resume sau, đúng ý "chưa gen thì ko gen nữa".
       if (isStopStoryboardRequested()) break;
 
@@ -547,11 +547,11 @@ export async function generateVideosForFile(
 /**
  * Đọc 1 file JSON storyboard (CÙNG file input dùng chung với
  * generateReferenceImagesForFile/generateVideosForFile), lọc entry type
- * "SCENE_SETTING", rồi nhờ GPT tạo ảnh bối cảnh cho từng entry.
+ * "SCENE_SETTING", rồi nhờ ChatAI tạo ảnh bối cảnh cho từng entry.
  *
  * Nếu entry có "ref" (trỏ tới CHARACTER/LOCATION đã generate trước đó bằng
- * generateReferenceImagesForFile), upload các ảnh ref đó lên chatgpt.com
- * TRƯỚC khi gõ prompt (xem generateReferenceImage's refImagePaths) để GPT vẽ
+ * generateReferenceImagesForFile), upload các ảnh ref đó lên ChatAI
+ * TRƯỚC khi gõ prompt (xem generateReferenceImage's refImagePaths) để ChatAI vẽ
  * cảnh giữ đúng nhận diện nhân vật/địa điểm đã có. Không có "ref" thì generate
  * thuần từ prompt (giống CHARACTER/LOCATION).
  *
@@ -631,7 +631,7 @@ export async function generateSceneImagesForFile(
         `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đã lưu: ${result.path}`,
       );
       entry.success = true;
-      entry.chatgptSessionId = result.sessionId;
+      entry.chatAISessionId = result.sessionId;
       succeeded++;
       if (onEntryDone) {
         await onEntryDone(result.path).catch((err) => {
@@ -652,7 +652,7 @@ export async function generateSceneImagesForFile(
     }
     await saveEntries(inputPath, entries);
     // Chờ giữa các lần gọi gen ảnh liên tiếp — tránh gửi request quá nhanh
-    // lên chatgpt.com (theo yêu cầu người dùng).
+    // lên ChatAI (theo yêu cầu người dùng).
     await sleep(REQUEST_THROTTLE_MS);
   }
 
@@ -662,19 +662,19 @@ export async function generateSceneImagesForFile(
 /**
  * GIỐNG generateSceneImagesForFile (cùng đọc/lọc entry SCENE_SETTING, cùng
  * quy ước resolve ref CHARACTER/LOCATION/SCENE_SETTING, lưu file/success/
- * onEntryDone/resume) nhưng tạo ảnh qua hailuoai.video (generateImage trong
- * hailuoImage.ts, cùng cách generateReferenceImagesForFileViaHailuo đã làm)
- * THAY VÌ hỏi GPT. Hàm RIÊNG, KHÔNG sửa generateSceneImagesForFile.
+ * onEntryDone/resume) nhưng tạo ảnh qua AIVideo (generateImage trong
+ * aiVideoImage.ts, cùng cách generateReferenceImagesForFileViaAIVideo đã làm)
+ * THAY VÌ hỏi ChatAI. Hàm RIÊNG, KHÔNG sửa generateSceneImagesForFile.
  *
  * Ảnh ref (nếu có) truyền qua GenerateImageOptions.referenceImagePaths —
- * hailuoai.video hỗ trợ tối đa 16 ảnh tham chiếu, dư sức cho vài ảnh
+ * AIVideo hỗ trợ tối đa 16 ảnh tham chiếu, dư sức cho vài ảnh
  * CHARACTER/LOCATION/SCENE_SETTING thường gặp mỗi entry.
  *
  * generateImage() trả về CẢ CỤM ảnh — chỉ lấy ảnh ĐẦU TIÊN đặt tên
  * "<id>.<đuôi>", các ảnh còn lại trong cụm bị xoá luôn — cùng lý do đã giải
- * thích ở generateReferenceImagesForFileViaHailuo.
+ * thích ở generateReferenceImagesForFileViaAIVideo.
  */
-export async function generateSceneImagesForFileViaHailuo(
+export async function generateSceneImagesForFileViaAIVideo(
   inputPath: string,
   onEntryDone?: (filePath: string) => Promise<void>,
   onEntryError?: (filePath: string) => Promise<void>,
@@ -714,7 +714,7 @@ export async function generateSceneImagesForFileViaHailuo(
     if (entry?.success) continue;
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     console.log(
-      `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đang tạo ảnh (hailuo)...`,
+      `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đang tạo ảnh (aiVideo)...`,
     );
     let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
     try {

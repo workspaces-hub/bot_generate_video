@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 
 /**
- * hailuoai.video là SPA đứng sau đăng nhập nên không thể soi DOM thật trước.
+ * AIVideo là SPA đứng sau đăng nhập nên không thể soi DOM thật trước.
  * Mỗi phần tử dưới đây liệt kê NHIỀU cách chọn (candidates), thử lần lượt
  * cho tới khi tìm được phần tử hiển thị. Nếu tất cả candidates đều fail,
  * mở screenshot debug (storage/debug/<jobId>.png) rồi bổ sung selector đúng
@@ -29,8 +29,8 @@ export async function firstVisible(candidates: Array<() => Locator>, timeoutMs =
  * tiến trình renderer của tab chết giữa chừng (thường do OOM dưới Xvfb, xem
  * launch.ts). Khi đã crash, page/context KHÔNG dùng lại được nữa — mọi thao
  * tác Playwright tiếp theo trên cùng page đều throw lỗi có message chứa
- * "crashed" hoặc "has been closed". Dùng chung cho hailuo.ts (generateVideo)
- * và chatgptImage.ts (generateReferenceImage) để tự mở tab MỚI thử lại thay
+ * "crashed" hoặc "has been closed". Dùng chung cho aiVideo.ts (generateVideo)
+ * và chatAIImage.ts (generateReferenceImage) để tự mở tab MỚI thử lại thay
  * vì để cả job fail hẳn vì 1 lần crash thoáng qua.
  */
 export function isPageCrashError(err: unknown): boolean {
@@ -49,7 +49,14 @@ export const promptInputCandidates = (page: Page): Array<() => Locator> => [
   () => page.locator("textarea"),
 ];
 
-/** Chip chọn model trong toolbar khung nhập prompt, hiện nhãn dạng "Hailuo 2.3". */
+/**
+ * Chip chọn model trong toolbar khung nhập prompt, hiện nhãn dạng "Hailuo 2.3".
+ * Regex "hailuo" bên dưới KHỚP TEXT THẬT do chính site hiển thị (tên model
+ * của bên thứ 3) — KHÔNG phải do code tự đặt tên, nên KHÔNG đổi được, khác
+ * với các identifier/comment khác trong codebase (đã đổi hết sang "AIVideo"
+ * theo yêu cầu người dùng) — đổi regex này sẽ khiến không khớp được text
+ * thật trên UI nữa.
+ */
 export const modelChipCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /hailuo\s*\d/i }),
   () => page.getByText(/hailuo\s*\d(\.\d)?(\s*fast)?/i),
@@ -68,7 +75,7 @@ export const resolutionChipCandidates = (page: Page): Array<() => Locator> => [
  * text-hl_text_02">4</span>` — hoàn toàn KHÔNG có role="button"/thẻ <button>
  * nào (khác hẳn chip model/resolution) — getByRole("button", ...) dùng ở bản
  * phỏng đoán ban đầu KHÔNG BAO GIỜ khớp được, xác nhận đây chính là lý do
- * selectImageCount (hailuoImage.ts) chưa từng chọn được số ảnh (chip vẫn giữ
+ * selectImageCount (aiVideoImage.ts) chưa từng chọn được số ảnh (chip vẫn giữ
  * mặc định "4" dù gọi với imageCount=1). Nằm trong toolbar góc dưới-phải
  * khung nhập prompt (`div[class*="right-3"][class*="bottom-3"]`), ngay TRƯỚC
  * icon credit + nút "Create" — KHÔNG cùng khu vực với chip model/resolution
@@ -113,7 +120,7 @@ const VIDEO_INPUT_MODE_NAMES = [
  * class thật: "... flex h-8 cursor-pointer items-center gap-1 ... rounded-
  * [10px] border ..."). Nếu chỉ match theo text (getByText/getByRole) sẽ khớp
  * NHẦM cả 2 loại — đã xác nhận gây 2 lỗi khác nhau: false NEGATIVE khi khớp
- * trúng 1 bản sao ẩn ngoài viewport (xem findOnscreenLocator ở hailuo.ts),
+ * trúng 1 bản sao ẩn ngoài viewport (xem findOnscreenLocator ở aiVideo.ts),
  * và false POSITIVE khi khớp trúng tag lịch sử (khiến verify "đã đổi mode
  * đúng chưa" báo sai đã thành công dù chip thật chưa hề đổi). Scope theo
  * cấu trúc div.cursor-pointer có chứa svg để loại tag lịch sử ngay từ đầu.
@@ -235,7 +242,7 @@ export const dropdownOptionCandidates = (page: Page, targetText: string): Array<
 };
 
 export const generateButtonCandidates = (page: Page): Array<() => Locator> => [
-  // Nút generate thật của hailuoai.video không có chữ "Generate" — chỉ có
+  // Nút generate thật của AIVideo không có chữ "Generate" — chỉ có
   // icon + số credit (vd "25"). Xác định qua class riêng của app.
   () => page.locator("button.new-color-btn-bg"),
   // Mode "Image Reference" (model Veo) dùng nút khác hẳn — cũng không có
@@ -318,7 +325,7 @@ export const creditPaywallModalCandidates = (page: Page): Array<() => Locator> =
 ];
 
 /**
- * hailuoai.video hay bật popup quảng cáo/sự kiện (Ant Design Modal) bất chợt
+ * AIVideo hay bật popup quảng cáo/sự kiện (Ant Design Modal) bất chợt
  * ở nhiều thời điểm khác nhau trong lúc dùng, không chỉ lúc mới vào trang —
  * mỗi loại có nội dung khác nhau (giảm giá, sự kiện, hết credit...) nên
  * không thể liệt kê hết theo text. ".ant-modal-wrap"/".ant-modal-close" là
@@ -342,7 +349,7 @@ export const videoElementCandidates = (page: Page): Array<() => Locator> => [
  * Khu vực lịch sử video (id="create-new-scroll-container") dùng
  * flex-col-reverse: video mới nhất được thêm vào CUỐI DOM nhưng hiển thị
  * ở TRÊN CÙNG. Vì vậy không thể tin vào .first()/.last() một cách cố định —
- * xem waitForNewVideo() trong hailuo.ts, nơi tự phát hiện đầu nào vừa đổi.
+ * xem waitForNewVideo() trong aiVideo.ts, nơi tự phát hiện đầu nào vừa đổi.
  *
  * Mỗi card thực ra có 2 thẻ <video> TRÙNG src: 1 cái hiển thị (thumbnail
  * dạng lưới, object-cover) và 1 cái ẩn (preload="none", dùng cho
@@ -441,7 +448,7 @@ export const busyOmniReferenceThumbnailLocator = (page: Page): Locator =>
   page.locator('[aria-label^="Uploaded"][aria-busy="true"]');
 
 /**
- * Mỗi lần generate ảnh, hailuoai.video trả về CẢ CỤM (thực tế xác nhận: 4
+ * Mỗi lần generate ảnh, AIVideo trả về CẢ CỤM (thực tế xác nhận: 4
  * ảnh) gộp chung trong 1 "entry", bên trong chứa nhiều div[data-feed-id]
  * (mỗi ảnh 1 feed-id riêng, xem class "grid grid-cols-2" bọc ngoài trong DOM
  * thật). Vì vậy KHÔNG thể đếm/so sánh theo từng <img> phẳng như video (1

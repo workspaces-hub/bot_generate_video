@@ -16,7 +16,7 @@ import {
   getFlightDataText,
   gotoWithRetry,
   selectChipOption,
-} from "./hailuo";
+} from "./aiVideo";
 import {
   addReferenceImageButtonCandidates,
   busyReferenceImageThumbnailLocator,
@@ -95,15 +95,15 @@ export async function generateImage(
   const page = await context.newPage();
   try {
     const url = new URL(
-      config.hailuoCreateImagePath,
-      config.hailuoBaseUrl,
+      config.aiVideoCreateImagePath,
+      config.aiVideoBaseUrl,
     ).toString();
     await gotoWithRetry(page, url);
 
     await ensureLoggedIn(page);
     await dismissPaywallIfBlocking(page);
 
-    // Điều hướng thẳng tới config.hailuoCreateImagePath (URL riêng cho tạo
+    // Điều hướng thẳng tới config.aiVideoCreateImagePath (URL riêng cho tạo
     // ảnh) đã tự vào sẵn chế độ Image — thực tế xác nhận không còn tab
     // "Image" nào để bấm nữa. Vẫn thử bấm (best-effort, không chặn job)
     // phòng trường hợp site đổi lại UI dùng chung 1 trang có toggle.
@@ -124,7 +124,7 @@ export async function generateImage(
     }
 
     // Cùng lý do đã sửa cho video (xem chú thích generateVideo trong
-    // hailuo.ts): gotoWithRetry chỉ chờ domcontentloaded, SPA còn cần thêm
+    // aiVideo.ts): gotoWithRetry chỉ chờ domcontentloaded, SPA còn cần thêm
     // thời gian hydrate. Nếu không có ảnh tham chiếu thì không bước nào ở
     // trên chờ mạng cả, nên vẫn cần chờ ở đây trước khi tìm ô nhập prompt.
     if (referenceImagePaths.length === 0) {
@@ -139,7 +139,7 @@ export async function generateImage(
     await promptInput.fill(prompt);
 
     // Cùng chip model dùng chung với trang tạo video (toolbar khung nhập
-    // prompt) — xem chú thích selectChipOption trong hailuo.ts.
+    // prompt) — xem chú thích selectChipOption trong aiVideo.ts.
     if (model) {
       await selectChipOption(page, modelChipCandidates(page), model, "model");
     }
@@ -151,7 +151,7 @@ export async function generateImage(
     );
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác ảnh
     // nào là MỚI (không phải ảnh cũ nhất trong lịch sử) — cùng cách tiếp
-    // cận đã dùng cho video (xem waitForNewVideo trong hailuo.ts).
+    // cận đã dùng cho video (xem waitForNewVideo trong aiVideo.ts).
     const baseline = await captureImageBaseline(page);
     // await captureSnapshot(page, jobId + "-before-generate-click", "before-generate-click");
 
@@ -227,7 +227,7 @@ async function uploadReferenceImage(
   try {
     await attemptUploadReferenceImage(page, imagePath, expectedCountAfter);
   } catch (err) {
-    // console.warn("[hailuoImage] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:", err);
+    // console.warn("[aiVideoImage] Upload ảnh tham chiếu lần đầu thất bại, thử đóng popup rồi thử lại:", err);
     await dismissBlockingOverlays(page);
     await attemptUploadReferenceImage(page, imagePath, expectedCountAfter);
   }
@@ -315,7 +315,7 @@ async function waitForNewImageEntry(
       .catch(() => false);
     if (paywall) {
       throw new GenerationError(
-        "Tài khoản hết credit hoặc bị popup nâng cấp gói chặn — cần nạp thêm credit/nâng cấp gói trên hailuoai.video",
+        "Tài khoản hết credit hoặc bị popup nâng cấp gói chặn — cần nạp thêm credit/nâng cấp gói trên AIVideo",
       );
     }
 
@@ -401,7 +401,7 @@ async function getEntryFeedIds(entry: Locator): Promise<string[]> {
 
 /**
  * Tải TẤT CẢ ảnh trong entry, mỗi ảnh KHÔNG watermark — cùng kỹ thuật với
- * downloadVideo() trong hailuo.ts: điều hướng thẳng tới trang chi tiết
+ * downloadVideo() trong aiVideo.ts: điều hướng thẳng tới trang chi tiết
  * /my-work-detail/ai-image/<feedId>?source-page=create (mỗi ảnh trong cụm
  * có feedId riêng) rồi đọc downloadURLWithoutWatermark nhúng sẵn trong
  * Next.js flight data của trang — đáng tin cậy hơn nhiều so với fetch thẳng
@@ -441,12 +441,12 @@ async function downloadImageByFeedId(
 ): Promise<string> {
   const detailUrl = new URL(
     `/my-work-detail/ai-image/${feedId}`,
-    config.hailuoBaseUrl,
+    config.aiVideoBaseUrl,
   );
   detailUrl.searchParams.set("source-page", "create");
 
   // Xác nhận qua log lỗi thật (job cay_khe_test_CHAR_MAGIC_BIRD): điều hướng
-  // thẳng tới URL chi tiết đôi khi bị BOUNCE về TRANG CHỦ hailuoai.video
+  // thẳng tới URL chi tiết đôi khi bị BOUNCE về TRANG CHỦ AIVideo
   // (nút "Create Video"/"Create Image", banner quảng cáo H3) thay vì trang
   // chi tiết — debug screenshot lúc lỗi xác nhận rõ, kèm 1 popup "Max
   // Membership Benefits Updated" che 1 phần trang. Trang chủ KHÔNG BAO GIỜ
@@ -483,7 +483,7 @@ async function downloadImageByFeedId(
     }
 
     console.warn(
-      `[hailuoImage] Trang chi tiết ảnh (feedId ${feedId}) chưa có downloadURLWithoutWatermark sau 60s (lần ${attempt}/${maxDetailPageAttempts}, URL hiện tại: ${page.url()}) — thử điều hướng lại.`,
+      `[aiVideoImage] Trang chi tiết ảnh (feedId ${feedId}) chưa có downloadURLWithoutWatermark sau 60s (lần ${attempt}/${maxDetailPageAttempts}, URL hiện tại: ${page.url()}) — thử điều hướng lại.`,
     );
     if (attempt < maxDetailPageAttempts) {
       await page.waitForTimeout(3000);
@@ -491,7 +491,7 @@ async function downloadImageByFeedId(
   }
   // Đọc self.__next_f đã nối lại (KHÔNG dùng page.content() thô) — tránh bị
   // cắt ngang URL do Next.js tách string qua nhiều thẻ <script>, xem chú
-  // thích getFlightDataText trong hailuo.ts. Nếu cả maxDetailPageAttempts
+  // thích getFlightDataText trong aiVideo.ts. Nếu cả maxDetailPageAttempts
   // lần đều không thấy marker, vẫn đọc thử 1 lần cuối (best-effort) — lỗi
   // "Không tìm thấy downloadURLWithoutWatermark hợp lệ" ở dưới sẽ tự báo rõ.
   if (!flightData) {

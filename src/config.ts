@@ -17,19 +17,22 @@ export const config = {
   groupChatId: Number(required("GROUP_CHAT_ID")),
   groupChatIdTest: Number(required("GROUP_CHAT_ID_TEST")),
 
-  hailuoBaseUrl: process.env.HAILUO_BASE_URL ?? "https://hailuoai.video",
-  hailuoCreateVideoPath:
-    process.env.HAILUO_CREATE_VIDEO_PATH ?? "/create/image-to-video",
-  hailuoCreateImagePath:
-    process.env.HAILUO_CREATE_IMAGE_PATH ?? "/create/image-generation",
+  // Domain thật của dịch vụ tạo video/ảnh AI (bên thứ 3) bot tự động hoá —
+  // giá trị mặc định PHẢI giữ đúng domain thật này, chỉ đổi được qua env var
+  // AIVIDEO_BASE_URL nếu cần.
+  aiVideoBaseUrl: process.env.AIVIDEO_BASE_URL ?? "https://hailuoai.video",
+  aiVideoCreateVideoPath:
+    process.env.AIVIDEO_CREATE_VIDEO_PATH ?? "/create/image-to-video",
+  aiVideoCreateImagePath:
+    process.env.AIVIDEO_CREATE_IMAGE_PATH ?? "/create/image-generation",
   // Trang tạo video từ Image Reference / Character Reference — khác hẳn
   // trang tạo video thường (/create/video). Xác nhận thật: chip chuyển mode
   // "Start/End Frame" chỉ mở popover Image/Character Reference trên trang
   // NÀY — trên /create/video, chip đó không mở popover mode nào cả (đã thử
   // và xác nhận qua debug HTML: click không mở đúng popover, chỉ có popover
   // "model-selection-options" không liên quan tồn tại sẵn trong DOM).
-  hailuoCreateVideoRefPath:
-    process.env.HAILUO_CREATE_VIDEO_REF_PATH ??
+  aiVideoCreateVideoRefPath:
+    process.env.AIVIDEO_CREATE_VIDEO_REF_PATH ??
     "/create/subject-reference-to-video",
 
   storageStatePath: path.resolve(
@@ -40,15 +43,16 @@ export const config = {
   uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? "./storage/uploads"),
   debugDir: path.resolve("./storage/debug"),
 
-  // Tính năng "GPT": bot mở chatgpt.com, điền prompt, chờ trả lời xong rồi
-  // lưu ra file. Dùng session RIÊNG (khác hailuoai.video) vì khác domain —
-  // xem scripts/login-chatgpt.ts.
-  chatGptBaseUrl: process.env.CHATGPT_BASE_URL ?? "https://chatgpt.com",
-  chatGptStorageStatePath: path.resolve(
-    process.env.CHATGPT_STORAGE_STATE_PATH ?? "./storage/chatgpt-session.json",
+  // Tính năng "ChatAI": bot mở dịch vụ chat AI (bên thứ 3) thật, điền prompt,
+  // chờ trả lời xong rồi lưu ra file. Dùng session RIÊNG (khác AIVideo) vì
+  // khác domain — xem scripts/login-chatai.ts. Giá trị mặc định PHẢI giữ
+  // đúng domain thật này, chỉ đổi được qua env var CHATAI_BASE_URL nếu cần.
+  chatAIBaseUrl: process.env.CHATAI_BASE_URL ?? "https://chatgpt.com",
+  chatAIStorageStatePath: path.resolve(
+    process.env.CHATAI_STORAGE_STATE_PATH ?? "./storage/chatai-session.json",
   ),
-  chatGptResultsDir: path.resolve(
-    process.env.CHATGPT_RESULTS_DIR ?? "./storage/chatgpt-results",
+  chatAIResultsDir: path.resolve(
+    process.env.CHATAI_RESULTS_DIR ?? "./storage/chatai-results",
   ),
 
   headless: (process.env.HEADLESS ?? "false").toLowerCase() === "true",
@@ -76,7 +80,7 @@ export const config = {
 
   // Proxy cho Playwright (áp dụng cả lúc `npm run login` và lúc bot chạy
   // generate) — nên dùng CÙNG 1 proxy cho cả 2 để tránh đăng nhập từ IP
-  // này nhưng generate từ IP khác, dễ bị hailuoai.video/Google đánh dấu
+  // này nhưng generate từ IP khác, dễ bị AIVideo/Google đánh dấu
   // đáng ngờ. Để trống PROXY_SERVER nếu không dùng proxy.
   proxyServer: process.env.PROXY_SERVER || undefined,
   proxyUsername: process.env.PROXY_USERNAME || undefined,

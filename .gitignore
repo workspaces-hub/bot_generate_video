@@ -12,3 +12,4 @@ storage/chatgpt-results/
 storage/reference-images/
 storage/queue.json
 storage/gpt-queue.json
+storage/*

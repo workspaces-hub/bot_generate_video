@@ -8,14 +8,14 @@ import { config } from "../config";
  * Dùng Chrome thật (channel: "chrome") thay vì Chromium bundled, đồng thời
  * gỡ các cờ/flag tố cáo automation để đăng nhập Google hoạt động bình thường.
  *
- * useProxy=false (dùng cho chatgpt.com — xem chatgptBrowser.ts): tính năng
- * GPT không cần proxy, chỉ hailuoai.video mới cần (tránh đăng nhập/generate
+ * useProxy=false (dùng cho ChatAI — xem chatAIBrowser.ts): tính năng
+ * ChatAI không cần proxy, chỉ AIVideo mới cần (tránh đăng nhập/generate
  * từ 2 IP khác nhau — xem config.proxyServer). Mặc định true để không đổi
  * hành vi các nơi gọi cũ (login.ts, check-proxy.ts).
  *
- * Xác nhận thật: chatgpt.com (Cloudflare Turnstile) challenge "Verify you are
+ * Xác nhận thật: ChatAI (Cloudflare Turnstile) challenge "Verify you are
  * human" liên tục xuất hiện khi bot chạy headless:true trên VPS, trong khi
- * chạy npm run login-chatgpt CÓ giao diện thật (headed) trên chính máy đó
+ * chạy npm run login-chatai CÓ giao diện thật (headed) trên chính máy đó
  * KHÔNG hề bị challenge — Chrome headless bị Cloudflare nghi ngờ nhiều hơn
  * hẳn headed dù mọi cờ ẩn automation khác đều giống nhau. Vì vậy trên VPS,
  * NÊN chạy headed thật qua Xvfb (npm run start:xvfb + HEADLESS=false trong
@@ -41,7 +41,7 @@ export async function launchRealChrome(useProxy = true): Promise<Browser> {
     console.warn(
       "[launch] Đang chạy headless:false trên Linux nhưng không có $DISPLAY (không có X server) — " +
         "Chrome sẽ không khởi động được. Chạy qua Xvfb (npm run start:xvfb) để có headed thật trên VPS " +
-        "không màn hình — khuyến nghị cho chatgpt.com vì Cloudflare Turnstile nghi ngờ headless nhiều hơn hẳn.",
+        "không màn hình — khuyến nghị cho ChatAI vì Cloudflare Turnstile nghi ngờ headless nhiều hơn hẳn.",
     );
   }
 

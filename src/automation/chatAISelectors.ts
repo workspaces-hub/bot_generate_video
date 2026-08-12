@@ -1,9 +1,9 @@
 import type { Locator, Page } from "playwright";
 
 /**
- * chatgpt.com CHƯA có DOM thật xác nhận (tính năng mới, chưa chạy qua debug
+ * ChatAI CHƯA có DOM thật xác nhận (tính năng mới, chưa chạy qua debug
  * snapshot thực tế) — các selector dưới đây dựa theo cấu trúc DOM công khai,
- * ổn định từ lâu của giao diện ChatGPT (id/data-testid), nhưng vẫn có thể
+ * ổn định từ lâu của giao diện ChatAI (id/data-testid), nhưng vẫn có thể
  * cần chỉnh lại qua debug snapshot (storage/debug/<jobId>*.png/.html) ở lần
  * chạy thử đầu — cùng cách các selector khác trong project này đã được tinh
  * chỉnh dần từ phỏng đoán ban đầu.
@@ -23,7 +23,7 @@ export const promptTextareaCandidates = (page: Page): Array<() => Locator> => [
  * KHÔNG cần click mở menu trước — set thẳng file lên input này bằng
  * setInputFiles() (cách chuẩn của Playwright cho input file ẩn, bỏ qua bước
  * mở dialog OS). Có thể cần chỉnh lại qua debug snapshot ở lần chạy thử đầu
- * nếu chatgpt.com dùng cấu trúc khác (vd nhiều input file cho nhiều mục đích
+ * nếu ChatAI dùng cấu trúc khác (vd nhiều input file cho nhiều mục đích
  * khác nhau trên trang).
  */
 export const fileUploadInputLocator = (page: Page): Locator =>
@@ -35,20 +35,20 @@ export const sendButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /send prompt/i }),
 ];
 
-/** Nút dừng khi GPT đang trả lời (thay chỗ nút gửi) — biến mất khi trả lời xong. */
+/** Nút dừng khi ChatAI đang trả lời (thay chỗ nút gửi) — biến mất khi trả lời xong. */
 export const stopGeneratingButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.locator('button[data-testid="stop-button"]'),
   () => page.getByRole("button", { name: /stop generating/i }),
 ];
 
 /**
- * Khối tin nhắn trả lời của GPT (mỗi lượt hỏi/đáp 1 khối riêng, lấy khối
+ * Khối tin nhắn trả lời của ChatAI (mỗi lượt hỏi/đáp 1 khối riêng, lấy khối
  * CUỐI). DOM thật xác nhận (job 24b9cf53): phản hồi dùng tool tạo ẢNH
  * (image generation) KHÔNG nằm trong [data-message-author-role="assistant"]
  * như tin nhắn text thường — toàn trang lúc đó chỉ có ĐÚNG 1 attribute
  * data-message-author-role (của USER), khiến scope theo attribute này khớp
  * 0 phần tử dù ảnh đã tạo xong thật. Cấu trúc CHUNG cho MỌI lượt trả lời của
- * GPT (cả text lẫn ảnh) là `<section data-testid="conversation-turn-N">`
+ * ChatAI (cả text lẫn ảnh) là `<section data-testid="conversation-turn-N">`
  * chứa 1 descendant mang class "agent-turn" — dùng cấu trúc này thay vì
  * attribute data-message-author-role để không bỏ sót trường hợp ảnh.
  */
@@ -58,8 +58,8 @@ export const assistantMessageLocator = (page: Page): Locator =>
     .filter({ has: page.locator(".agent-turn") });
 
 /**
- * File GPT tạo ra và đính kèm trong 1 tin nhắn trả lời (vd qua code
- * interpreter/canvas) — DOM thật xác nhận (job 6d869584): ChatGPT KHÔNG dùng
+ * File ChatAI tạo ra và đính kèm trong 1 tin nhắn trả lời (vd qua code
+ * interpreter/canvas) — DOM thật xác nhận (job 6d869584): ChatAI KHÔNG dùng
  * thẻ <a> cho việc này (khác phỏng đoán ban đầu), mà dùng 2 loại <button>:
  * 1. Link-text NGAY TRONG đoạn trả lời, nhãn "Download <filename>":
  *    `<button aria-label="Download meta.json">Download meta.json</button>`
@@ -70,8 +70,8 @@ export const assistantMessageLocator = (page: Page): Locator =>
  *    vào MỞ PREVIEW (canvas), không chắc tải thẳng (xem fileCardLocator,
  *    chỉ dùng làm fallback khi không có nút "Download ..." nào).
  * fileAttachmentLocator gộp cả 2 — dùng để CHECK "đã có file xuất hiện chưa"
- * (vd sendMessage coi đây là dấu hiệu GPT trả lời xong); còn lúc THỰC SỰ bấm
- * tải (downloadAttachedFiles trong chatgpt.ts) phải ưu tiên
+ * (vd sendMessage coi đây là dấu hiệu ChatAI trả lời xong); còn lúc THỰC SỰ bấm
+ * tải (downloadAttachedFiles trong chatAI.ts) phải ưu tiên
  * downloadFileLinkLocator trước, không bấm cả 2 cho cùng 1 file (tránh tải
  * trùng/mở preview thừa).
  */
@@ -109,10 +109,10 @@ export const downloadButtonCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
- * Nút "Retry" hiện khi GPT báo lỗi generate (thực tế gặp: generate ẢNH lỗi
+ * Nút "Retry" hiện khi ChatAI báo lỗi generate (thực tế gặp: generate ẢNH lỗi
  * với message "Something went wrong. Please try again.") — DOM thật (job
  * d077805e): `<button data-testid="regenerate-thread-error-button">Retry</button>`.
- * Đây là lỗi THẬT phía ChatGPT (không phải do bot chọn sai selector) — bấm
+ * Đây là lỗi THẬT phía ChatAI (không phải do bot chọn sai selector) — bấm
  * Retry thường tự sửa được vì nguyên nhân hay gặp là quá tải server nhất
  * thời.
  */
@@ -122,7 +122,7 @@ export const regenerateErrorButtonCandidates = (page: Page): Array<() => Locator
   () => page.getByRole("button", { name: /^thử lại$/i }),
 ];
 
-/** Dấu hiệu CHƯA đăng nhập (trang chatgpt.com hiện màn hình đăng nhập). */
+/** Dấu hiệu CHƯA đăng nhập (trang ChatAI hiện màn hình đăng nhập). */
 export const signInIndicatorCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/^log in$/i),
   () => page.getByRole("button", { name: /^log in$/i }),
@@ -145,7 +145,7 @@ export const modelSelectorButtonCandidates = (page: Page): Array<() => Locator> 
  * Tin nhắn trả lời TEXT thường (KHÔNG dùng cho phản hồi tạo ảnh — xem
  * assistantMessageLocator không có attribute này) — DOM thật xác nhận (job
  * b38b1151): `<div data-message-author-role="assistant" ...
- * data-message-model-slug="gpt-5-6-thinking">` — attribute
+ * data-message-model-slug="chatai-5-6-thinking">` — attribute
  * data-message-model-slug ghi đúng tên model THẬT đã xử lý câu trả lời đó,
  * đáng tin cậy hơn hẳn nhãn hiển thị trên nút chọn model (nhãn đó chỉ là mức
  * độ suy luận, không phải tên model).

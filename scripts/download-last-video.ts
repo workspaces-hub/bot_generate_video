@@ -1,6 +1,6 @@
 import { config } from "../src/config";
 import { getBrowserContext } from "../src/automation/browser";
-import { captureSnapshot, downloadVideo } from "../src/automation/hailuo";
+import { captureSnapshot, downloadVideo } from "../src/automation/aiVideo";
 import { historyVideoLocator } from "../src/automation/selectors";
 
 /**
@@ -13,7 +13,7 @@ async function main(): Promise<void> {
   const context = await getBrowserContext();
   const page = await context.newPage();
 
-  const url = new URL(config.hailuoCreateVideoPath, config.hailuoBaseUrl).toString();
+  const url = new URL(config.aiVideoCreateVideoPath, config.aiVideoBaseUrl).toString();
   await page.goto(url, { waitUntil: "domcontentloaded" });
 
   // "domcontentloaded" fire rất sớm với SPA (React/Next.js) — DOM rỗng đã

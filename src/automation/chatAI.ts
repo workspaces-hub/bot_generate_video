@@ -4,8 +4,8 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import {
   dismissCloudflareChallengeIfPresent,
-  getChatGptBrowserContext,
-} from "./chatgptBrowser";
+  getChatAIBrowserContext,
+} from "./chatAIBrowser";
 import {
   assistantMessageLocator,
   downloadButtonCandidates,
@@ -18,19 +18,19 @@ import {
   sendButtonCandidates,
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
-} from "./chatgptSelectors";
+} from "./chatAISelectors";
 import { firstVisible } from "./selectors";
 // captureSnapshot/captureErrorSnapshot đã tổng quát (chỉ cần Page + jobId),
-// dùng lại nguyên bản thay vì viết trùng cho chatgpt.com.
-import { captureErrorSnapshot, captureSnapshot } from "./hailuo";
+// dùng lại nguyên bản thay vì viết trùng cho ChatAI.
+import { captureErrorSnapshot, captureSnapshot } from "./aiVideo";
 
-export class ChatGptError extends Error {}
+export class ChatAIError extends Error {}
 
 /**
  * Xoá sạch nội dung ô nhập rồi gõ lại "text" qua page.keyboard.insertText()
  * — KHÔNG dùng textarea.fill(). Xác nhận qua debug thật (job 463abed5):
  * fill() set thẳng textContent của <div contenteditable> (ProseMirror) rồi
- * chỉ bắn 1 sự kiện "input" — ProseMirror (editor thật ChatGPT dùng) không
+ * chỉ bắn 1 sự kiện "input" — ProseMirror (editor thật ChatAI dùng) không
  * đồng bộ lại state nội bộ từ cách này, nên dù DOM hiển thị ĐÚNG text, ứng
  * dụng vẫn coi ô nhập là RỖNG → nút Send không bao giờ hiện ra (timeout "waiting
  * for send-button to be visible" ngay sau khi fill()). insertText() giả lập
@@ -59,18 +59,18 @@ async function insertPromptText(
   await page.keyboard.insertText(text);
 }
 
-/** Chặn lặp vô hạn nếu vì lý do gì đó GPT không bao giờ đính kèm file. */
+/** Chặn lặp vô hạn nếu vì lý do gì đó ChatAI không bao giờ đính kèm file. */
 const MAX_TURNS_WAITING_FOR_FILE = 30;
 
 /**
  * Đính kèm 1 file lên composer TRƯỚC khi gõ prompt — dùng khi user gửi prompt
- * qua file (.txt/.md) thay vì gõ/dán trực tiếp: UPLOAD file đó lên GPT rồi chỉ
- * gõ 1 câu ngắn yêu cầu GPT đọc file, thay vì dán nguyên nội dung file làm
- * prompt text (tránh dán prompt siêu dài, và để GPT tự đọc file y hệt cách
+ * qua file (.txt/.md) thay vì gõ/dán trực tiếp: UPLOAD file đó lên ChatAI rồi chỉ
+ * gõ 1 câu ngắn yêu cầu ChatAI đọc file, thay vì dán nguyên nội dung file làm
+ * prompt text (tránh dán prompt siêu dài, và để ChatAI tự đọc file y hệt cách
  * user thật đính kèm). Cùng cơ chế setInputFiles() đã dùng cho ảnh tham chiếu
- * (uploadReferenceImages trong chatgptImage.ts) — CHƯA có DOM thật xác nhận
+ * (uploadReferenceImages trong chatAIImage.ts) — CHƯA có DOM thật xác nhận
  * thời gian xử lý upload với file KHÔNG PHẢI ảnh (vd .txt/.md), chờ tạm 3s
- * trước khi gõ prompt tiếp; cần chỉnh lại nếu qua debug snapshot thấy GPT
+ * trước khi gõ prompt tiếp; cần chỉnh lại nếu qua debug snapshot thấy ChatAI
  * generate khi file chưa upload xong (vd còn thumbnail "đang tải" trong
  * composer).
  */
@@ -85,7 +85,7 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
  * .fill()/gõ từng phím, đáng tin cậy hơn với nội dung dài (đúng cách user
  * thật sẽ làm: copy nội dung rồi dán vào ô chat).
  *
- * Xác nhận qua debug thật (job ae8f1dbf): 1 số phiên/tài khoản chatgpt.com có
+ * Xác nhận qua debug thật (job ae8f1dbf): 1 số phiên/tài khoản ChatAI có
  * Permissions-Policy CHẶN HẲN Clipboard API ở tầng trang ("NotAllowedError:
  * ... blocked because of a permissions policy applied to the current
  * document") — khác với việc thiếu quyền (permission prompt), nên
@@ -99,13 +99,13 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     await page
       .context()
       .grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: config.chatGptBaseUrl,
+        origin: config.chatAIBaseUrl,
       });
     await page.evaluate((t) => navigator.clipboard.writeText(t), text);
   } catch (err) {
     clipboardOk = false;
     console.warn(
-      "[chatgpt] Clipboard API bị chặn (Permissions-Policy), chuyển sang textarea.fill():",
+      "[chatAI] Clipboard API bị chặn (Permissions-Policy), chuyển sang textarea.fill():",
       err instanceof Error ? err.message : err,
     );
   }
@@ -137,7 +137,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     const pasted = await textarea.innerText().catch(() => "");
     if (normalizeForCompare(pasted) !== normalizeForCompare(text)) {
       // console.warn(
-      //   "[chatgpt] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
+      //   "[chatAI] Nội dung dán vào ô nhập không khớp prompt (nghi clipboard OS/X11 dán nhầm nội dung cũ) — gõ lại bằng insertText().",
       // );
       await insertPromptText(page, textarea, text);
     }
@@ -148,20 +148,20 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
   await sendButton.click();
 
-  // Chờ nút "Stop generating" xuất hiện (GPT bắt đầu trả lời) — best-effort,
+  // Chờ nút "Stop generating" xuất hiện (ChatAI bắt đầu trả lời) — best-effort,
   // không throw nếu không thấy (có thể trả lời quá nhanh, đã xong trước khi
   // kịp bắt được trạng thái này).
   //
   // Xác nhận qua debug thật (job 1beafb45): nút Stop có thể xuất hiện MUỘN
-  // hơn 10s chờ ban đầu (trang vẫn đang ở "chatgpt.com/" — CHƯA kịp điều
+  // hơn 10s chờ ban đầu (trang vẫn đang ở "ChatAI/" — CHƯA kịp điều
   // hướng sang URL hội thoại "/c/...", conversation-turn = 0, giữa màn hình
   // còn spinner "đang tải") — nếu vòng lặp bên dưới coi "chưa thấy nút Stop"
-  // dù chỉ 1 lần là ĐÃ XONG, sẽ trả về NGAY LẬP TỨC trước khi GPT kịp bắt đầu
+  // dù chỉ 1 lần là ĐÃ XONG, sẽ trả về NGAY LẬP TỨC trước khi ChatAI kịp bắt đầu
   // trả lời, khiến readLatestAssistantMessage tìm thấy 0 tin nhắn (throw
   // "Không tìm thấy câu trả lời nào"). hasSeenGenerating chỉ cho phép coi là
   // "đã xong" SAU KHI từng thấy nút Stop xuất hiện thật ít nhất 1 lần (bằng
-  // chứng GPT đã bắt đầu trả lời) — trừ khi trang đã thật sự có tin nhắn trả
-  // lời (hiếm khi GPT trả lời quá nhanh, không kịp thấy nút Stop).
+  // chứng ChatAI đã bắt đầu trả lời) — trừ khi trang đã thật sự có tin nhắn trả
+  // lời (hiếm khi ChatAI trả lời quá nhanh, không kịp thấy nút Stop).
   let hasSeenGenerating = await firstVisible(
     stopGeneratingButtonCandidates(page),
     10_000,
@@ -169,27 +169,27 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     .then(() => true)
     .catch(() => false);
 
-  // Rồi chờ tới khi nút đó biến mất — GPT đã trả lời xong.
+  // Rồi chờ tới khi nút đó biến mất — ChatAI đã trả lời xong.
   //
   // Xác nhận qua debug thật (job ebca2517): nút Stop có thể biến mất RỒI
-  // XUẤT HIỆN LẠI trong lúc GPT vẫn đang suy luận/trả lời (nhấp nháy giữa các
+  // XUẤT HIỆN LẠI trong lúc ChatAI vẫn đang suy luận/trả lời (nhấp nháy giữa các
   // đoạn) — nếu chỉ check 1 lần "không thấy nút Stop" là coi như xong ngay,
-  // code sẽ gửi lượt tiếp theo ("yes") trong khi GPT thực tế còn đang generate,
+  // code sẽ gửi lượt tiếp theo ("yes") trong khi ChatAI thực tế còn đang generate,
   // khiến ô nhập bị khoá và không tìm thấy nút Send (lỗi
   // "waiting for ... send-button to be visible"). Nên phải yêu cầu nút Stop
   // vắng mặt LIÊN TỤC trong 1 khoảng ổn định (giống pattern settle dùng cho
-  // upload ảnh ở hailuo.ts) mới coi là GPT đã trả lời xong thật.
+  // upload ảnh ở aiVideo.ts) mới coi là ChatAI đã trả lời xong thật.
   //
   // Xác nhận qua debug thật (job 5010d1a3): với phản hồi có dùng tool tạo
   // file (Code Interpreter — vd tạo meta.json), nút Stop KHÔNG BAO GIỜ biến
   // mất dù trả lời đã xong thật (text đầy đủ + file đính kèm đã hiện, "Worked
   // for 20s") — chờ dựa hoàn toàn vào nút Stop khiến vòng lặp treo tới hết
-  // timeout dù GPT xong từ lâu. Vì vậy: nếu tin nhắn trả lời MỚI NHẤT đã có
+  // timeout dù ChatAI xong từ lâu. Vì vậy: nếu tin nhắn trả lời MỚI NHẤT đã có
   // file đính kèm hiện ra (fileAttachmentLocator), coi đó là dấu hiệu xong
   // THAY THẾ cho việc chờ nút Stop biến mất.
   const stableRequiredMs = 5000;
   const pollIntervalMs = 5000;
-  // Xác nhận qua debug thật (job d077805e, chatgptImage.ts): GPT đôi khi báo
+  // Xác nhận qua debug thật (job d077805e, chatAIImage.ts): ChatAI đôi khi báo
   // lỗi THẬT ("Something went wrong. Please try again." kèm nút Retry,
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
   // Tự bấm Retry (giới hạn số lần) trước khi chịu thua, vì nguyên nhân hay
@@ -198,10 +198,10 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   let retriesUsed = 0;
 
   // Xác nhận qua thực tế (job ec8f3f90, "Connection interrupted. Waiting for
-  // the complete answer"): mạng chập chờn có thể khiến GPT mất RẤT LÂU mới
+  // the complete answer"): mạng chập chờn có thể khiến ChatAI mất RẤT LÂU mới
   // trả lời xong thật — không còn giới hạn generationTimeoutMs ở đây nữa,
-  // chờ tới khi nào GPT THỰC SỰ trả lời xong mới thôi (theo yêu cầu người
-  // dùng). Vẫn có 2 lối thoát khác nếu GPT lỗi THẬT: retryButton hết lượt
+  // chờ tới khi nào ChatAI THỰC SỰ trả lời xong mới thôi (theo yêu cầu người
+  // dùng). Vẫn có 2 lối thoát khác nếu ChatAI lỗi THẬT: retryButton hết lượt
   // Retry (maxRetriesOnError) ở dưới, hoặc lỗi ném ra từ chính Playwright
   // (vd page bị đóng/crash).
   let stableSince: number | null = null;
@@ -212,8 +212,8 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     ).catch(() => null);
     if (retryButton) {
       if (retriesUsed >= maxRetriesOnError) {
-        throw new ChatGptError(
-          `GPT báo lỗi ("Something went wrong") — đã Retry ${retriesUsed} lần vẫn lỗi.`,
+        throw new ChatAIError(
+          `ChatAI báo lỗi ("Something went wrong") — đã Retry ${retriesUsed} lần vẫn lỗi.`,
         );
       }
       await retryButton.click().catch(() => {});
@@ -236,7 +236,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       // model đang suy luận), nhưng đoạn code TRƯỚC ĐÂY thiếu hẳn phần dùng
       // stableRequiredMs (biến khai báo nhưng KHÔNG hề dùng để chặn return)
       // — chỉ cần 1 lần poll thấy Stop vắng mặt là return NGAY, khiến bot
-      // báo "đã trả lời xong (không có file)" dù GPT còn đang generate thật
+      // báo "đã trả lời xong (không có file)" dù ChatAI còn đang generate thật
       // (Stop chớp tắt giữa các bước suy luận, xem job ebca2517 ở trên).
       // Reset lại mốc ổn định mỗi khi THẤY Stop lại — bắt buộc phải vắng mặt
       // LIÊN TỤC đủ stableRequiredMs mới coi là xong thật.
@@ -261,7 +261,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
         if (Date.now() - stableSince >= stableRequiredMs) return;
       } else {
         // Chưa từng thấy nút Stop — chỉ coi là xong nếu trang đã thật sự có
-        // tin nhắn trả lời (trường hợp hiếm: GPT trả lời quá nhanh). Không có
+        // tin nhắn trả lời (trường hợp hiếm: ChatAI trả lời quá nhanh). Không có
         // gì cả thì vẫn phải chờ tiếp, không được kết luận "xong" (xem job
         // 1beafb45 ở trên).
         const hasAssistantTurn =
@@ -275,8 +275,8 @@ async function sendMessage(page: Page, text: string): Promise<void> {
 }
 
 /**
- * Nếu tin nhắn trả lời có đính kèm file (GPT tạo ra, vd qua code
- * interpreter/canvas) thì tải về config.chatGptResultsDir. Best-effort: bấm
+ * Nếu tin nhắn trả lời có đính kèm file (ChatAI tạo ra, vd qua code
+ * interpreter/canvas) thì tải về config.chatAIResultsDir. Best-effort: bấm
  * vào từng file đính kèm rồi chờ sự kiện download của trình duyệt; nếu bấm
  * vào chỉ mở preview (chưa tải ngay) thì thử bấm tiếp nút "Download" hiện ra
  * sau đó. KHÔNG throw nếu 1 file lỗi — chỉ log cảnh báo và bỏ qua file đó,
@@ -302,9 +302,9 @@ async function downloadAttachedFiles(
       : fileCardLocator(message);
   const count = await attachments.count();
   const savedPaths: string[] = [];
-  // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file GPT
+  // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file ChatAI
   // trả về giống tên file đó (giữ nguyên đuôi thật của file tải về, vd
-  // .json) thay vì tên GPT tự đặt — dễ đối chiếu với file prompt gốc. Nhiều
+  // .json) thay vì tên ChatAI tự đặt — dễ đối chiếu với file prompt gốc. Nhiều
   // file cùng lượt (hiếm) thì đánh số thêm "-2", "-3"... để không đè lên nhau.
   const promptFileBaseName = promptFileName
     ? path.basename(promptFileName, path.extname(promptFileName))
@@ -314,7 +314,7 @@ async function downloadAttachedFiles(
     try {
       // QUAN TRỌNG: gắn .catch() NGAY khi tạo promise (cùng statement), TRƯỚC
       // khi click() — nếu không, click() throw (vd element bị re-render/stale
-      // giữa các lượt "yes" của vòng lặp askChatGpt) sẽ nhảy thẳng ra catch
+      // giữa các lượt "yes" của vòng lặp askChatAI) sẽ nhảy thẳng ra catch
       // bên ngoài trong khi downloadPromise vẫn đang chờ, chưa kịp gắn
       // .catch() ở dòng sau — promise đó reject "mồ côi" sau khi hết timeout,
       // gây unhandled rejection làm crash tiến trình (đã xác nhận qua log
@@ -386,7 +386,7 @@ async function downloadAttachedFiles(
           await page
             .context()
             .grantPermissions(["clipboard-read", "clipboard-write"], {
-              origin: config.chatGptBaseUrl,
+              origin: config.chatAIBaseUrl,
             })
             .catch(() => {});
           await panelContent
@@ -410,7 +410,7 @@ async function downloadAttachedFiles(
         }
 
         if (previewText) {
-          await fs.promises.mkdir(config.chatGptResultsDir, {
+          await fs.promises.mkdir(config.chatAIResultsDir, {
             recursive: true,
           });
           const suggestedName =
@@ -421,7 +421,7 @@ async function downloadAttachedFiles(
           const fileName = promptFileBaseName
             ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggestedName) || ".json"}`
             : `${jobId}-${suggestedName}`;
-          const filePath = path.join(config.chatGptResultsDir, fileName);
+          const filePath = path.join(config.chatAIResultsDir, fileName);
           await fs.promises.writeFile(filePath, previewText, "utf-8");
           savedPaths.push(filePath);
           // Đóng panel xem trước lại cho gọn trước khi xử lý file tiếp theo
@@ -437,16 +437,16 @@ async function downloadAttachedFiles(
         continue;
       }
 
-      await fs.promises.mkdir(config.chatGptResultsDir, { recursive: true });
+      await fs.promises.mkdir(config.chatAIResultsDir, { recursive: true });
       const suggested = download.suggestedFilename() || `attachment-${i}`;
       const fileName = promptFileBaseName
         ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggested)}`
         : `${jobId}-${suggested}`;
-      const filePath = path.join(config.chatGptResultsDir, fileName);
+      const filePath = path.join(config.chatAIResultsDir, fileName);
       await download.saveAs(filePath);
       savedPaths.push(filePath);
     } catch (err) {
-      console.warn(`[chatgpt] Không tải được file đính kèm (index ${i}):`, err);
+      console.warn(`[chatAI] Không tải được file đính kèm (index ${i}):`, err);
     }
   }
 
@@ -454,15 +454,15 @@ async function downloadAttachedFiles(
 }
 
 /**
- * GPT báo đã hoàn thiện bản JSON storyboard — coi là dấu hiệu DUY NHẤT để
- * DỪNG gửi "yes" tiếp (KHÔNG dừng chỉ vì đã có file đính kèm — GPT có thể
+ * ChatAI báo đã hoàn thiện bản JSON storyboard — coi là dấu hiệu DUY NHẤT để
+ * DỪNG gửi "yes" tiếp (KHÔNG dừng chỉ vì đã có file đính kèm — ChatAI có thể
  * đính kèm file trung gian/nháp trước khi thật sự hoàn thiện). Nhận diện qua
  * 1 trong các cách diễn đạt:
  * - "Đã hoàn thiện bản JSON"
  * - "production-ready" kèm "đầy đủ"
  *
  * KHÔNG check chữ "full.json" xuất hiện trong TEXT nữa — xác nhận qua debug
- * thật (job 463abed5): GPT có thể nhắc "_full.json" khi mô tả QUY ƯỚC đặt
+ * thật (job 463abed5): ChatAI có thể nhắc "_full.json" khi mô tả QUY ƯỚC đặt
  * tên file SẼ dùng (vd "sẽ đặt tên file chứa _full.json") — TRƯỚC khi thật
  * sự tạo xong file, không phải xác nhận đã hoàn thiện. Check kiểu "chữ xuất
  * hiện ở bất kỳ đâu trong text" bị false positive ở đúng trường hợp này,
@@ -476,14 +476,14 @@ function isCompletionText(text: string): boolean {
   return /production-ready/i.test(text) && /đầy đủ/i.test(text);
 }
 
-/** Lấy file đính kèm (nếu có) và nội dung text của tin nhắn trả lời MỚI NHẤT từ GPT. */
+/** Lấy file đính kèm (nếu có) và nội dung text của tin nhắn trả lời MỚI NHẤT từ ChatAI. */
 async function readLatestAssistantMessage(
   page: Page,
   jobId: string,
   promptFileName?: string,
 ): Promise<{ downloadedFiles: string[]; isComplete: boolean }> {
   const messages = assistantMessageLocator(page);
-  // Xác nhận qua debug thật (job 98d9a048): dù sendMessage đã xác nhận GPT
+  // Xác nhận qua debug thật (job 98d9a048): dù sendMessage đã xác nhận ChatAI
   // trả lời xong thật (hasSeenGenerating true, nút Stop đã biến mất hẳn),
   // trang đôi khi vẫn kẹt ở màn hình loading (spinner giữa trang, canonical
   // URL chưa kịp đổi sang "/c/...") 1 lúc trước khi lịch sử hội thoại thật sự
@@ -497,8 +497,8 @@ async function readLatestAssistantMessage(
     count = await messages.count();
   }
   if (count === 0) {
-    throw new ChatGptError(
-      "Không tìm thấy câu trả lời nào từ ChatGPT trên trang",
+    throw new ChatAIError(
+      "Không tìm thấy câu trả lời nào từ ChatAI trên trang",
     );
   }
   const latest: Locator = messages.last();
@@ -521,29 +521,29 @@ async function readLatestAssistantMessage(
 }
 
 /**
- * Mở chatgpt.com, gửi prompt, chờ GPT trả lời xong, rồi thử tải file GPT
- * đính kèm (nếu có, xem downloadAttachedFiles) về config.chatGptResultsDir.
+ * Mở ChatAI, gửi prompt, chờ ChatAI trả lời xong, rồi thử tải file ChatAI
+ * đính kèm (nếu có, xem downloadAttachedFiles) về config.chatAIResultsDir.
  *
  * Nếu trả lời xong mà phản hồi CHƯA báo đã hoàn thiện (xem isCompletionText
  * — "Đã hoàn thiện bản JSON", "production-ready" kèm "đầy đủ", hoặc nhắc tới
  * "full.json"), chụp lại ảnh màn hình trạng thái hiện tại RỒI gửi tiếp "yes"
- * để GPT tiếp tục, lặp lại tới khi isComplete = true thì dừng (giới hạn
- * MAX_TURNS_WAITING_FOR_FILE lượt để chặn lặp vô hạn nếu GPT không bao giờ
+ * để ChatAI tiếp tục, lặp lại tới khi isComplete = true thì dừng (giới hạn
+ * MAX_TURNS_WAITING_FOR_FILE lượt để chặn lặp vô hạn nếu ChatAI không bao giờ
  * báo xong). CHỈ dừng theo isComplete — có file đính kèm KHÔNG tự động dừng
  * (có thể là file nháp/trung gian) — không có file sau khi hết lượt cũng
  * không coi là lỗi, chỉ trả về mảng rỗng.
  */
-export async function askChatGpt(
+export async function askChatAI(
   prompt: string,
   jobId: string,
   promptFileName?: string,
   /** Path local file đính kèm (tuỳ chọn) — nếu có, UPLOAD file này lên composer TRƯỚC khi gõ prompt (xem uploadAttachment), dùng khi user gửi prompt qua file thay vì gõ trực tiếp. */
   attachmentPath?: string,
 ): Promise<{ downloadedFiles: string[] }> {
-  const context = await getChatGptBrowserContext();
+  const context = await getChatAIBrowserContext();
   const page = await context.newPage();
   try {
-    await page.goto(config.chatGptBaseUrl, {
+    await page.goto(config.chatAIBaseUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -553,13 +553,13 @@ export async function askChatGpt(
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
-      throw new ChatGptError(
-        "Chưa đăng nhập chatgpt.com hoặc session đã hết hạn. Chạy: npm run login-chatgpt",
+      throw new ChatAIError(
+        "Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai",
       );
     }
 
     // domcontentloaded fire sớm với SPA — chờ mạng rảnh trước khi tìm ô nhập
-    // prompt, cùng lý do đã áp dụng cho hailuoai.video (xem generateVideo).
+    // prompt, cùng lý do đã áp dụng cho AIVideo (xem generateVideo).
     await page
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
@@ -592,13 +592,13 @@ export async function askChatGpt(
       // }
 
       // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
-      // có) chỉ là bản nháp/trung gian (xem docstring askChatGpt), KHÔNG phải
-      // kết quả cuối — xoá luôn khỏi đĩa để tránh rác lại config.chatGptResultsDir
+      // có) chỉ là bản nháp/trung gian (xem docstring askChatAI), KHÔNG phải
+      // kết quả cuối — xoá luôn khỏi đĩa để tránh rác lại config.chatAIResultsDir
       // và tránh nhầm với file thật khi đọc lại sau này.
       for (const filePath of downloadedFiles) {
         await fs.promises.unlink(filePath).catch((err) => {
           console.warn(
-            `[chatgpt] Không xoá được file nháp "${filePath}":`,
+            `[chatAI] Không xoá được file nháp "${filePath}":`,
             err,
           );
         });
@@ -606,7 +606,7 @@ export async function askChatGpt(
       downloadedFiles = [];
 
       // Chưa có file — chụp lại trạng thái hiện tại TRƯỚC KHI gửi "yes" để
-      // còn biết GPT đang dừng ở đâu (phần nào) nếu vòng lặp không bao giờ
+      // còn biết ChatAI đang dừng ở đâu (phần nào) nếu vòng lặp không bao giờ
       // ra được file. Đặt tên file debug riêng theo turn (captureSnapshot ghi
       // file theo đúng tham số jobId truyền vào) — nếu không, mỗi lượt sẽ ghi
       // đè lên đúng 1 file, mất hết ảnh các lượt trước.
@@ -622,9 +622,9 @@ export async function askChatGpt(
     return { downloadedFiles };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
-    throw err instanceof ChatGptError
+    throw err instanceof ChatAIError
       ? err
-      : new ChatGptError(err instanceof Error ? err.message : String(err));
+      : new ChatAIError(err instanceof Error ? err.message : String(err));
   } finally {
     await page.close();
   }

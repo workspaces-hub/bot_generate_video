@@ -2,9 +2,9 @@ import fs from "node:fs";
 import { config } from "../src/config";
 import {
   dismissCloudflareChallengeIfPresent,
-  getChatGptBrowserContext,
-} from "../src/automation/chatgptBrowser";
-import { signInIndicatorCandidates } from "../src/automation/chatgptSelectors";
+  getChatAIBrowserContext,
+} from "../src/automation/chatAIBrowser";
+import { signInIndicatorCandidates } from "../src/automation/chatAISelectors";
 import { firstVisible } from "../src/automation/selectors";
 
 interface StorageStateCookie {
@@ -15,20 +15,20 @@ interface StorageStateCookie {
 
 /**
  * Đọc hạn cookie "__Secure-next-auth.session-token" (cookie phiên đăng nhập
- * chính của chatgpt.com) trực tiếp từ file session — nhanh, không cần mở
+ * chính của ChatAI) trực tiếp từ file session — nhanh, không cần mở
  * trình duyệt. Chỉ là ước lượng: cookie còn hạn không có nghĩa server chưa vô
  * hiệu hoá phiên vì lý do khác (đổi mật khẩu, đăng nhập máy khác...) — xem
  * thêm checkLiveLogin().
  */
 function checkCookieExpiry(): void {
-  if (!fs.existsSync(config.chatGptStorageStatePath)) {
+  if (!fs.existsSync(config.chatAIStorageStatePath)) {
     console.log(
-      `Không tìm thấy session tại ${config.chatGptStorageStatePath} — chưa từng chạy npm run login-chatgpt.`,
+      `Không tìm thấy session tại ${config.chatAIStorageStatePath} — chưa từng chạy npm run login-chatai.`,
     );
     return;
   }
 
-  const data = JSON.parse(fs.readFileSync(config.chatGptStorageStatePath, "utf-8"));
+  const data = JSON.parse(fs.readFileSync(config.chatAIStorageStatePath, "utf-8"));
   const cookies: StorageStateCookie[] = data.cookies ?? [];
   const tokenCookie = cookies.find(
     (c) =>
@@ -66,19 +66,19 @@ function checkCookieExpiry(): void {
 }
 
 /**
- * Kiểm tra thực tế: mở chatgpt.com bằng đúng session đang cấu hình, xem có bị
+ * Kiểm tra thực tế: mở ChatAI bằng đúng session đang cấu hình, xem có bị
  * yêu cầu đăng nhập lại không — đáng tin cậy hơn chỉ đọc hạn cookie, vì server
  * có thể vô hiệu hoá phiên trước khi cookie hết hạn. Dùng cùng logic phát
- * hiện "chưa đăng nhập" (signInIndicatorCandidates) như askChatGpt thật, kèm
- * xử lý Cloudflare challenge (xem chatgptBrowser.ts) để không báo nhầm lỗi
+ * hiện "chưa đăng nhập" (signInIndicatorCandidates) như askChatAI thật, kèm
+ * xử lý Cloudflare challenge (xem chatAIBrowser.ts) để không báo nhầm lỗi
  * đăng nhập khi thực ra đang bị chặn ở challenge.
  */
 async function checkLiveLogin(): Promise<void> {
-  console.log("\nĐang kiểm tra thực tế bằng cách mở chatgpt.com...");
-  const context = await getChatGptBrowserContext();
+  console.log("\nĐang kiểm tra thực tế bằng cách mở ChatAI...");
+  const context = await getChatAIBrowserContext();
   const page = await context.newPage();
   try {
-    await page.goto(config.chatGptBaseUrl, {
+    await page.goto(config.chatAIBaseUrl, {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
@@ -90,9 +90,9 @@ async function checkLiveLogin(): Promise<void> {
 
     if (signedOut) {
       console.log("❌ Session đã hết hạn hoặc không hợp lệ — trang yêu cầu đăng nhập lại.");
-      console.log("Chạy lại: npm run login-chatgpt");
+      console.log("Chạy lại: npm run login-chatai");
     } else {
-      console.log("✅ Session còn hợp lệ — vẫn đăng nhập được vào chatgpt.com.");
+      console.log("✅ Session còn hợp lệ — vẫn đăng nhập được vào ChatAI.");
     }
   } catch (err) {
     console.log("❌ Không kiểm tra được:", err instanceof Error ? err.message : err);

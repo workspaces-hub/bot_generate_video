@@ -1,8 +1,8 @@
 import { config } from "../src/config";
 import {
   dismissCloudflareChallengeIfPresent,
-  getChatGptBrowserContext,
-} from "../src/automation/chatgptBrowser";
+  getChatAIBrowserContext,
+} from "../src/automation/chatAIBrowser";
 import {
   assistantTextMessageLocator,
   modelSelectorButtonCandidates,
@@ -10,12 +10,12 @@ import {
   sendButtonCandidates,
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
-} from "../src/automation/chatgptSelectors";
+} from "../src/automation/chatAISelectors";
 import { firstVisible } from "../src/automation/selectors";
-import { captureErrorSnapshot } from "../src/automation/hailuo";
+import { captureErrorSnapshot } from "../src/automation/aiVideo";
 
 /**
- * Kiểm tra chatgpt.com hiện đang chạy model gì — gửi 1 prompt cực ngắn
+ * Kiểm tra ChatAI hiện đang chạy model gì — gửi 1 prompt cực ngắn
  * ("ping") rồi đọc attribute "data-message-model-slug" trên tin nhắn trả
  * lời thật (DOM thật xác nhận, job b38b1151: giá trị vd "gpt-5-6-thinking")
  * — đáng tin cậy hơn hẳn chỉ đọc nhãn hiển thị trên nút chọn model ở toolbar
@@ -23,14 +23,14 @@ import { captureErrorSnapshot } from "../src/automation/hailuo";
  * đầy đủ, và không đảm bảo phản ánh đúng model THẬT SỰ xử lý câu trả lời nếu
  * đang để "Auto").
  *
- * Cách dùng: npm run check-chatgpt-model
+ * Cách dùng: npm run check-chatai-model
  */
 async function main(): Promise<void> {
-  const context = await getChatGptBrowserContext();
+  const context = await getChatAIBrowserContext();
   const page = await context.newPage();
-  const jobId = "check-chatgpt-model";
+  const jobId = "check-chatai-model";
   try {
-    await page.goto(config.chatGptBaseUrl, {
+    await page.goto(config.chatAIBaseUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
-      console.log("❌ Chưa đăng nhập chatgpt.com hoặc session đã hết hạn. Chạy: npm run login-chatgpt");
+      console.log("❌ Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai");
       process.exit(1);
     }
 
@@ -66,8 +66,8 @@ async function main(): Promise<void> {
     await sendButton.click();
 
     await firstVisible(stopGeneratingButtonCandidates(page), 10_000).catch(() => {});
-    // Chờ tới khi nút Stop biến mất — GPT trả lời xong ("ping" luôn là phản
-    // hồi cực ngắn nên không cần cơ chế debounce phức tạp như askChatGpt thật).
+    // Chờ tới khi nút Stop biến mất — ChatAI trả lời xong ("ping" luôn là phản
+    // hồi cực ngắn nên không cần cơ chế debounce phức tạp như askChatAI thật).
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       const stillGenerating = await firstVisible(stopGeneratingButtonCandidates(page), 500)
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
       console.log(`\n✅ Model thật đang xử lý: "${modelSlug}"`);
     } else {
       console.log(
-        "\n⚠️  Tin nhắn trả lời không có attribute data-message-model-slug — có thể chatgpt.com đã đổi cấu trúc DOM, cần cập nhật lại src/automation/chatgptSelectors.ts.",
+        "\n⚠️  Tin nhắn trả lời không có attribute data-message-model-slug — có thể ChatAI đã đổi cấu trúc DOM, cần cập nhật lại src/automation/chatAISelectors.ts.",
       );
     }
   } catch (err) {
