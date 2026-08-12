@@ -397,12 +397,9 @@ async function submitGptJob({
     return;
   }
 
-  const statusMessage = await ctx.reply(
-    '⏳ Đang xử lý',
-    {
-      reply_parameters: { message_id: promptMessageId },
-    },
-  );
+  const statusMessage = await ctx.reply("⏳ Đang xử lý", {
+    reply_parameters: { message_id: promptMessageId },
+  });
 
   enqueueJob({
     type: "gpt",
@@ -701,11 +698,8 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(STOP_ALL_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
-    const { cancelledGptJobs, cancelledVideoJobs } = stopAll();
-    await ctx.reply(
-      `🛑 Đã dừng — huỷ ${cancelledGptJobs} job "${GPT_BUTTON_LABEL}" và ${cancelledVideoJobs} job video (Tham chiếu nhân vật/xác nhận tạo video) đang chờ trong hàng đợi. ` +
-        `Job đang xử lý dở (nếu có) sẽ dừng sau khi xong entry hiện tại, không huỷ giữa chừng.`,
-    );
+    stopAll();
+    await ctx.reply(`🛑 Đã dừng all job`);
   });
 
   bot.on(message("text"), async (ctx, next) => {
@@ -962,7 +956,10 @@ export function registerHandlers(bot: Telegraf): void {
         );
       } catch (err) {
         console.error("[bot] Tải file prompt GPT thất bại:", err);
-        await ctx.reply("Không tải được file prompt từ Telegram, đã huỷ.", promptMenu);
+        await ctx.reply(
+          "Không tải được file prompt từ Telegram, đã huỷ.",
+          promptMenu,
+        );
         return;
       }
       await submitGptJob({
@@ -1026,6 +1023,8 @@ export function registerHandlers(bot: Telegraf): void {
       return;
     }
     await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo video.");
-    await ctx.editMessageText("✅ Đã xác nhận — đang chờ tạo video.").catch(() => {});
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo video.")
+      .catch(() => {});
   });
 }
