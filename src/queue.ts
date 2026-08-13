@@ -204,11 +204,9 @@ function persistFailedStoryboardJobs(): void {
  */
 export function continueFailedStoryboardVideo(jsonFileName: string): boolean {
   const folderExists = fs.existsSync(generatedDirFor(jsonFileName));
-  console.log("🚀 ~ continueFailedStoryboardVideo ~ folderExists:", folderExists)
   const failedIndex = failedStoryboardJobs.findIndex((j) =>
     j.jsonPath.includes(jsonFileName),
   );
-  console.log("🚀 ~ continueFailedStoryboardVideo ~ failedIndex:", failedIndex)
   if (!folderExists || failedIndex === -1) {
     return false;
   }
