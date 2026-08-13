@@ -2,7 +2,7 @@ import { generateReferenceImagesForFile } from "../src/automation/storyboardPipe
 
 /**
  * CLI mỏng cho generateReferenceImagesForFile (xem src/automation/storyboardPipeline.ts
- * — logic dùng chung với bước xử lý job "gpt" trong src/queue.ts).
+ * — logic dùng chung với bước xử lý job "chatAI" trong src/queue.ts).
  *
  * Cách dùng: npm run generate-reference-images -- <inputJsonPath>
  */

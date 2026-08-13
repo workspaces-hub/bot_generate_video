@@ -6,16 +6,23 @@ import { message } from "telegraf/filters";
 import {
   MAX_OMNI_REFERENCE_ITEMS,
   MAX_VIDEO_REF_IMAGES,
-} from "../automation/hailuo";
-import { MAX_REFERENCE_IMAGES } from "../automation/hailuoImage";
+} from "../automation/aiVideo";
+import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
-import { referenceImagesDirFor } from "../automation/storyboardPipeline";
+import { generatedDirFor } from "../automation/storyboardPipeline";
 import { config } from "../config";
-import { confirmVideoGeneration, enqueueJob, stopAll } from "../queue";
+import {
+  confirmImageGeneration,
+  confirmVideoGeneration,
+  continueFailedStoryboardVideo,
+  enqueueJob,
+  stopAll,
+} from "../queue";
 import {
   CHARACTER_REF_BUTTON_LABEL,
-  GPT_BUTTON_LABEL,
-  GPT_CHECK_BUTTON_LABEL,
+  CHATAI_BUTTON_LABEL,
+  CHATAI_CHECK_BUTTON_LABEL,
+  CONTINUE_VIDEO_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
@@ -30,8 +37,9 @@ type PendingMode =
   | "videoRef"
   | "characterRef"
   | "omniRef"
-  | "gpt"
-  | "gptCheck";
+  | "chatAI"
+  | "chatAICheck"
+  | "continueVideo";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -131,7 +139,7 @@ async function checkAdmin(
   }
 }
 
-/** Tải ảnh Telegram (độ phân giải cao nhất) về local để upload lên hailuoai.video. */
+/** Tải ảnh Telegram (độ phân giải cao nhất) về local để upload lên AIVideo. */
 async function downloadTelegramPhoto(
   ctx: Context,
   photos: Array<{ file_id: string }>,
@@ -173,44 +181,137 @@ async function downloadTelegramFile(
 
 /**
  * Prompt cố định gửi kèm khi user đưa yêu cầu qua file (.txt/.md) thay vì gõ
- * trực tiếp — file được UPLOAD thẳng lên chatgpt.com (xem askChatGpt,
- * downloadTelegramFile + submitGptJob), GPT tự đọc nội dung file, không cần
+ * trực tiếp — file được UPLOAD thẳng lên ChatAI (xem askChatAI,
+ * downloadTelegramFile + submitChatAIJob), ChatAI tự đọc nội dung file, không cần
  * dán nguyên văn bản file làm prompt text nữa (tránh dán prompt siêu dài).
  */
-const GPT_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file";
+const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file";
 
 /**
- * Caption dạng "<tên file json>__<tên file ảnh/video>.<đuôi>" — ĐÚNG format
+ * Tên file dạng "<tên file json>__<tên file ảnh/video>.<đuôi>" — ĐÚNG format
  * bot tự đặt tên khi gửi kết quả cho user (xem queue.ts, dấu "__" phân tách
  * tên file json và tên file ảnh/video). Tách theo dấu "__" ĐẦU TIÊN —
  * jsonBaseName lấy từ sanitizeId (storyboardPipeline.ts) chỉ có gạch dưới
  * ĐƠN, không có "__", nên phần còn lại sau "__" đầu tiên chắc chắn là tên
  * file gốc (kèm đuôi).
  */
-const REPLACEMENT_CAPTION_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
+const REPLACEMENT_FILENAME_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
 
 /**
- * User gửi lại ảnh/video kèm caption ĐÚNG format bot tự đặt tên khi gửi kết
- * quả — coi đây là yêu cầu THAY THẾ file đã generate trước đó bằng file mới
- * (sửa tay 1 ảnh/video bị lỗi mà không cần chạy lại cả job GPT). Backup file
- * cũ (nếu có) thành "<tên>_bk.<đuôi>" trước khi ghi đè — không mất dữ liệu
- * cũ. Trả về true nếu ĐÃ xử lý (caption khớp format) — handler gọi hàm này
- * phải dừng lại ngay, không xử lý tiếp theo luồng ảnh/video tham chiếu
- * thường.
+ * Tìm số version kế tiếp cho backup "<name>_vXX<ext>" trong dir — quét các
+ * file "<name>_v<số>.<đuôi>" ĐÃ có, lấy số lớn nhất rồi +1 (bắt đầu từ 1 nếu
+ * chưa có backup nào) — XX tương ứng SỐ LẦN file này đã bị thay thế, theo
+ * yêu cầu người dùng.
+ */
+async function nextBackupVersion(
+  dir: string,
+  name: string,
+  ext: string,
+): Promise<number> {
+  const files = await fs.readdir(dir).catch(() => [] as string[]);
+  const prefix = `${name}_v`;
+  let maxVersion = 0;
+  for (const f of files) {
+    if (!f.startsWith(prefix) || !f.endsWith(ext)) continue;
+    const middle = f.slice(prefix.length, f.length - ext.length);
+    if (/^\d+$/.test(middle)) {
+      maxVersion = Math.max(maxVersion, parseInt(middle, 10));
+    }
+  }
+  return maxVersion + 1;
+}
+
+/**
+ * User gửi lại ảnh/video có TÊN FILE ĐÚNG format bot tự đặt tên khi gửi kết
+ * quả (KHÔNG dựa vào caption — Telegram nén ảnh gửi kiểu "photo" mất hết tên
+ * file gốc, và caption user gõ tay dễ gõ sai/thiếu; tên file client giữ
+ * nguyên khi user tải về rồi gửi lại đáng tin cậy hơn) — coi đây là yêu cầu
+ * THAY THẾ file đã generate trước đó bằng file mới (sửa tay 1 ảnh/video bị
+ * lỗi mà không cần chạy lại cả job ChatAI). Backup file cũ (nếu có) thành
+ * "<tên>_vXX.<đuôi>" (XX tăng dần theo số lần thay thế, xem
+ * nextBackupVersion) trước khi ghi đè — không mất dữ liệu cũ, file MỚI
+ * upload giữ nguyên tên gốc. Trả về true nếu ĐÃ xử lý (tên file khớp format)
+ * — handler gọi hàm này phải dừng lại ngay, không xử lý tiếp theo luồng
+ * ảnh/video tham chiếu thường.
  */
 async function tryReplaceGeneratedFile(
   ctx: Context,
   fileId: string,
-  caption: string | undefined,
+  fileName: string | undefined,
   promptMessageId: number,
 ): Promise<boolean> {
-  if (!caption) return false;
-  const match = caption.trim().match(REPLACEMENT_CAPTION_PATTERN);
+  if (!fileName) return false;
+  const match = fileName.trim().match(REPLACEMENT_FILENAME_PATTERN);
   if (!match) return false;
 
   const [, jsonBaseName, targetFileName] = match;
-  const dir = referenceImagesDirFor(jsonBaseName);
+  const dir = generatedDirFor(jsonBaseName);
   const targetPath = path.join(dir, targetFileName);
+
+  try {
+    await fs.mkdir(dir, { recursive: true });
+
+    const targetExists = await fs
+      .access(targetPath)
+      .then(() => true)
+      .catch(() => false);
+    if (targetExists) {
+      const { name, ext } = path.parse(targetFileName);
+      const version = await nextBackupVersion(dir, name, ext);
+      const backupFileName = `${name}_v${String(version).padStart(2, "0")}${ext}`;
+      await fs.copyFile(targetPath, path.join(dir, backupFileName));
+    }
+
+    const fileUrl = await ctx.telegram.getFileLink(fileId);
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.writeFile(targetPath, buffer);
+
+    await ctx.reply(
+      `✅ Đã thay thế "${targetFileName}" trong "${jsonBaseName}".`,
+      { reply_parameters: { message_id: promptMessageId } },
+    );
+  } catch (err) {
+    console.error("[bot] Thay thế file thất bại:", err);
+    await ctx.telegram.sendMessage(
+      config.adminsNotify,
+      `❌ Không thay thế được file "${targetFileName}" trong "${jsonBaseName}": ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
+  return true;
+}
+
+/**
+ * User upload TRỰC TIẾP 1 file .json (KHÔNG cần caption đặc biệt như
+ * tryReplaceGeneratedFile) — coi đây là kịch bản storyboard cho folder
+ * generated/<tên file json>/ (cùng quy ước tên với
+ * generatedDirFor). Nếu folder CHƯA có (lần đầu upload json này): tạo
+ * folder + copy file vào làm kịch bản chính. Nếu folder đã có SẴN 1 file json
+ * chính rồi: backup file cũ thành "<tên>_vXX.json" (XX tăng dần, xem
+ * nextBackupVersion) trước khi copy file MỚI vào thay thế (giữ nguyên tên
+ * gốc) — GIỐNG cơ chế tryReplaceGeneratedFile, dùng chung nextBackupVersion.
+ * Trả về true nếu ĐÃ xử lý (đuôi .json) — handler gọi hàm này phải dừng lại
+ * ngay, không rơi xuống luồng upload prompt file (.txt/.md) hay ảnh/video
+ * tham chiếu thường.
+ */
+async function tryHandleReferenceJsonUpload(
+  ctx: Context,
+  fileId: string,
+  fileName: string | undefined,
+  promptMessageId: number,
+): Promise<boolean> {
+  if (!fileName || path.extname(fileName).toLowerCase() !== ".json") {
+    return false;
+  }
+  // Gộp nhiều khoảng trắng liên tiếp thành 1, rồi thay bằng "_" — cùng quy
+  // ước với originalFileName ở luồng upload prompt file (.txt/.md) bên dưới.
+  const normalizedFileName = fileName.replace(/ +/g, "_");
+  const dir = generatedDirFor(normalizedFileName);
+  const targetPath = path.join(dir, normalizedFileName);
 
   try {
     await fs.mkdir(dir, { recursive: true });
@@ -221,8 +322,9 @@ async function tryReplaceGeneratedFile(
       .then(() => true)
       .catch(() => false);
     if (targetExists) {
-      const { name, ext } = path.parse(targetFileName);
-      const backupFileName = `${name}_bk${ext}`;
+      const { name, ext } = path.parse(normalizedFileName);
+      const version = await nextBackupVersion(dir, name, ext);
+      const backupFileName = `${name}_v${String(version).padStart(2, "0")}${ext}`;
       await fs.copyFile(targetPath, path.join(dir, backupFileName));
       backupNote = ` (đã sao lưu bản cũ thành "${backupFileName}")`;
     }
@@ -236,14 +338,13 @@ async function tryReplaceGeneratedFile(
     await fs.writeFile(targetPath, buffer);
 
     await ctx.reply(
-      `✅ Đã thay thế "${targetFileName}" trong "${jsonBaseName}"${backupNote}.`,
+      `✅ Đã lưu kịch bản "${normalizedFileName}".`,
       { reply_parameters: { message_id: promptMessageId } },
     );
   } catch (err) {
-    console.error("[bot] Thay thế file thất bại:", err);
-    await ctx.reply(
-      `❌ Không thay thế được file "${targetFileName}" trong "${jsonBaseName}": ${err instanceof Error ? err.message : err}`,
-      { reply_parameters: { message_id: promptMessageId } },
+    console.error("[bot] Lưu file json tham chiếu thất bại:", err);
+    await ctx.telegram.sendMessage(config.adminsNotify,
+      `❌ Không lưu được file json "${normalizedFileName}": ${err instanceof Error ? err.message : err}`,
     );
   }
 
@@ -367,29 +468,26 @@ async function submitImageJob({
   });
 }
 
-interface SubmitGptParams {
+interface SubmitChatAIParams {
   ctx: Context;
   groupChatId: number;
   promptMessageId: number;
   rawText: string;
-  /** true = chế độ "Check prompt kịch bản" — chỉ hỏi GPT + gửi lại file tải về, không gen ảnh/video. */
-  skipPipeline?: boolean;
-  /** Tên file .txt user upload làm prompt (nếu gửi qua file thay vì gõ text) — dùng đặt tên lại file JSON GPT trả về, xem queue.ts. */
+  /** Tên file .txt user upload làm prompt (nếu gửi qua file thay vì gõ text) — dùng đặt tên lại file JSON ChatAI trả về, xem queue.ts. */
   promptFileName?: string;
-  /** Path local file prompt (nếu gửi qua upload file) — UPLOAD file này lên chatgpt.com thay vì dán nội dung làm prompt text, xem GPT_FILE_ATTACHMENT_PROMPT. */
+  /** Path local file prompt (nếu gửi qua upload file) — UPLOAD file này lên ChatAI thay vì dán nội dung làm prompt text, xem CHATAI_FILE_ATTACHMENT_PROMPT. */
   promptAttachmentPath?: string;
 }
 
-/** Chế độ "GPT" chỉ nhận text thuần, không có ảnh/model/resolution nào — dùng thẳng rawText làm prompt, không qua parsePromptMessage. */
-async function submitGptJob({
+/** Chế độ "ChatAI" chỉ nhận text thuần, không có ảnh/model/resolution nào — dùng thẳng rawText làm prompt, không qua parsePromptMessage. */
+async function submitChatAIJob({
   ctx,
   groupChatId,
   promptMessageId,
   rawText,
-  skipPipeline,
   promptFileName,
   promptAttachmentPath,
-}: SubmitGptParams): Promise<void> {
+}: SubmitChatAIParams): Promise<void> {
   const prompt = rawText.trim();
 
   if (!prompt) {
@@ -402,12 +500,11 @@ async function submitGptJob({
   });
 
   enqueueJob({
-    type: "gpt",
+    type: "chatAI",
     chatId: groupChatId,
     prompt,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
-    skipPipeline,
     promptFileName,
     promptAttachmentPath,
   });
@@ -678,19 +775,19 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
-  bot.hears(GPT_BUTTON_LABEL, async (ctx) => {
+  bot.hears(CHATAI_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
-    waitingMode.set(ctx.from.id, "gpt");
+    waitingMode.set(ctx.from.id, "chatAI");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi file .txt kịch bản kèm prompt`,
     );
   });
 
-  bot.hears(GPT_CHECK_BUTTON_LABEL, async (ctx) => {
+  bot.hears(CHATAI_CHECK_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
-    waitingMode.set(ctx.from.id, "gptCheck");
+    waitingMode.set(ctx.from.id, "chatAICheck");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, Gửi file .txt kịch bản kèm prompt`,
     );
@@ -702,6 +799,15 @@ export function registerHandlers(bot: Telegraf): void {
     await ctx.reply(`🛑 Đã dừng all job`);
   });
 
+  bot.hears(CONTINUE_VIDEO_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "continueVideo");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn tiếp tục tạo video.`,
+    );
+  });
+
   bot.on(message("text"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
     if (
@@ -711,8 +817,9 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === VIDEO_REF_BUTTON_LABEL ||
       ctx.message.text === CHARACTER_REF_BUTTON_LABEL ||
       ctx.message.text === OMNI_REF_BUTTON_LABEL ||
-      ctx.message.text === GPT_BUTTON_LABEL ||
-      ctx.message.text === GPT_CHECK_BUTTON_LABEL
+      ctx.message.text === CHATAI_BUTTON_LABEL ||
+      ctx.message.text === CHATAI_CHECK_BUTTON_LABEL ||
+      ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL
     ) {
       return next();
     }
@@ -760,14 +867,30 @@ export function registerHandlers(bot: Telegraf): void {
         userId,
         rawText: ctx.message.text,
       });
-    } else if (mode === "gpt" || mode === "gptCheck") {
-      await submitGptJob({
+    } else if (mode === "chatAI" || mode === "chatAICheck") {
+      await submitChatAIJob({
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
         rawText: ctx.message.text,
-        skipPipeline: mode === "gptCheck",
       });
+    } else if (mode === "continueVideo") {
+      // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
+      // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
+      // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
+      const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
+      const ok = continueFailedStoryboardVideo(jsonFileName);
+      if (ok) {
+        await ctx.reply(
+          `✅ Đã đưa "${jsonFileName}" vào hàng đợi tạo video, đợi xử lý.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      } else {
+        await ctx.reply(
+          `❌ File "${jsonFileName}" chưa được xử lý (chưa có trong generated/ hoặc không có job nào lỗi khớp tên). Không thể tiếp tục.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      }
     } else {
       await submitImageJob({
         ctx,
@@ -790,19 +913,10 @@ export function registerHandlers(bot: Telegraf): void {
   bot.on(message("photo"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
-    // Caption đúng format "<tên file json>__<tên file ảnh/video>.<đuôi>" —
-    // yêu cầu THAY THẾ file đã generate, ưu tiên xử lý TRƯỚC mọi mode ảnh
-    // tham chiếu thường (không cần bấm nút nào trước, hoạt động độc lập).
-    if (
-      await tryReplaceGeneratedFile(
-        ctx,
-        ctx.message.photo[ctx.message.photo.length - 1].file_id,
-        ctx.message.caption,
-        ctx.message.message_id,
-      )
-    ) {
-      return;
-    }
+    // KHÔNG gọi tryReplaceGeneratedFile ở đây — Telegram nén ảnh gửi kiểu
+    // "photo" nên KHÔNG giữ tên file gốc (PhotoSize không có file_name).
+    // Muốn thay thế file đã generate, user phải gửi qua nút đính kèm (📎,
+    // dạng "document") để giữ nguyên tên file — xem bot.on(message("document")).
 
     const userId = ctx.from.id;
 
@@ -866,7 +980,7 @@ export function registerHandlers(bot: Telegraf): void {
       await tryReplaceGeneratedFile(
         ctx,
         ctx.message.video.file_id,
-        ctx.message.caption,
+        ctx.message.video.file_name,
         ctx.message.message_id,
       )
     ) {
@@ -928,7 +1042,21 @@ export function registerHandlers(bot: Telegraf): void {
       await tryReplaceGeneratedFile(
         ctx,
         ctx.message.document.file_id,
-        ctx.message.caption,
+        ctx.message.document.file_name,
+        ctx.message.message_id,
+      )
+    ) {
+      return;
+    }
+
+    // File .json upload — coi là kịch bản storyboard cho generated/,
+    // ưu tiên xử lý TRƯỚC luồng upload prompt file (.txt/.md) bên dưới, cùng
+    // cơ chế "hoạt động độc lập" với tryReplaceGeneratedFile ở trên.
+    if (
+      await tryHandleReferenceJsonUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.message.document.file_name,
         ctx.message.message_id,
       )
     ) {
@@ -937,15 +1065,21 @@ export function registerHandlers(bot: Telegraf): void {
 
     const userId = ctx.from.id;
 
-    // Chế độ "GPT"/"Check prompt kịch bản": user gửi yêu cầu qua file (.txt/.md)
+    // Chế độ "ChatAI"/"Check prompt kịch bản": user gửi yêu cầu qua file (.txt/.md)
     // thay vì gõ trực tiếp (dùng khi prompt quá dài) — tải file về đĩa rồi
-    // UPLOAD thẳng lên chatgpt.com (xem askChatGpt), prompt chỉ là 1 câu ngắn
-    // yêu cầu GPT đọc file (GPT_FILE_ATTACHMENT_PROMPT), không dán nguyên nội
+    // UPLOAD thẳng lên ChatAI (xem askChatAI), prompt chỉ là 1 câu ngắn
+    // yêu cầu ChatAI đọc file (CHATAI_FILE_ATTACHMENT_PROMPT), không dán nguyên nội
     // dung file làm prompt text nữa.
-    const gptMode = waitingMode.get(userId);
-    if (gptMode === "gpt" || gptMode === "gptCheck") {
+    const chatAIMode = waitingMode.get(userId);
+    if (chatAIMode === "chatAI" || chatAIMode === "chatAICheck") {
       waitingMode.delete(userId);
-      const originalFileName = ctx.message.document.file_name ?? "prompt.txt";
+      // Gộp nhiều khoảng trắng liên tiếp thành 1, rồi thay bằng "_" — tên file
+      // Telegram user gửi lên có thể chứa khoảng trắng (kể cả 2+ liên tiếp),
+      // gây rối khi tên này sau đó dùng làm promptFileName/đặt tên file kết
+      // quả gửi lại (xem submitChatAIJob).
+      const originalFileName = (
+        ctx.message.document.file_name ?? "prompt.txt"
+      ).replace(/ +/g, "_");
       const ext = path.extname(originalFileName) || ".txt";
       let promptFilePath: string;
       try {
@@ -955,19 +1089,18 @@ export function registerHandlers(bot: Telegraf): void {
           ext,
         );
       } catch (err) {
-        console.error("[bot] Tải file prompt GPT thất bại:", err);
+        console.error("[bot] Tải file prompt ChatAI thất bại:", err);
         await ctx.reply(
           "Không tải được file prompt từ Telegram, đã huỷ.",
           promptMenu,
         );
         return;
       }
-      await submitGptJob({
+      await submitChatAIJob({
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
-        rawText: GPT_FILE_ATTACHMENT_PROMPT,
-        skipPipeline: gptMode === "gptCheck",
+        rawText: CHATAI_FILE_ATTACHMENT_PROMPT,
         promptFileName: originalFileName,
         promptAttachmentPath: promptFilePath,
       });
@@ -1008,10 +1141,30 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
-  // Nút "Tạo video" trong tin nhắn xác nhận sau "Check prompt kịch bản" (xem
-  // notifyGptCheckSuccess/createVideoConfirmation trong queue.ts) —
-  // callback_data dạng "confirmVideo:<id>", tra lại jsonPath tương ứng rồi
-  // đẩy job tạo video vào hàng đợi hailuoai.video.
+  // Nút "Tạo ảnh" trong tin nhắn xác nhận sau khi ChatAI trả JSON storyboard
+  // (xem runStoryboardPipeline/createImageConfirmation trong queue.ts) —
+  // callback_data dạng "confirmImages:<id>", tra lại jsonPath tương ứng rồi
+  // đẩy job tạo ảnh CHARACTER/LOCATION vào hàng đợi AIVideo.
+  bot.action(/^confirmImages:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmImageGeneration(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo ảnh.");
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo ảnh.")
+      .catch(() => {});
+  });
+
+  // Nút "Tạo video" trong tin nhắn xác nhận sau khi ảnh CHARACTER/LOCATION đã
+  // tạo xong (xem notifyStoryboardImagesAIVideoResult/createVideoConfirmation
+  // trong queue.ts) — callback_data dạng "confirmVideo:<id>", tra lại
+  // jsonPath tương ứng rồi đẩy job tạo video vào hàng đợi AIVideo.
   bot.action(/^confirmVideo:(.+)$/, async (ctx) => {
     if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     const confirmId = ctx.match[1];

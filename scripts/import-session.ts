@@ -85,7 +85,7 @@ function main(): void {
     cookies: rawCookies.map(convertCookie),
     origins: [
       {
-        origin: config.hailuoBaseUrl,
+        origin: config.aiVideoBaseUrl,
         localStorage: localStorageEntries,
       },
     ],

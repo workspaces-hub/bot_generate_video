@@ -9,6 +9,7 @@ storage/downloads/
 storage/uploads/
 storage/debug/
 storage/chatgpt-results/
-storage/reference-images/
+storage/generated/
 storage/queue.json
 storage/gpt-queue.json
+storage/*

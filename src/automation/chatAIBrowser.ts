@@ -3,19 +3,19 @@ import { config } from "../config";
 import { createBrowserContextManager } from "./browser";
 
 /**
- * BrowserContext RIÊNG cho chatgpt.com — khác domain, khác session hoàn
- * toàn với hailuoai.video, nên KHÔNG dùng chung getBrowserContext() (sẽ lẫn
- * cookie 2 site vào nhau). Đăng nhập qua scripts/login-chatgpt.ts.
+ * BrowserContext RIÊNG cho ChatAI — khác domain, khác session hoàn
+ * toàn với AIVideo, nên KHÔNG dùng chung getBrowserContext() (sẽ lẫn
+ * cookie 2 site vào nhau). Đăng nhập qua scripts/login-chatAI.ts.
  *
- * Xác nhận qua debug thật (job afd3c6d8): từng thử tắt proxy cho GPT — IP
- * thẳng của VPS lập tức bị chatgpt.com chặn bằng Cloudflare "Verify you are
+ * Xác nhận qua debug thật (job afd3c6d8): từng thử tắt proxy cho ChatAI — IP
+ * thẳng của VPS lập tức bị ChatAI chặn bằng Cloudflare "Verify you are
  * human" challenge, không vào được trang thật. Phải DÙNG LẠI proxy (đánh đổi
  * lấy việc qua được Cloudflare).
  */
-export const getChatGptBrowserContext = createBrowserContextManager(
-  config.chatGptStorageStatePath,
-  "chatgpt-browser",
-  'Chạy "npm run login-chatgpt" trước khi dùng tính năng GPT.',
+export const getChatAIBrowserContext = createBrowserContextManager(
+  config.chatAIStorageStatePath,
+  "chatAI-browser",
+  'Chạy "npm run login-chatai" trước khi dùng tính năng ChatAI.',
 );
 
 /**
@@ -43,7 +43,7 @@ async function isCloudflareChallengePage(page: Page): Promise<boolean> {
 
 /**
  * Cloudflare "Verify you are human" (managed challenge, Turnstile) đôi khi
- * chặn chatgpt.com trước khi vào được trang thật.
+ * chặn ChatAI trước khi vào được trang thật.
  *
  * Checkbox Turnstile nằm trong 1 iframe RIÊNG do Cloudflare chèn vào (không
  * phải DOM chính của trang, không đọc được qua page.content()) — dò qua TẤT
@@ -51,7 +51,7 @@ async function isCloudflareChallengePage(page: Page): Promise<boolean> {
  * iframe cross-origin, khác với JS thường trong trang bị same-origin policy
  * chặn), bấm checkbox ĐẦU TIÊN tìm thấy (best-effort, im lặng bỏ qua nếu
  * không có/không bấm được — trang có thể không phải lúc nào cũng bị chặn).
- * Session dùng chung 1 browser context cho mọi job (xem getChatGptBrowserContext)
+ * Session dùng chung 1 browser context cho mọi job (xem getChatAIBrowserContext)
  * nên cookie cf_clearance sau khi pass 1 lần thường được giữ lại cho các job
  * sau trong CÙNG lần chạy bot.
  */
@@ -60,7 +60,7 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
   if (!(await isCloudflareChallengePage(page))) return;
 
   console.warn(
-    '[chatgpt-browser] Gặp Cloudflare challenge (title "Just a moment...") — thử tự bấm checkbox xác nhận...',
+    '[chatAI-browser] Gặp Cloudflare challenge (title "Just a moment...") — thử tự bấm checkbox xác nhận...',
   );
 
   // Iframe Turnstile do Cloudflare chèn vào bằng JS SAU khi trang load, cần
@@ -73,7 +73,7 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
   // được lần chạy thật có tìm/bấm được checkbox hay không khi xem log job.
   const frames = page.frames();
   console.warn(
-    `[chatgpt-browser] Đang dò ${frames.length} frame để tìm checkbox: ${frames.map((f) => f.url()).join(", ")}`,
+    `[chatAI-browser] Đang dò ${frames.length} frame để tìm checkbox: ${frames.map((f) => f.url()).join(", ")}`,
   );
 
   let clickedFrameUrl: string | null = null;
@@ -85,7 +85,7 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
     if (checkboxCount === 0) continue;
 
     console.warn(
-      `[chatgpt-browser] Frame ${frame.url()} có ${checkboxCount} checkbox — thử bấm...`,
+      `[chatAI-browser] Frame ${frame.url()} có ${checkboxCount} checkbox — thử bấm...`,
     );
     const clicked = await frame
       .locator('input[type="checkbox"], [role="checkbox"]')
@@ -93,7 +93,7 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
       .click({ timeout: 3000 })
       .then(() => true)
       .catch((err) => {
-        console.warn(`[chatgpt-browser] Bấm checkbox ở frame ${frame.url()} lỗi:`, err instanceof Error ? err.message : err);
+        console.warn(`[chatAI-browser] Bấm checkbox ở frame ${frame.url()} lỗi:`, err instanceof Error ? err.message : err);
         return false;
       });
     if (clicked) {
@@ -103,8 +103,8 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
   }
   console.warn(
     clickedFrameUrl
-      ? `[chatgpt-browser] Đã bấm checkbox ở frame ${clickedFrameUrl}, chờ Cloudflare xác nhận...`
-      : "[chatgpt-browser] KHÔNG tìm/bấm được checkbox nào trong bất kỳ frame nào.",
+      ? `[chatAI-browser] Đã bấm checkbox ở frame ${clickedFrameUrl}, chờ Cloudflare xác nhận...`
+      : "[chatAI-browser] KHÔNG tìm/bấm được checkbox nào trong bất kỳ frame nào.",
   );
 
   // Chờ Cloudflare xử lý xong — trang tự chuyển qua giao diện thật nếu pass
@@ -122,7 +122,7 @@ export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<v
   }
   console.warn(
     stillChallenge
-      ? "[chatgpt-browser] Vẫn còn kẹt ở trang Cloudflare challenge sau khi chờ."
-      : "[chatgpt-browser] Đã qua được Cloudflare challenge.",
+      ? "[chatAI-browser] Vẫn còn kẹt ở trang Cloudflare challenge sau khi chờ."
+      : "[chatAI-browser] Đã qua được Cloudflare challenge.",
   );
 }

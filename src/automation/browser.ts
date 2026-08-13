@@ -8,7 +8,7 @@ import { launchRealChrome } from "./launch";
  * riêng, cache 1 BrowserContext dùng chung cho mọi job của CÙNG site (tránh
  * đăng nhập lại liên tục, giảm tải khởi động Chrome), tự phục hồi khi Chrome
  * crash. Dùng để tạo NHIỀU trình quản lý độc lập cho các site khác nhau (vd
- * hailuoai.video và chatgpt.com) — mỗi site 1 session/storageState riêng,
+ * AIVideo và ChatAI) — mỗi site 1 session/storageState riêng,
  * không lẫn cookie vào nhau. Mỗi job tự mở/đóng page riêng trên context này.
  */
 export function createBrowserContextManager(
@@ -52,9 +52,9 @@ export function createBrowserContextManager(
 }
 
 /**
- * Một BrowserContext dùng chung cho mọi job video/ảnh (hailuoai.video), được
+ * Một BrowserContext dùng chung cho mọi job video/ảnh (AIVideo), được
  * tái sử dụng để tránh đăng nhập lại liên tục và giảm tải khi khởi động
- * Chrome. Mỗi job tự mở/đóng page riêng (xem hailuo.ts).
+ * Chrome. Mỗi job tự mở/đóng page riêng (xem aiVideo.ts).
  */
 export const getBrowserContext = createBrowserContextManager(
   config.storageStatePath,
