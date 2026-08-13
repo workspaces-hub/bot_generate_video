@@ -138,8 +138,10 @@ let telegram: Telegram | null = null;
  * restart/crash, GIỐNG jobs/chatAIJobs — dùng để tra cứu nhanh job nào vừa
  * lỗi, xem getFailedStoryboardJobs().
  */
-const failedStoryboardJobs: (StoryboardVideoJob | StoryboardImagesAIVideoJob)[] =
-  [];
+const failedStoryboardJobs: (
+  | StoryboardVideoJob
+  | StoryboardImagesAIVideoJob
+)[] = [];
 
 export function getFailedStoryboardJobs(): (
   | StoryboardVideoJob
@@ -629,7 +631,7 @@ async function processQueue(): Promise<void> {
             try {
               const message = buildResultCaption(jsonBaseName, id) + " 404";
               await notifyAdmins(message);
-              await telegram!.sendMessage(config.adminsNotify, message, {
+              await telegram!.sendMessage(job.chatId, message, {
                 reply_parameters: { message_id: job.promptMessageId },
               });
             } catch (err) {}
@@ -670,6 +672,15 @@ async function processQueue(): Promise<void> {
                   job.promptMessageId,
                   `${caption}${path.extname(videoPath)}`,
                 );
+              },
+              async (id: string): Promise<void> => {
+                try {
+                  const message = buildResultCaption(jsonBaseName, id) + " 404";
+                  await notifyAdmins(message);
+                  await telegram!.sendMessage(job.chatId, message, {
+                    reply_parameters: { message_id: job.promptMessageId },
+                  });
+                } catch (err) {}
               },
             );
           }
@@ -966,20 +977,18 @@ async function notifyStoryboardVideoResult(
 ): Promise<void> {
   if (!telegram) return;
   try {
-    if (result.failedEntries.length > 0) {
-      recordFailedStoryboardJob(job);
-      await telegram.sendMessage(
-        job.chatId,
-        `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
-        { reply_parameters: { message_id: job.promptMessageId } },
-      );
-    }
-    if (result.succeeded === 0) {
-      await telegram.sendMessage(
-        job.chatId,
-        `✅ Đã xử lý xong nhưng không tạo được video nào.`,
-        { reply_parameters: { message_id: job.promptMessageId } },
-      );
+    // if (result.failedEntries.length > 0) {
+    //   recordFailedStoryboardJob(job);
+    //   await telegram.sendMessage(
+    //     job.chatId,
+    //     `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
+    //     { reply_parameters: { message_id: job.promptMessageId } },
+    //   );
+    // }
+    if (result.succeeded > 0 && result.failed === 0) {
+      await telegram.sendMessage(job.chatId, `✅ Đã tạo video xong`, {
+        reply_parameters: { message_id: job.promptMessageId },
+      });
     }
   } catch (err) {
     console.error("[queue] Gửi kết quả tạo video (xác nhận) thất bại:", err);

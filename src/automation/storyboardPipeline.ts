@@ -455,6 +455,7 @@ function assignStartEndFrames(
 export async function generateVideosForFile(
   inputPath: string,
   onEntryDone?: (filePath: string) => Promise<void>,
+  onEntryError?: (filePath: string) => Promise<void>,
 ): Promise<GenerateVideosResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
@@ -543,18 +544,16 @@ export async function generateVideosForFile(
       entry.success = true;
       succeeded++;
       if (onEntryDone) {
-        await onEntryDone(destPath).catch((err) => {
-          console.error(
-            `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
-            err,
-          );
-        });
+        await onEntryDone(destPath).catch((err) => {});
       }
     } catch (err) {
       console.error(
         `[storyboardPipeline] [VIDEO] ${entry.id} — lỗi:`,
         err instanceof Error ? err.message : err,
       );
+      if (onEntryError) {
+        await onEntryError(entry.id).catch((err) => {});
+      }
       entry.success = false;
       failed++;
       failedEntries.push({ id: entry.id, type: "VIDEO" });
