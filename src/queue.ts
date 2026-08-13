@@ -183,6 +183,20 @@ function persistFailedStoryboardJobs(): void {
 }
 
 /**
+ * Thêm job vào failedStoryboardJobs (rồi ghi file ngay) — bỏ qua nếu job
+ * (CÙNG object reference) đã có sẵn trong mảng, tránh trùng lặp khi nhiều
+ * chỗ cùng phát hiện lỗi cho CÙNG 1 job (vd sceneResult.failed > 0 VÀ
+ * notifyStoryboardVideoResult cùng gọi hàm này cho job "storyboardVideo" đó).
+ */
+function recordFailedStoryboardJob(
+  job: StoryboardVideoJob | StoryboardImagesAIVideoJob,
+): void {
+  if (failedStoryboardJobs.includes(job)) return;
+  failedStoryboardJobs.push(job);
+  persistFailedStoryboardJobs();
+}
+
+/**
  * Nút "Tiếp tục tạo video" (xem CONTINUE_VIDEO_BUTTON_LABEL) — user nhập tên
  * file json, tra trong failedStoryboardJobs xem có job nào jsonPath chứa tên
  * đó không (nghĩa là ĐÃ generate ảnh/video trước đó nhưng lỗi giữa chừng).
@@ -629,6 +643,13 @@ async function processQueue(): Promise<void> {
             sendImageNow,
             notifyImageError,
           );
+          // Ghi nhận NGAY vào failedStoryboardJobs nếu SCENE_SETTING lỗi —
+          // không đợi tới notifyStoryboardVideoResult ở cuối (vẫn gọi hàm
+          // này lần nữa cho chắc, recordFailedStoryboardJob tự bỏ qua nếu
+          // job đã có trong mảng, không bị trùng).
+          if (sceneResult.failed > 0) {
+            recordFailedStoryboardJob(job);
+          }
 
           // Bước 2: chỉ tạo video khi SCENE_SETTING không lỗi entry nào.
           let videoResult: GenerateVideosResult = {
@@ -946,8 +967,7 @@ async function notifyStoryboardVideoResult(
   if (!telegram) return;
   try {
     if (result.failedEntries.length > 0) {
-      failedStoryboardJobs.push(job);
-      persistFailedStoryboardJobs();
+      recordFailedStoryboardJob(job);
       await telegram.sendMessage(
         job.chatId,
         `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
@@ -990,8 +1010,7 @@ async function notifyStoryboardImagesAIVideoResult(
   if (!telegram) return;
   try {
     if (result.failedEntries.length > 0) {
-      failedStoryboardJobs.push(job);
-      persistFailedStoryboardJobs();
+      recordFailedStoryboardJob(job);
       await telegram.sendMessage(
         job.chatId,
         `⚠️ Không tạo được ảnh cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
