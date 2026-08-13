@@ -728,6 +728,13 @@ export async function generateSceneImagesForFileViaAIVideo(
   let succeeded = 0;
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
+  const hasEntryWithSuccess = entries.some(
+    (item) => item?.success !== undefined && item.success !== null,
+  );
+
+  if (hasEntryWithSuccess) {
+    return { outputDir, succeeded, failed, failedEntries };
+  }
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
