@@ -10,6 +10,7 @@ import { askChatAI } from "./automation/chatAI";
 import {
   clearStopStoryboardRequest,
   ensureGeneratedFolder,
+  generatedDirFor,
   generateReferenceImagesForFileViaAIVideo,
   generateSceneImagesForFileViaAIVideo,
   generateVideosForFile,
@@ -110,6 +111,9 @@ const PENDING_VIDEO_CONFIRMATIONS_FILE = path.resolve(
 const PENDING_IMAGE_CONFIRMATIONS_FILE = path.resolve(
   "./storage/pending-image-confirmations.json",
 );
+const FAILED_STORYBOARD_JOBS_FILE = path.resolve(
+  "./storage/failed-storyboard-jobs.json",
+);
 
 // Chỉ dữ liệu thuần (không callback/ctx) nên ghi được ra file — sống sót
 // qua restart/crash. Job vẫn nằm trong mảng (và trong file) SUỐT lúc xử lý,
@@ -129,9 +133,10 @@ let telegram: Telegram | null = null;
 /**
  * Lưu lại job "storyboardVideo"/"storyboardImagesAIVideo" NGAY sau khi xử lý
  * xong mà có ÍT NHẤT 1 entry lỗi (ảnh hoặc video) — xem
- * notifyStoryboardVideoResult/notifyStoryboardImagesAIVideoResult. Chỉ sống
- * trong lúc bot đang chạy (không ghi ra file, không sống sót qua restart) —
- * dùng để tra cứu nhanh job nào vừa lỗi, xem getFailedStoryboardJobs().
+ * notifyStoryboardVideoResult/notifyStoryboardImagesAIVideoResult. Ghi ra
+ * file (FAILED_STORYBOARD_JOBS_FILE) SAU MỖI lần thêm — sống sót qua
+ * restart/crash, GIỐNG jobs/chatAIJobs — dùng để tra cứu nhanh job nào vừa
+ * lỗi, xem getFailedStoryboardJobs().
  */
 const failedStoryboardJobs: (StoryboardVideoJob | StoryboardImagesAIVideoJob)[] =
   [];
@@ -143,6 +148,84 @@ export function getFailedStoryboardJobs(): (
   return failedStoryboardJobs;
 }
 
+function loadPersistedFailedStoryboardJobs(): void {
+  try {
+    if (!fs.existsSync(FAILED_STORYBOARD_JOBS_FILE)) return;
+    const restored: (StoryboardVideoJob | StoryboardImagesAIVideoJob)[] =
+      JSON.parse(fs.readFileSync(FAILED_STORYBOARD_JOBS_FILE, "utf-8"));
+    if (restored.length > 0) {
+      failedStoryboardJobs.push(...restored);
+      console.log(
+        `[queue] Khôi phục ${restored.length} job storyboard lỗi từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[queue] Không đọc được file job storyboard lỗi đã lưu, bỏ qua:",
+      err,
+    );
+  }
+}
+
+function persistFailedStoryboardJobs(): void {
+  try {
+    fs.mkdirSync(path.dirname(FAILED_STORYBOARD_JOBS_FILE), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      FAILED_STORYBOARD_JOBS_FILE,
+      JSON.stringify(failedStoryboardJobs, null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error("[queue] Không ghi được file job storyboard lỗi:", err);
+  }
+}
+
+/**
+ * Nút "Tiếp tục tạo video" (xem CONTINUE_VIDEO_BUTTON_LABEL) — user nhập tên
+ * file json, tra trong failedStoryboardJobs xem có job nào jsonPath chứa tên
+ * đó không (nghĩa là ĐÃ generate ảnh/video trước đó nhưng lỗi giữa chừng).
+ * PHẢI thoả CẢ 2 điều kiện mới cho tiếp tục:
+ * 1. Folder generated/<tên file>/ tồn tại trên đĩa (đã từng xử lý qua, không
+ *    phải gõ nhầm tên file chưa tồn tại bao giờ).
+ * 2. Có job trong failedStoryboardJobs khớp tên (đã lỗi, cần retry — job
+ *    chưa từng lỗi hoặc đã xong rồi thì không có gì để "tiếp tục").
+ *
+ * Nếu thoả cả 2: xoá job đó khỏi failedStoryboardJobs rồi enqueue LẠI CHÍNH
+ * job đó với type "storyboardVideo" (giữ nguyên chatId/promptMessageId/
+ * jsonPath — dù job cũ là "storyboardImagesAIVideo" (lỗi ở bước ảnh
+ * CHARACTER/LOCATION) hay "storyboardVideo" (lỗi ở bước SCENE_SETTING/video),
+ * chuyển sang "storyboardVideo" đều xử lý lại được TOÀN BỘ ảnh/video còn dở
+ * — generateReferenceImagesForFileViaAIVideo/generateSceneImagesForFileViaAIVideo/
+ * generateVideosForFile đều tự resume theo field "success" trên từng entry,
+ * xem storyboardPipeline.ts). Trả về false nếu không thoả — caller
+ * (handlers.ts) tự báo "chưa được xử lý, không thể tiếp tục".
+ */
+export function continueFailedStoryboardVideo(jsonFileName: string): boolean {
+  const folderExists = fs.existsSync(generatedDirFor(jsonFileName));
+  console.log("🚀 ~ continueFailedStoryboardVideo ~ folderExists:", folderExists)
+  const failedIndex = failedStoryboardJobs.findIndex((j) =>
+    j.jsonPath.includes(jsonFileName),
+  );
+  console.log("🚀 ~ continueFailedStoryboardVideo ~ failedIndex:", failedIndex)
+  if (!folderExists || failedIndex === -1) {
+    return false;
+  }
+
+  const [failedJob] = failedStoryboardJobs.splice(failedIndex, 1);
+  persistFailedStoryboardJobs();
+
+  enqueueJob({
+    type: "storyboardVideo",
+    chatId: failedJob.chatId,
+    prompt: failedJob.prompt,
+    promptMessageId: failedJob.promptMessageId,
+    jsonPath: failedJob.jsonPath,
+  });
+  return true;
+}
+
 /** Gọi 1 lần lúc khởi động bot, trước khi có prompt nào được gửi. */
 export function initQueue(botTelegram: Telegram): void {
   telegram = botTelegram;
@@ -150,6 +233,7 @@ export function initQueue(botTelegram: Telegram): void {
   loadPersistedChatAIJobs();
   loadPersistedPendingVideoConfirmations();
   loadPersistedPendingImageConfirmations();
+  loadPersistedFailedStoryboardJobs();
   void processQueue();
   void processChatAIQueue();
 }
@@ -741,7 +825,7 @@ async function processChatAIQueue(): Promise<void> {
         // request quá nhanh lên ChatAI (theo yêu cầu người dùng). Chỉ
         // chờ khi còn job kế tiếp, tránh delay vô ích lúc hàng đợi đã hết.
         if (chatAIJobs.length > 0) {
-          await sleep(15000);
+          await sleep(30000);
         }
       }
     }
@@ -789,12 +873,20 @@ async function runStoryboardPipeline(
     }
     processedJsonCount++;
 
-    await ensureGeneratedFolder(filePath);
+    // Từ đây về sau dùng đường dẫn file json TRONG generated/ (bản đã copy),
+    // KHÔNG dùng path gốc lúc ChatAI tải về (vd storage/chatai-results/) —
+    // đây mới là nơi generateReferenceImagesForFileViaAIVideo/
+    // generateSceneImagesForFileViaAIVideo/generateVideosForFile đọc/ghi lại
+    // "success" cho từng entry (xem storyboardPipeline.ts), và cũng là nơi
+    // user upload ảnh/JSON thay thế (xem tryReplaceGeneratedFile/
+    // tryHandleReferenceJsonUpload trong handlers.ts).
+    const generatedDir = await ensureGeneratedFolder(filePath);
+    const generatedFilePath = path.join(generatedDir, path.basename(filePath));
 
     const confirmId = createImageConfirmation(
       job.chatId,
       job.promptMessageId,
-      filePath,
+      generatedFilePath,
     );
     await telegram!.sendMessage(job.chatId, "Xác nhận tạo ảnh", {
       reply_parameters: { message_id: job.promptMessageId },
@@ -857,6 +949,7 @@ async function notifyStoryboardVideoResult(
   try {
     if (result.failedEntries.length > 0) {
       failedStoryboardJobs.push(job);
+      persistFailedStoryboardJobs();
       await telegram.sendMessage(
         job.chatId,
         `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
@@ -900,6 +993,7 @@ async function notifyStoryboardImagesAIVideoResult(
   try {
     if (result.failedEntries.length > 0) {
       failedStoryboardJobs.push(job);
+      persistFailedStoryboardJobs();
       await telegram.sendMessage(
         job.chatId,
         `⚠️ Không tạo được ảnh cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,

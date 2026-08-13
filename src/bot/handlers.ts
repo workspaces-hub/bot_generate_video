@@ -14,6 +14,7 @@ import { config } from "../config";
 import {
   confirmImageGeneration,
   confirmVideoGeneration,
+  continueFailedStoryboardVideo,
   enqueueJob,
   stopAll,
 } from "../queue";
@@ -21,6 +22,7 @@ import {
   CHARACTER_REF_BUTTON_LABEL,
   CHATAI_BUTTON_LABEL,
   CHATAI_CHECK_BUTTON_LABEL,
+  CONTINUE_VIDEO_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
@@ -36,7 +38,8 @@ type PendingMode =
   | "characterRef"
   | "omniRef"
   | "chatAI"
-  | "chatAICheck";
+  | "chatAICheck"
+  | "continueVideo";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -796,6 +799,15 @@ export function registerHandlers(bot: Telegraf): void {
     await ctx.reply(`🛑 Đã dừng all job`);
   });
 
+  bot.hears(CONTINUE_VIDEO_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "continueVideo");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn tiếp tục tạo video.`,
+    );
+  });
+
   bot.on(message("text"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
     if (
@@ -806,7 +818,8 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === CHARACTER_REF_BUTTON_LABEL ||
       ctx.message.text === OMNI_REF_BUTTON_LABEL ||
       ctx.message.text === CHATAI_BUTTON_LABEL ||
-      ctx.message.text === CHATAI_CHECK_BUTTON_LABEL
+      ctx.message.text === CHATAI_CHECK_BUTTON_LABEL ||
+      ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL
     ) {
       return next();
     }
@@ -861,6 +874,23 @@ export function registerHandlers(bot: Telegraf): void {
         promptMessageId: ctx.message.message_id,
         rawText: ctx.message.text,
       });
+    } else if (mode === "continueVideo") {
+      // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
+      // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
+      // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
+      const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
+      const ok = continueFailedStoryboardVideo(jsonFileName);
+      if (ok) {
+        await ctx.reply(
+          `✅ Đã đưa "${jsonFileName}" vào hàng đợi tạo video, đợi xử lý.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      } else {
+        await ctx.reply(
+          `❌ File "${jsonFileName}" chưa được xử lý (chưa có trong generated/ hoặc không có job nào lỗi khớp tên). Không thể tiếp tục.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      }
     } else {
       await submitImageJob({
         ctx,
