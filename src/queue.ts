@@ -9,8 +9,8 @@ import { generateImage } from "./automation/aiVideoImage";
 import { askChatAI } from "./automation/chatAI";
 import {
   clearStopStoryboardRequest,
+  ensureGeneratedFolder,
   generateReferenceImagesForFileViaAIVideo,
-  generateSceneImagesForFile,
   generateSceneImagesForFileViaAIVideo,
   generateVideosForFile,
   requestStopStoryboardPipeline,
@@ -50,8 +50,6 @@ export interface ImageGenerationJob extends BaseJob {
 
 export interface ChatAIJob extends BaseJob {
   type: "chatAI";
-  /** true = chỉ hỏi ChatAI rồi gửi lại NGUYÊN file tải về (vd JSON storyboard) để check nhanh — KHÔNG chạy runStoryboardPipeline (không gen ảnh/video). */
-  skipPipeline?: boolean;
   /** Tên file .txt user upload làm prompt (nếu có) — dùng đặt tên lại file ChatAI trả về (xem askChatAI) thay vì tên ChatAI tự đặt. */
   promptFileName?: string;
   /** Path local file prompt (nếu user gửi qua upload file thay vì gõ text) — UPLOAD file này lên ChatAI, "prompt" lúc này chỉ là câu ngắn yêu cầu ChatAI đọc file (xem handlers.ts/askChatAI). Xoá file này sau khi job xong (finally trong processChatAIQueue). */
@@ -60,38 +58,39 @@ export interface ChatAIJob extends BaseJob {
 
 /**
  * Job "tạo video" cho 1 file JSON storyboard ĐÃ gen xong ảnh CHARACTER/
- * LOCATION/SCENE_SETTING (từ luồng "Check prompt kịch bản") — chỉ được tạo
- * SAU KHI user bấm nút "Tạo video" xác nhận (xem createVideoConfirmation/
- * confirmVideoGeneration), tránh tự động tốn credit AIVideo khi ảnh
- * chưa được user duyệt. Dùng chung hàng đợi `jobs` (AIVideoJob) với video/ảnh
- * thường — CÙNG browser context AIVideo, phải xếp hàng tuần tự như
- * nhau (xem docstring AIVideoJob).
+ * LOCATION (job "storyboardImagesAIVideo") — chỉ được tạo SAU KHI user bấm
+ * nút "Tạo video" xác nhận (xem createVideoConfirmation/
+ * confirmVideoGeneration), tránh tự động tốn credit AIVideo/ChatAI khi ảnh
+ * chưa được user duyệt. Job này tự gen SCENE_SETTING (qua AIVideo, xem
+ * generateSceneImagesForFileViaAIVideo) TRƯỚC, rồi mới tạo video — dời từ
+ * job "storyboardImagesAIVideo" sang đây để cả 2 chế độ ChatAI (Tạo video từ
+ * kịch bản/Check prompt kịch bản) đều hỏi xác nhận GIỐNG NHAU 2 bước (Tạo
+ * ảnh CHARACTER/LOCATION → Tạo video, trong đó SCENE_SETTING đi kèm bước
+ * video). Dùng chung hàng đợi `jobs` (AIVideoJob) với video/ảnh thường —
+ * CÙNG browser context AIVideo, phải xếp hàng tuần tự như nhau (xem
+ * docstring AIVideoJob).
  */
 export interface StoryboardVideoJob extends BaseJob {
   type: "storyboardVideo";
-  /** Path file JSON storyboard (đã gen ảnh xong) — truyền cho generateVideosForFile. */
+  /** Path file JSON storyboard (đã gen ảnh CHARACTER/LOCATION xong) — truyền cho generateSceneImagesForFileViaAIVideo rồi generateVideosForFile. */
   jsonPath: string;
 }
 
 /**
- * Job "tạo ảnh cho 1 file JSON storyboard" — CHARACTER/LOCATION qua
- * AIVideo (generateReferenceImagesForFileViaAIVideo) THAY VÌ hỏi ChatAI,
- * rồi SCENE_SETTING qua ChatAI (generateSceneImagesForFile — chưa có bản aiVideo)
- * — dùng chung hàng đợi `jobs` (AIVideoJob) với video/ảnh/storyboardVideo
- * thường, CÙNG cơ chế/lý do với StoryboardVideoJob: generateImage()
- * (aiVideoImage.ts) dùng CHUNG browser context AIVideo với
- * generateVideo(), nên phải xếp hàng tuần tự qua CÙNG 1 hàng đợi để tránh 2
- * tab thao tác đồng thời trên cùng tài khoản (chấp nhận việc bước
- * SCENE_SETTING — dùng ChatAI, không thật sự cần xếp hàng với
- * AIVideo — vẫn chiếm lượt trong hàng đợi này, đổi lấy 1 hàng đợi duy
- * nhất đơn giản hơn, theo yêu cầu người dùng).
+ * Job "tạo ảnh CHARACTER/LOCATION cho 1 file JSON storyboard" qua AIVideo
+ * (generateReferenceImagesForFileViaAIVideo) — chỉ được tạo SAU KHI user bấm
+ * nút "Tạo ảnh" xác nhận (xem createImageConfirmation/confirmImageGeneration),
+ * GIỐNG NHAU cho cả 2 chế độ ChatAI (Tạo video từ kịch bản/Check prompt kịch
+ * bản — xem processChatAIQueue). Ảnh xong không lỗi thì hỏi tiếp xác nhận
+ * "Tạo video" (xem createVideoConfirmation) — KHÔNG tự động đẩy job
+ * "storyboardVideo". Dùng chung hàng đợi `jobs` (AIVideoJob) với video/ảnh/
+ * storyboardVideo thường — CÙNG browser context AIVideo, phải xếp hàng tuần
+ * tự như nhau (xem docstring AIVideoJob).
  */
 export interface StoryboardImagesAIVideoJob extends BaseJob {
   type: "storyboardImagesAIVideo";
-  /** Path file JSON storyboard — truyền cho generateReferenceImagesForFileViaAIVideo/generateSceneImagesForFile. */
+  /** Path file JSON storyboard — truyền cho generateReferenceImagesForFileViaAIVideo. */
   jsonPath: string;
-  /** true = luồng "Tạo video từ kịch bản" (ChatAIJob.skipPipeline=false) — ảnh xong (không lỗi) tự đẩy job "storyboardVideo" luôn. false = luồng "Check prompt kịch bản" (ChatAIJob.skipPipeline=true) — ảnh xong chỉ hỏi xác nhận qua nút "Tạo video" (xem createVideoConfirmation). */
-  autoQueueVideo: boolean;
 }
 
 /** Job dùng chung 1 browser context (AIVideo) — video/ảnh/storyboardVideo/storyboardImagesAIVideo cùng site nên phải xếp hàng tuần tự. */
@@ -105,6 +104,12 @@ export type GenerationJob = AIVideoJob | ChatAIJob;
 
 const QUEUE_FILE = path.resolve("./storage/queue.json");
 const CHATAI_QUEUE_FILE = path.resolve("./storage/chatai-queue.json");
+const PENDING_VIDEO_CONFIRMATIONS_FILE = path.resolve(
+  "./storage/pending-video-confirmations.json",
+);
+const PENDING_IMAGE_CONFIRMATIONS_FILE = path.resolve(
+  "./storage/pending-image-confirmations.json",
+);
 
 // Chỉ dữ liệu thuần (không callback/ctx) nên ghi được ra file — sống sót
 // qua restart/crash. Job vẫn nằm trong mảng (và trong file) SUỐT lúc xử lý,
@@ -121,11 +126,30 @@ const chatAIJobs: ChatAIJob[] = [];
 let chatAIProcessing = false;
 let telegram: Telegram | null = null;
 
+/**
+ * Lưu lại job "storyboardVideo"/"storyboardImagesAIVideo" NGAY sau khi xử lý
+ * xong mà có ÍT NHẤT 1 entry lỗi (ảnh hoặc video) — xem
+ * notifyStoryboardVideoResult/notifyStoryboardImagesAIVideoResult. Chỉ sống
+ * trong lúc bot đang chạy (không ghi ra file, không sống sót qua restart) —
+ * dùng để tra cứu nhanh job nào vừa lỗi, xem getFailedStoryboardJobs().
+ */
+const failedStoryboardJobs: (StoryboardVideoJob | StoryboardImagesAIVideoJob)[] =
+  [];
+
+export function getFailedStoryboardJobs(): (
+  | StoryboardVideoJob
+  | StoryboardImagesAIVideoJob
+)[] {
+  return failedStoryboardJobs;
+}
+
 /** Gọi 1 lần lúc khởi động bot, trước khi có prompt nào được gửi. */
 export function initQueue(botTelegram: Telegram): void {
   telegram = botTelegram;
   loadPersistedJobs();
   loadPersistedChatAIJobs();
+  loadPersistedPendingVideoConfirmations();
+  loadPersistedPendingImageConfirmations();
   void processQueue();
   void processChatAIQueue();
 }
@@ -182,7 +206,11 @@ function loadPersistedChatAIJobs(): void {
 function persistChatAIJobs(): void {
   try {
     fs.mkdirSync(path.dirname(CHATAI_QUEUE_FILE), { recursive: true });
-    fs.writeFileSync(CHATAI_QUEUE_FILE, JSON.stringify(chatAIJobs, null, 2), "utf-8");
+    fs.writeFileSync(
+      CHATAI_QUEUE_FILE,
+      JSON.stringify(chatAIJobs, null, 2),
+      "utf-8",
+    );
   } catch (err) {
     console.error("[queue] Không ghi được file hàng đợi ChatAI:", err);
   }
@@ -208,36 +236,33 @@ export function enqueueJob(job: GenerationJob): void {
 
 export interface StopAllResult {
   cancelledChatAIJobs: number;
-  /** Job "video" (characterImagePath, từ CHARACTER_REF_BUTTON_LABEL), "storyboardVideo" (nút "Tạo video" xác nhận) VÀ "storyboardImagesAIVideo" có autoQueueVideo=true (từ CHATAI_BUTTON_LABEL, xem runStoryboardPipeline) còn đang chờ, đã huỷ. */
+  /** Job "video" (characterImagePath, từ CHARACTER_REF_BUTTON_LABEL), "storyboardVideo" VÀ "storyboardImagesAIVideo" (nút "Tạo ảnh"/"Tạo video" xác nhận) còn đang chờ, đã huỷ. */
   cancelledVideoJobs: number;
 }
 
 /**
  * Nút "Stop All" (xem STOP_ALL_BUTTON_LABEL trong keyboard.ts) — dừng SỚM
  * các job của CHARACTER_REF_BUTTON_LABEL (job "video" có characterImagePath),
- * CHATAI_BUTTON_LABEL (toàn bộ hàng đợi ChatAI + job "storyboardImagesAIVideo" có
- * autoQueueVideo=true mà nó đẩy ra), VÀ job "storyboardVideo" (video gen từ
- * nút "Tạo video" xác nhận sau "Check prompt kịch bản"). "storyboardImagesAIVideo"
- * có autoQueueVideo=false (từ Check prompt kịch bản) KHÔNG bị huỷ — ngoài
- * phạm vi CHARACTER_REF_BUTTON_LABEL/CHATAI_BUTTON_LABEL yêu cầu ban đầu.
+ * CHATAI_BUTTON_LABEL/CHATAI_CHECK_BUTTON_LABEL (toàn bộ hàng đợi ChatAI), VÀ
+ * job "storyboardImagesAIVideo"/"storyboardVideo" (từ nút "Tạo ảnh"/"Tạo
+ * video" xác nhận — cả 2 chế độ ChatAI giờ dùng chung luồng xác nhận này).
  *
  * 1. requestStopStoryboardPipeline(): báo hiệu vòng lặp generateReferenceImagesForFile/
  *    generateReferenceImagesForFileViaAIVideo/generateSceneImagesForFile/
- *    generateVideosForFile ĐANG CHẠY (nếu có, từ 1 job ChatAI không skipPipeline,
- *    1 job "storyboardImagesAIVideo", hoặc 1 job "storyboardVideo") dừng SAU
- *    KHI entry đang generate dở xong (không abort giữa chừng) — xem docstring
- *    hàm này trong storyboardPipeline.ts.
+ *    generateVideosForFile ĐANG CHẠY (nếu có, từ 1 job "storyboardImagesAIVideo"
+ *    hoặc 1 job "storyboardVideo") dừng SAU KHI entry đang generate dở xong
+ *    (không abort giữa chừng) — xem docstring hàm này trong
+ *    storyboardPipeline.ts.
  * 2. Xoá TOÀN BỘ job ChatAI còn đang CHỜ trong hàng đợi (chưa tới lượt xử lý) —
  *    job ChatAI ĐANG xử lý dở (index 0, nếu chatAIProcessing) không thể huỷ giữa
  *    chừng askChatAI, chỉ dừng sớm được các vòng lặp gen ảnh/video bên trong
  *    nó qua bước 1.
  * 3. Xoá job "video" có characterImagePath (từ CHARACTER_REF_BUTTON_LABEL),
- *    "storyboardVideo" (từ nút "Tạo video" xác nhận), VÀ "storyboardImagesAIVideo"
- *    có autoQueueVideo=true còn đang CHỜ trong hàng đợi video/ảnh — job ĐANG
- *    xử lý dở (index 0, nếu processing) không thể huỷ giữa chừng
- *    generateVideo/generateImage trên AIVideo, để chạy xong/lỗi tự
- *    nhiên (vòng lặp gen nhiều entry bên trong nó vẫn dừng sớm được qua bước
- *    1 ở trên).
+ *    "storyboardVideo" VÀ "storyboardImagesAIVideo" còn đang CHỜ trong hàng
+ *    đợi video/ảnh — job ĐANG xử lý dở (index 0, nếu processing) không thể
+ *    huỷ giữa chừng generateVideo/generateImage trên AIVideo, để chạy
+ *    xong/lỗi tự nhiên (vòng lặp gen nhiều entry bên trong nó vẫn dừng sớm
+ *    được qua bước 1 ở trên).
  *
  * Báo cho từng user có job bị huỷ biết (reply đúng tin nhắn prompt gốc).
  */
@@ -253,9 +278,8 @@ export function stopAll(): StopAllResult {
   for (let i = jobs.length - 1; i >= jobsStartIndex; i--) {
     const job = jobs[i];
     if (
-      (job.type === "video" && job.characterImagePath) ||
       job.type === "storyboardVideo" ||
-      (job.type === "storyboardImagesAIVideo" && job.autoQueueVideo)
+      job.type === "storyboardImagesAIVideo"
     ) {
       cancelledVideoJobs.push(job);
       jobs.splice(i, 1);
@@ -289,12 +313,51 @@ interface PendingVideoConfirmation {
   promptMessageId: number;
 }
 
-// In-memory (không ghi ra file như jobs/chatAIJobs) — chỉ sống trong lúc bot
-// đang chạy, cùng quy ước với các Map "pending" khác trong handlers.ts (vd
-// pendingOmniRefBuffers). Nếu bot restart trước khi user bấm nút, phải hỏi
-// ChatAI lại — chấp nhận được vì đây chỉ là bước xác nhận ngắn hạn, không phải
-// job cần sống sót qua crash như jobs/chatAIJobs.
+// Ghi ra file (PENDING_VIDEO_CONFIRMATIONS_FILE) SAU MỖI lần thêm/xoá — sống
+// sót qua restart/crash, GIỐNG jobs/chatAIJobs: nếu bot restart trước khi
+// user bấm nút "Tạo video", nút bấm ở tin nhắn CŨ (đã gửi trước đó) vẫn còn
+// hiệu lực sau khi bot khởi động lại, không cần hỏi ChatAI lại từ đầu.
 const pendingVideoConfirmations = new Map<string, PendingVideoConfirmation>();
+
+function loadPersistedPendingVideoConfirmations(): void {
+  try {
+    if (!fs.existsSync(PENDING_VIDEO_CONFIRMATIONS_FILE)) return;
+    const restored: [string, PendingVideoConfirmation][] = JSON.parse(
+      fs.readFileSync(PENDING_VIDEO_CONFIRMATIONS_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      for (const [id, pending] of restored) {
+        pendingVideoConfirmations.set(id, pending);
+      }
+      console.log(
+        `[queue] Khôi phục ${restored.length} lượt chờ xác nhận "Tạo video" từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[queue] Không đọc được file lượt chờ xác nhận "Tạo video" đã lưu, bỏ qua:',
+      err,
+    );
+  }
+}
+
+function persistPendingVideoConfirmations(): void {
+  try {
+    fs.mkdirSync(path.dirname(PENDING_VIDEO_CONFIRMATIONS_FILE), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      PENDING_VIDEO_CONFIRMATIONS_FILE,
+      JSON.stringify(Array.from(pendingVideoConfirmations.entries()), null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error(
+      '[queue] Không ghi được file lượt chờ xác nhận "Tạo video":',
+      err,
+    );
+  }
+}
 
 /** Tạo 1 lượt chờ xác nhận "Tạo video" cho jsonPath, trả về id ngắn dùng làm callback_data của nút (xem handlers.ts). */
 export function createVideoConfirmation(
@@ -308,19 +371,21 @@ export function createVideoConfirmation(
     chatId,
     promptMessageId,
   });
+  persistPendingVideoConfirmations();
   return confirmId;
 }
 
 /**
  * User bấm nút "Tạo video" — tra lại jsonPath theo confirmId rồi đẩy job
  * "storyboardVideo" vào hàng đợi AIVideo (xem StoryboardVideoJob).
- * Trả về false nếu confirmId không tồn tại/đã dùng (vd bấm 2 lần, hoặc bot đã
- * restart mất state) — caller (handlers.ts) tự báo lỗi phù hợp.
+ * Trả về false nếu confirmId không tồn tại/đã dùng (vd bấm 2 lần) — caller
+ * (handlers.ts) tự báo lỗi phù hợp.
  */
 export function confirmVideoGeneration(confirmId: string): boolean {
   const pending = pendingVideoConfirmations.get(confirmId);
   if (!pending) return false;
   pendingVideoConfirmations.delete(confirmId);
+  persistPendingVideoConfirmations();
   enqueueJob({
     type: "storyboardVideo",
     chatId: pending.chatId,
@@ -331,26 +396,91 @@ export function confirmVideoGeneration(confirmId: string): boolean {
   return true;
 }
 
-/**
- * Đẩy job "gen ảnh CHARACTER/LOCATION qua AIVideo thay vì ChatAI" cho 1
- * file JSON storyboard vào hàng đợi `jobs` (xem StoryboardImagesAIVideoJob) —
- * hàm export sẵn để nơi khác (vd handlers.ts, khi cần thêm entry point cho
- * user) gọi tới, chưa gắn UI/nút bấm nào.
- */
-export function enqueueStoryboardImagesAIVideo(
+interface PendingImageConfirmation {
+  jsonPath: string;
+  chatId: number;
+  promptMessageId: number;
+}
+
+// Cùng cơ chế/lý do với pendingVideoConfirmations ở trên (ghi ra file, sống
+// sót qua restart).
+const pendingImageConfirmations = new Map<string, PendingImageConfirmation>();
+
+function loadPersistedPendingImageConfirmations(): void {
+  try {
+    if (!fs.existsSync(PENDING_IMAGE_CONFIRMATIONS_FILE)) return;
+    const restored: [string, PendingImageConfirmation][] = JSON.parse(
+      fs.readFileSync(PENDING_IMAGE_CONFIRMATIONS_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      for (const [id, pending] of restored) {
+        pendingImageConfirmations.set(id, pending);
+      }
+      console.log(
+        `[queue] Khôi phục ${restored.length} lượt chờ xác nhận "Tạo ảnh" từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[queue] Không đọc được file lượt chờ xác nhận "Tạo ảnh" đã lưu, bỏ qua:',
+      err,
+    );
+  }
+}
+
+function persistPendingImageConfirmations(): void {
+  try {
+    fs.mkdirSync(path.dirname(PENDING_IMAGE_CONFIRMATIONS_FILE), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      PENDING_IMAGE_CONFIRMATIONS_FILE,
+      JSON.stringify(Array.from(pendingImageConfirmations.entries()), null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error(
+      '[queue] Không ghi được file lượt chờ xác nhận "Tạo ảnh":',
+      err,
+    );
+  }
+}
+
+/** Tạo 1 lượt chờ xác nhận "Tạo ảnh" cho jsonPath, trả về id ngắn dùng làm callback_data của nút (xem handlers.ts). */
+export function createImageConfirmation(
   chatId: number,
   promptMessageId: number,
   jsonPath: string,
-  autoQueueVideo: boolean,
-): void {
+): string {
+  const confirmId = randomUUID();
+  pendingImageConfirmations.set(confirmId, {
+    jsonPath,
+    chatId,
+    promptMessageId,
+  });
+  persistPendingImageConfirmations();
+  return confirmId;
+}
+
+/**
+ * User bấm nút "Tạo ảnh" — tra lại jsonPath theo confirmId rồi đẩy job
+ * "storyboardImagesAIVideo" vào hàng đợi AIVideo (xem StoryboardImagesAIVideoJob).
+ * Trả về false nếu confirmId không tồn tại/đã dùng, cùng lý do với
+ * confirmVideoGeneration.
+ */
+export function confirmImageGeneration(confirmId: string): boolean {
+  const pending = pendingImageConfirmations.get(confirmId);
+  if (!pending) return false;
+  pendingImageConfirmations.delete(confirmId);
+  persistPendingImageConfirmations();
   enqueueJob({
     type: "storyboardImagesAIVideo",
-    chatId,
+    chatId: pending.chatId,
     prompt: "",
-    promptMessageId,
-    jsonPath,
-    autoQueueVideo,
+    promptMessageId: pending.promptMessageId,
+    jsonPath: pending.jsonPath,
   });
+  return true;
 }
 
 export function getPendingCount(): number {
@@ -389,20 +519,67 @@ async function processQueue(): Promise<void> {
             job.jsonPath,
             path.extname(job.jsonPath),
           );
-          const result = await generateVideosForFile(
+          const sendImageNow = async (imagePath: string): Promise<void> => {
+            const caption = buildResultCaption(jsonBaseName, imagePath);
+            await sendGeneratedImage(
+              job.chatId,
+              imagePath,
+              caption,
+              job.promptMessageId,
+              `${caption}${path.extname(imagePath)}`,
+            );
+          };
+          const notifyImageError = async (id: string): Promise<void> => {
+            try {
+              const message = buildResultCaption(jsonBaseName, id) + " 404";
+              await notifyAdmins(message);
+              await telegram!.sendMessage(config.adminsNotify, message, {
+                reply_parameters: { message_id: job.promptMessageId },
+              });
+            } catch (err) {}
+          };
+
+          // Bước 1: SCENE_SETTING qua AIVideo — dời từ job
+          // "storyboardImagesAIVideo" sang đây (SAU khi user đã bấm "Tạo
+          // video" xác nhận), xem docstring StoryboardVideoJob.
+          const sceneResult = await generateSceneImagesForFileViaAIVideo(
             job.jsonPath,
-            async (videoPath) => {
-              const caption = buildResultCaption(jsonBaseName, videoPath);
-              await sendGeneratedVideo(
-                job.chatId,
-                videoPath,
-                caption,
-                job.promptMessageId,
-                `${caption}${path.extname(videoPath)}`,
-              );
-            },
+            sendImageNow,
+            notifyImageError,
           );
-          await notifyStoryboardVideoResult(job, result);
+
+          // Bước 2: chỉ tạo video khi SCENE_SETTING không lỗi entry nào.
+          let videoResult: GenerateVideosResult = {
+            outputDir: sceneResult.outputDir,
+            succeeded: 0,
+            failed: 0,
+            failedEntries: [],
+          };
+          if (sceneResult.failed === 0) {
+            videoResult = await generateVideosForFile(
+              job.jsonPath,
+              async (videoPath) => {
+                const caption = buildResultCaption(jsonBaseName, videoPath);
+                await sendGeneratedVideo(
+                  job.chatId,
+                  videoPath,
+                  caption,
+                  job.promptMessageId,
+                  `${caption}${path.extname(videoPath)}`,
+                );
+              },
+            );
+          }
+
+          await notifyStoryboardVideoResult(job, {
+            outputDir: videoResult.outputDir,
+            succeeded: videoResult.succeeded,
+            failed: sceneResult.failed + videoResult.failed,
+            failedEntries: [
+              ...sceneResult.failedEntries,
+              ...videoResult.failedEntries,
+            ],
+          });
         } else if (job.type === "storyboardImagesAIVideo") {
           const jsonBaseName = path.basename(
             job.jsonPath,
@@ -418,73 +595,52 @@ async function processQueue(): Promise<void> {
               `${caption}${path.extname(imagePath)}`,
             );
           };
-          const notifyError = async (id: string): Promise<void> => {
+          const notifyImageError = async (id: string): Promise<void> => {
             try {
               const message = buildResultCaption(jsonBaseName, id) + " 404";
-              await telegram!.sendMessage(config.adminsNotify, message, {
+              await notifyAdmins(message);
+              await telegram!.sendMessage(job.chatId, message, {
                 reply_parameters: { message_id: job.promptMessageId },
               });
             } catch (err) {}
           };
 
-          // Bước 1: CHARACTER/LOCATION qua AIVideo (thay ChatAI).
-          const failedEntries: FailedEntry[] = [];
+          // CHARACTER/LOCATION qua AIVideo (thay ChatAI) — SCENE_SETTING dời
+          // sang job "storyboardVideo" (xem docstring 2 job này).
           const imagesResult = await generateReferenceImagesForFileViaAIVideo(
             job.jsonPath,
             sendImageNow,
-            notifyError,
+            notifyImageError,
           );
-          failedEntries.push(...imagesResult.failedEntries);
+          const readyForVideo = imagesResult.failed === 0;
 
-          // Bước 2: SCENE_SETTING vẫn qua ChatAI (chưa có bản aiVideo) — chỉ
-          // chạy tiếp khi bước 1 không lỗi entry nào.
-          let readyForVideo = false;
-          if (imagesResult.failed === 0) {
-            const sceneResult = await generateSceneImagesForFileViaAIVideo(
-              job.jsonPath,
-              sendImageNow,
-              notifyError,
-            );
-            failedEntries.push(...sceneResult.failedEntries);
-            readyForVideo = sceneResult.failed === 0;
-          }
-
-          // Bước 3: ảnh xong hết — tự tạo video luôn (luồng "Tạo video từ
-          // kịch bản") hoặc hỏi xác nhận qua nút (luồng "Check prompt kịch
-          // bản") — xem docstring StoryboardImagesAIVideoJob.
+          // Ảnh xong không lỗi — LUÔN hỏi xác nhận qua nút "Tạo video" (2 chế
+          // độ ChatAI giờ xác nhận giống nhau, xem docstring
+          // StoryboardImagesAIVideoJob) — KHÔNG còn tự động đẩy job
+          // "storyboardVideo".
           if (readyForVideo) {
-            if (job.autoQueueVideo) {
-              enqueueJob({
-                type: "storyboardVideo",
-                chatId: job.chatId,
-                prompt: "",
-                promptMessageId: job.promptMessageId,
-                jsonPath: job.jsonPath,
-              });
-            } else {
-              const confirmId = createVideoConfirmation(
-                job.chatId,
-                job.promptMessageId,
-                job.jsonPath,
-              );
-              await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
-                reply_parameters: { message_id: job.promptMessageId },
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      {
-                        text: "Tạo video",
-                        callback_data: `confirmVideo:${confirmId}`,
-                      },
-                    ],
+            const confirmId = createVideoConfirmation(
+              job.chatId,
+              job.promptMessageId,
+              job.jsonPath,
+            );
+            await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
+              reply_parameters: { message_id: job.promptMessageId },
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: "Tạo video",
+                      callback_data: `confirmVideo:${confirmId}`,
+                    },
                   ],
-                },
-              });
-            }
+                ],
+              },
+            });
           }
 
           await notifyStoryboardImagesAIVideoResult(job, {
-            failedEntries,
+            failedEntries: imagesResult.failedEntries,
             readyForVideo,
           });
         } else if (job.type === "image") {
@@ -567,16 +723,8 @@ async function processChatAIQueue(): Promise<void> {
             );
           });
         }
-        if (job.skipPipeline) {
-          const checkResult = await runChatAICheckImagePipeline(
-            downloadedFiles,
-            job,
-          );
-          await notifyChatAICheckSuccess(job, checkResult);
-        } else {
-          const result = await runStoryboardPipeline(downloadedFiles, job);
-          await notifyChatAISuccess(job, result);
-        }
+        const result = await runStoryboardPipeline(downloadedFiles, job);
+        await notifyChatAISuccess(job, result);
       } catch (err) {
         await notifyError(job, err);
       } finally {
@@ -605,8 +753,8 @@ async function processChatAIQueue(): Promise<void> {
 interface ChatAIPipelineResult {
   /** Số file JSON storyboard THẬT SỰ được xử lý (bỏ qua file không phải .json) — dùng phân biệt "không có file đính kèm" với "có file nhưng chưa gen ảnh". */
   processedJsonCount: number;
-  /** Số file JSON đã đẩy job "storyboardImagesAIVideo" vào hàng đợi AIVideo (xem enqueueJob trong runStoryboardPipeline) — ảnh/video tạo/gửi SAU, KHÔNG đồng bộ với job ChatAI này. */
-  queuedImageFiles: number;
+  /** Số file JSON đã tạo folder generated/ + gửi nút "Tạo ảnh" xác nhận (xem createImageConfirmation trong runStoryboardPipeline). */
+  confirmPromptsSent: number;
 }
 
 /** "<tên file json>__<tên file>" — quy ước caption/tên file dùng chung cho ảnh VÀ video gửi về user, xem processQueue (nhánh "storyboardImagesAIVideo"/"storyboardVideo"). */
@@ -619,26 +767,21 @@ function buildResultCaption(
 
 /**
  * Với MỖI file JSON storyboard ChatAI tải về (thường chỉ 1, vd meta.json — file
- * KHÔNG phải .json bị bỏ qua, không xử lý): đẩy job "storyboardImagesAIVideo"
- * (autoQueueVideo=true) vào hàng đợi AIVideo (xem StoryboardImagesAIVideoJob)
- * — KHÔNG tự gen ảnh/video ở đây nữa. Lý do: hàm này chạy BÊN TRONG job ChatAI
- * (hàng đợi riêng, xem processChatAIQueue), trong khi việc gen ảnh/video dùng
- * browser context AIVideo CHUNG với hàng đợi `jobs`
- * (video/ảnh/storyboardVideo/storyboardImagesAIVideo) — gọi trực tiếp ở đây
- * có thể chạy CÙNG LÚC với 1 job khác đang xử lý ở hàng đợi kia, mở 2 tab
- * thao tác đồng thời trên cùng 1 tài khoản, dễ xung đột/crash. Đẩy vào hàng
- * đợi `jobs` đảm bảo LUÔN xếp hàng tuần tự. Job "storyboardImagesAIVideo" tự
- * gen CHARACTER/LOCATION (AIVideo) → SCENE_SETTING (ChatAI) → tự đẩy
- * tiếp job "storyboardVideo" khi cả 2 bước ảnh xong không lỗi, gửi kết quả
- * riêng (xem processQueue) — KHÔNG đồng bộ/không nằm trong kết quả trả về
- * của hàm này.
+ * KHÔNG phải .json bị bỏ qua, không xử lý): tạo NGAY folder
+ * generated/<tên file>/ + copy JSON vào đó (xem
+ * ensureGeneratedFolder — để user có thể upload ảnh/JSON thay thế
+ * trong lúc chờ, xem tryReplaceGeneratedFile trong handlers.ts), rồi gửi nút
+ * "Tạo ảnh" hỏi xác nhận (xem createImageConfirmation) — KHÔNG tự gen ảnh/
+ * video ở đây. Cả 2 chế độ ChatAI (CHATAI_BUTTON_LABEL/CHATAI_CHECK_BUTTON_LABEL)
+ * dùng CHUNG hàm này, xác nhận giống hệt nhau (Tạo ảnh → Tạo video, xem
+ * StoryboardImagesAIVideoJob/StoryboardVideoJob).
  */
 async function runStoryboardPipeline(
   downloadedFiles: string[],
   job: ChatAIJob,
 ): Promise<ChatAIPipelineResult> {
   let processedJsonCount = 0;
-  let queuedImageFiles = 0;
+  let confirmPromptsSent = 0;
 
   for (const filePath of downloadedFiles) {
     if (path.extname(filePath).toLowerCase() !== ".json") {
@@ -646,18 +789,30 @@ async function runStoryboardPipeline(
     }
     processedJsonCount++;
 
-    enqueueJob({
-      type: "storyboardImagesAIVideo",
-      chatId: job.chatId,
-      prompt: "",
-      promptMessageId: job.promptMessageId,
-      jsonPath: filePath,
-      autoQueueVideo: true,
+    await ensureGeneratedFolder(filePath);
+
+    const confirmId = createImageConfirmation(
+      job.chatId,
+      job.promptMessageId,
+      filePath,
+    );
+    await telegram!.sendMessage(job.chatId, "Xác nhận tạo ảnh", {
+      reply_parameters: { message_id: job.promptMessageId },
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "Tạo ảnh",
+              callback_data: `confirmImages:${confirmId}`,
+            },
+          ],
+        ],
+      },
     });
-    queuedImageFiles++;
+    confirmPromptsSent++;
   }
 
-  return { processedJsonCount, queuedImageFiles };
+  return { processedJsonCount, confirmPromptsSent };
 }
 
 function formatFailedEntries(entries: FailedEntry[]): string {
@@ -701,6 +856,7 @@ async function notifyStoryboardVideoResult(
   if (!telegram) return;
   try {
     if (result.failedEntries.length > 0) {
+      failedStoryboardJobs.push(job);
       await telegram.sendMessage(
         job.chatId,
         `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
@@ -731,9 +887,8 @@ async function notifyStoryboardVideoResult(
  * processQueue), hàm này chỉ còn báo lỗi/tổng kết.
  */
 interface StoryboardImagesAIVideoResult {
-  /** Gộp lỗi từ CẢ 2 bước: CHARACTER/LOCATION (aiVideo) VÀ SCENE_SETTING (ChatAI). */
   failedEntries: FailedEntry[];
-  /** true nếu cả 2 bước ảnh đều xong không lỗi — job "storyboardVideo" đã được đẩy vào hàng đợi HOẶC nút "Tạo video" đã gửi (xem nơi gọi trong processQueue). */
+  /** true nếu ảnh xong không lỗi — nút "Tạo video" đã gửi (xem nơi gọi trong processQueue). */
   readyForVideo: boolean;
 }
 
@@ -744,20 +899,15 @@ async function notifyStoryboardImagesAIVideoResult(
   if (!telegram) return;
   try {
     if (result.failedEntries.length > 0) {
+      failedStoryboardJobs.push(job);
       await telegram.sendMessage(
         job.chatId,
         `⚠️ Không tạo được ảnh cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
         { reply_parameters: { message_id: job.promptMessageId } },
       );
-    } else if (result.readyForVideo && job.autoQueueVideo) {
-      await telegram.sendMessage(
-        job.chatId,
-        `✅ Đã tạo xong ảnh — đã đưa vào hàng đợi tạo video, sẽ gửi video ngay khi xong.`,
-        { reply_parameters: { message_id: job.promptMessageId } },
-      );
     }
-    // readyForVideo && !autoQueueVideo: nút "Tạo video" đã gửi ở nơi gọi
-    // (processQueue) rồi, không cần báo thêm ở đây.
+    // readyForVideo: nút "Tạo video" đã gửi ở nơi gọi (processQueue) rồi,
+    // không cần báo thêm ở đây.
   } catch (err) {
     console.error("[queue] Gửi kết quả tạo ảnh (aiVideo) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
@@ -885,7 +1035,7 @@ async function sendGeneratedVideo(
 
 // Giới hạn upload THẬT của Telegram Bot API cho sendDocument là 50MB — xác
 // nhận qua lỗi thật "413 Request Entity Too Large" khi gửi file zip video lớn
-// (reference-images/.../videos.zip có thể vượt xa 50MB với nhiều video). Chừa
+// (generated/.../videos.zip có thể vượt xa 50MB với nhiều video). Chừa
 // dư 1MB làm an toàn (overhead multipart/form-data).
 const TELEGRAM_MAX_DOCUMENT_BYTES = 49 * 1024 * 1024;
 
@@ -971,92 +1121,13 @@ async function sendDocumentMaybeSplit(
   }
 }
 
-interface ChatAICheckPipelineResult {
-  /** File JSON storyboard ChatAI trả về — gửi lại nguyên bản để user kiểm tra nội dung. */
-  jsonFiles: string[];
-  /** Số file JSON đã đẩy job "storyboardImagesAIVideo" (autoQueueVideo=false) vào hàng đợi AIVideo — ảnh/nút xác nhận tạo video tự gửi SAU, KHÔNG đồng bộ với job ChatAI này. */
-  queuedImageFiles: number;
-}
-
 /**
- * Dùng cho job "Check prompt kịch bản" (ChatAIJob.skipPipeline = true): với mỗi
- * file JSON storyboard ChatAI trả về, đẩy job "storyboardImagesAIVideo"
- * (autoQueueVideo=false — xem StoryboardImagesAIVideoJob) vào hàng đợi
- * AIVideo — KHÔNG tự gen ảnh ở đây nữa, CÙNG lý do/cơ chế với
- * runStoryboardPipeline (tránh 2 tab thao tác đồng thời trên cùng tài
- * khoản). Job đó tự gen CHARACTER/LOCATION (AIVideo) → SCENE_SETTING
- * (ChatAI) rồi hỏi xác nhận qua nút "Tạo video" khi cả 2 bước xong không lỗi.
- */
-async function runChatAICheckImagePipeline(
-  downloadedFiles: string[],
-  job: ChatAIJob,
-): Promise<ChatAICheckPipelineResult> {
-  const jsonFiles: string[] = [];
-  let queuedImageFiles = 0;
-
-  for (const filePath of downloadedFiles) {
-    if (path.extname(filePath).toLowerCase() !== ".json") continue;
-    jsonFiles.push(filePath);
-
-    enqueueJob({
-      type: "storyboardImagesAIVideo",
-      chatId: job.chatId,
-      prompt: "",
-      promptMessageId: job.promptMessageId,
-      jsonPath: filePath,
-      autoQueueVideo: false,
-    });
-    queuedImageFiles++;
-  }
-
-  return { jsonFiles, queuedImageFiles };
-}
-
-/**
- * Dùng cho job "Check prompt kịch bản" (ChatAIJob.skipPipeline = true) — job
- * ChatAI giờ CHỈ hỏi ChatAI + gửi JSON + đẩy job "storyboardImagesAIVideo" (xem
- * runChatAICheckImagePipeline), KHÔNG gen ảnh đồng bộ trong job này nữa. Ảnh/
- * nút xác nhận tạo video/lỗi tự báo riêng khi job đó tới lượt xử lý (xem
- * notifyStoryboardImagesAIVideoResult). Hàm này chỉ còn báo "đã đưa vào hàng
- * đợi" hoặc "không có file đính kèm".
- */
-async function notifyChatAICheckSuccess(
-  job: ChatAIJob,
-  result: ChatAICheckPipelineResult,
-): Promise<void> {
-  if (!telegram) return;
-  try {
-    if (result.jsonFiles.length === 0) {
-      await telegram.sendMessage(
-        job.chatId,
-        `✅ ChatAI đã trả lời xong (không có file đính kèm).`,
-        {
-          reply_parameters: { message_id: job.promptMessageId },
-        },
-      );
-    } else if (result.queuedImageFiles > 0) {
-      await telegram.sendMessage(
-        job.chatId,
-        `✅ Đã đưa ${result.queuedImageFiles} file vào hàng đợi tạo ảnh (AIVideo).`,
-        { reply_parameters: { message_id: job.promptMessageId } },
-      );
-    }
-  } catch (err) {
-    console.error("[queue] Gửi kết quả check ChatAI thất bại:", err);
-    await telegram.sendMessage(job.chatId, "404", {
-      reply_parameters: { message_id: job.promptMessageId },
-    });
-    await notifyAdmins(err);
-  }
-  await deleteStatusMessage(job);
-}
-
-/**
- * Job ChatAI giờ CHỈ hỏi ChatAI + gửi JSON + đẩy job "storyboardImagesAIVideo" vào
- * hàng đợi AIVideo (xem runStoryboardPipeline) — KHÔNG còn gen ảnh/
- * video đồng bộ trong job này nữa. Ảnh/video/lỗi tự báo riêng khi job đó tới
- * lượt xử lý (xem notifyStoryboardImagesAIVideoResult/notifyStoryboardVideoResult).
- * Hàm này chỉ còn báo "đã đưa vào hàng đợi" hoặc "không có file đính kèm".
+ * Job ChatAI giờ CHỈ hỏi ChatAI + gửi JSON + tạo folder generated/ +
+ * gửi nút "Tạo ảnh" xác nhận (xem runStoryboardPipeline) — KHÔNG còn gen ảnh/
+ * video đồng bộ trong job này nữa. Ảnh/video/lỗi tự báo riêng khi job
+ * "storyboardImagesAIVideo"/"storyboardVideo" tới lượt xử lý SAU KHI user bấm
+ * xác nhận (xem notifyStoryboardImagesAIVideoResult/notifyStoryboardVideoResult).
+ * Hàm này chỉ còn báo "đã gửi nút xác nhận" hoặc "không có file đính kèm".
  */
 async function notifyChatAISuccess(
   job: ChatAIJob,
@@ -1073,13 +1144,9 @@ async function notifyChatAISuccess(
           reply_parameters: { message_id: job.promptMessageId },
         },
       );
-    } else if (result.queuedImageFiles > 0) {
-      await telegram.sendMessage(
-        job.chatId,
-        `✅ Đã đưa ${result.queuedImageFiles} file vào hàng đợi tạo ảnh (AIVideo), sẽ tự tạo video sau khi ảnh xong.`,
-        { reply_parameters: { message_id: job.promptMessageId } },
-      );
     }
+    // confirmPromptsSent > 0: nút "Tạo ảnh" đã gửi ở runStoryboardPipeline
+    // rồi, không cần báo thêm ở đây.
   } catch (err) {
     console.error("[queue] Gửi kết quả ChatAI thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
@@ -1119,16 +1186,3 @@ async function notifyAdmins(err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   await telegram!.sendMessage(config.adminsNotify, message).catch(() => {});
 }
-
-// runChatAICheckImagePipeline(
-//   ["/root/vm_ai/bot/storage/chatai-results/cay_khe_test.json"],
-//   {
-//     chatId: -1004294978405,
-//     prompt: "Hãy thực hiện yêu cầu trong file",
-//     promptMessageId: 375,
-//     statusMessageId: 376,
-//     type: "chatAI",
-//     skipPipeline: false,
-//     promptFileName: "cay_khe_test",
-//   },
-// );

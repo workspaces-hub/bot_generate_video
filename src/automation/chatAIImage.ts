@@ -362,7 +362,7 @@ async function attemptGenerateReferenceImage(
     try {
       await page.goto(config.chatAIBaseUrl, {
         waitUntil: "domcontentloaded",
-        timeout: 600_000,
+        timeout: 900_000,
       });
     } catch (err) {
       console.warn(
@@ -371,7 +371,7 @@ async function attemptGenerateReferenceImage(
       );
       await page.goto(config.chatAIBaseUrl, {
         waitUntil: "domcontentloaded",
-        timeout: 600_000,
+        timeout: 900_000,
       });
     }
     await dismissCloudflareChallengeIfPresent(page);
@@ -406,7 +406,7 @@ async function attemptGenerateReferenceImage(
     let images: Locator;
     let latest: Locator;
     for (let attempt = 0; ; attempt++) {
-      await sendImagePrompt(page, `Generate an image: ${prompt}`);
+      await sendImagePrompt(page, `${prompt}`);
       await captureSnapshot(page, jobId, "result");
 
       const messages = assistantMessageLocator(page);
@@ -428,7 +428,7 @@ async function attemptGenerateReferenceImage(
         // khi kết luận thật sự không có ảnh, tránh throw nhầm vì chỉ thiếu
         // đúng nhịp render cuối.
         const imagePollStart = Date.now();
-        const imagePollTimeoutMs = 20_000;
+        const imagePollTimeoutMs = 30_000;
         while (
           (await images.count()) === 0 &&
           Date.now() - imagePollStart < imagePollTimeoutMs

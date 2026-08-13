@@ -94,10 +94,31 @@ async function saveEntries(
   );
 }
 
-/** Thư mục reference-images/<tên file input, bỏ đuôi> — DÙNG CHUNG giữa bước tạo ảnh và tạo video của CÙNG 1 file input. */
-export function referenceImagesDirFor(inputPath: string): string {
+/** Thư mục generated/<tên file input, bỏ đuôi> — DÙNG CHUNG giữa bước tạo ảnh và tạo video của CÙNG 1 file input. */
+export function generatedDirFor(inputPath: string): string {
   const baseName = path.basename(inputPath, path.extname(inputPath));
-  return path.resolve("./storage/reference-images", baseName);
+  return path.resolve("./storage/generated", baseName);
+}
+
+/**
+ * Tạo (nếu chưa có) folder generated/<tên file input>/ và copy file
+ * input JSON vào đó — gọi SỚM, NGAY sau khi ChatAI trả JSON xong (xem
+ * processChatAIQueue trong queue.ts), TRƯỚC KHI user xác nhận có gen ảnh hay
+ * không, để user có thể upload ảnh/JSON thay thế vào đúng folder trong lúc
+ * chờ xác nhận (xem tryReplaceGeneratedFile trong handlers.ts). Các hàm
+ * generate*ForFile bên dưới cũng tự làm việc này khi chạy (idempotent, ghi
+ * đè an toàn) nên gọi hàm này trước không ảnh hưởng gì tới chúng.
+ */
+export async function ensureGeneratedFolder(
+  inputPath: string,
+): Promise<string> {
+  const outputDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
+  return outputDir;
 }
 
 export interface FailedEntry {
@@ -117,7 +138,7 @@ export interface GenerateImagesResult {
  * của tính năng ChatAI storyboard, xem askChatAI/downloadAttachedFiles trong
  * chatAI.ts), lọc entry CHARACTER/LOCATION (bỏ qua VIDEO vì đó là prompt tạo
  * VIDEO, không phải ảnh), rồi lần lượt nhờ ChatAI tạo ảnh cho từng entry và tải
- * về CHUNG 1 folder reference-images/<tên file input>/<id>.<đuôi> — không
+ * về CHUNG 1 folder generated/<tên file input>/<id>.<đuôi> — không
  * chia riêng characters/locations nữa (đơn giản hoá, dễ duyệt file).
  *
  * Chạy TUẦN TỰ từng entry (không song song) — cùng 1 browser context
@@ -145,7 +166,7 @@ export async function generateReferenceImagesForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = referenceImagesDirFor(inputPath);
+  const outputDir = generatedDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -233,7 +254,7 @@ export async function generateReferenceImagesForFile(
  * (ChatAI) — dùng khi muốn tránh phụ thuộc ChatAI hoặc đổi nguồn
  * tạo ảnh. Hàm RIÊNG, KHÔNG sửa generateReferenceImagesForFile — cả 2 hàm
  * cùng ghi vào field "success"/lưu file cùng quy ước (<id>.<đuôi> trong
- * reference-images/<tên file input>/) nên hoàn toàn tương thích ngược: ảnh
+ * generated/<tên file input>/) nên hoàn toàn tương thích ngược: ảnh
  * tạo bằng hàm nào cũng dùng được làm ref cho generateSceneImagesForFile/
  * generateVideosForFile sau đó.
  *
@@ -253,7 +274,7 @@ export async function generateReferenceImagesForFileViaAIVideo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = referenceImagesDirFor(inputPath);
+  const outputDir = generatedDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -409,19 +430,19 @@ function assignStartEndFrames(
  * generateVideo trên AIVideo cho từng entry.
  *
  * ref có thể trỏ tới entry CHARACTER, LOCATION hoặc SCENE_SETTING (đều đã
- * generate ảnh trước đó, cùng lưu trong reference-images/<tên file input>/).
+ * generate ảnh trước đó, cùng lưu trong generated/<tên file input>/).
  *
  * Chọn mode theo số ảnh ref resolve được:
  * - >= 3 ảnh: mode "Omni Reference".
  * - 1-2 ảnh: mode "Start/End Frame", ảnh lấy từ
- *   reference-images/<tên file input>/<ref.id>.png (xem assignStartEndFrames
+ *   generated/<tên file input>/<ref.id>.png (xem assignStartEndFrames
  *   để biết cách chọn ảnh nào vào start/end) — PHẢI đã chạy
  *   generateReferenceImagesForFile/generateSceneImagesForFile trước đó (tuỳ
  *   type của ref).
  * - 0 ảnh (không có ref): mode "Start/End Frame" nhưng KHÔNG upload ảnh nào
  *   (chỉ tạo video thuần từ prompt).
  *
- * Video tạo xong lưu CHUNG vào reference-images/<tên file input>/<id>.mp4 —
+ * Video tạo xong lưu CHUNG vào generated/<tên file input>/<id>.mp4 —
  * cùng 1 folder với ảnh character/location/scene setting (không tách riêng
  * folder "videos").
  *
@@ -441,7 +462,7 @@ export async function generateVideosForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = referenceImagesDirFor(inputPath);
+  const outputDir = generatedDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -555,7 +576,7 @@ export async function generateVideosForFile(
  * cảnh giữ đúng nhận diện nhân vật/địa điểm đã có. Không có "ref" thì generate
  * thuần từ prompt (giống CHARACTER/LOCATION).
  *
- * Ảnh lưu CHUNG vào reference-images/<tên file input>/<id>.<đuôi> — cùng 1
+ * Ảnh lưu CHUNG vào generated/<tên file input>/<id>.<đuôi> — cùng 1
  * folder với ảnh CHARACTER/LOCATION/video (không tách folder riêng).
  *
  * Chạy TUẦN TỰ, đánh dấu "success" trên từng entry, ghi đè lại file input gốc
@@ -574,7 +595,7 @@ export async function generateSceneImagesForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = referenceImagesDirFor(inputPath);
+  const outputDir = generatedDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -685,7 +706,7 @@ export async function generateSceneImagesForFileViaAIVideo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = referenceImagesDirFor(inputPath);
+  const outputDir = generatedDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
