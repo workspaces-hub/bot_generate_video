@@ -977,14 +977,14 @@ async function notifyStoryboardVideoResult(
 ): Promise<void> {
   if (!telegram) return;
   try {
-    // if (result.failedEntries.length > 0) {
-    //   recordFailedStoryboardJob(job);
-    //   await telegram.sendMessage(
-    //     job.chatId,
-    //     `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
-    //     { reply_parameters: { message_id: job.promptMessageId } },
-    //   );
-    // }
+    if (result.failedEntries.length > 0) {
+      recordFailedStoryboardJob(job);
+      await telegram.sendMessage(
+        job.chatId,
+        `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    }
     if (result.succeeded > 0 && result.failed === 0) {
       await telegram.sendMessage(job.chatId, `✅ Đã tạo video xong`, {
         reply_parameters: { message_id: job.promptMessageId },
