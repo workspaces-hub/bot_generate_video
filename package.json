@@ -16,6 +16,7 @@
     "download-video": "tsx scripts/download-video-by-feed-id.ts",
     "check-session": "tsx scripts/check-session.ts",
     "check-credit": "tsx scripts/check-credit.ts",
+    "check-fee": "tsx scripts/check-fee.ts",
     "check-chatai-model": "tsx scripts/check-chatai-model.ts",
     "generate-reference-images": "tsx scripts/generate-reference-images.ts",
     "generate-scene-images": "tsx scripts/generate-scene-images.ts",

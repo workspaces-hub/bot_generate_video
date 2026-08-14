@@ -14,6 +14,7 @@ import {
   busyReferenceImageThumbnailLocator,
   characterDetectionFailedCandidates,
   confirmCharacterButtonCandidates,
+  creditBalanceLocator,
   creditPaywallModalCandidates,
   deleteAllFailedButtonLocator,
   dropdownOptionCandidates,
@@ -23,6 +24,7 @@ import {
   firstVisible,
   generateButtonCandidates,
   generatingIndicatorLocator,
+  generationFeeLocator,
   getOmniReferenceCount,
   getReferenceImageCount,
   historyVideoLocator,
@@ -201,6 +203,23 @@ async function attemptGenerateVideo(
     if (endFramePath) {
       await uploadEndFrame(page, endFramePath);
     }
+    const [fee, credit] = await Promise.all([
+      getGenerationFee(page),
+      getAvailableCredit(page),
+    ]);
+    if (fee !== null && credit !== null) {
+      if (fee < credit) {
+        if (
+          usingReferenceImages ||
+          usingCharacterReference ||
+          usingOmniReference
+        ) {
+          throw new GenerationError("Tài khoản hết credit");
+        } else {
+          model = "Hailuo 2.0";
+        }
+      }
+    }
 
     if (model) {
       await selectChipOption(page, modelChipCandidates(page), model, "model");
@@ -240,11 +259,7 @@ async function attemptGenerateVideo(
       "after-generate-click",
     );
 
-    const newVideo = await waitForNewVideo(
-      page,
-      baseline,
-      config.generationTimeoutMs,
-    );
+    const newVideo = await waitForNewVideo(page, baseline);
 
     return await downloadVideo(page, newVideo, jobId);
   } catch (err) {
@@ -1172,6 +1187,43 @@ export async function ensureLoggedIn(page: Page): Promise<void> {
 }
 
 /**
+ * Đọc số fee (credit sẽ bị trừ cho lượt tạo ảnh/video hiện tại) hiển thị
+ * trên trang tạo ảnh/video đang mở ở "page" — xem chú thích
+ * generationFeeLocator trong selectors.ts để biết DOM thật đã xác nhận.
+ * Trả về number (đã bỏ dấu phẩy ngăn hàng nghìn), null nếu không tìm thấy/
+ * đọc được (vd trang chưa load xong, hoặc site đổi UI) — dùng chung được cho
+ * cả trang video (aiVideoCreateVideoPath) lẫn ảnh (aiVideoCreateImagePath),
+ * gọi ở nơi khác (script CLI, generateVideo/generateImage, ...) chỉ cần
+ * truyền đúng "page" đã điều hướng tới trang tương ứng.
+ */
+export async function getGenerationFee(page: Page): Promise<number | null> {
+  try {
+    const feeEl = await firstVisible(
+      [() => generationFeeLocator(page)],
+      15_000,
+    );
+    const text = (await feeEl.textContent())?.trim() ?? "";
+    const value = Number(text.replace(/,/g, ""));
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+export async function getAvailableCredit(page: Page): Promise<number | null> {
+  try {
+    const feeEl = await firstVisible(
+      [() => creditBalanceLocator(page)],
+      15_000,
+    );
+    const text = (await feeEl.textContent())?.trim() ?? "";
+    const value = Number(text.replace(/,/g, ""));
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Popup quảng cáo/nâng cấp gói (vd "Seedance 2.0 Full Lineup... Choose Your
  * Plan, Subscribe, Redeem a Code") có thể tự hiện che kín trang tạo video
  * ngay khi vừa vào trang — không hẳn lúc nào cũng do hết credit. Thử đóng
@@ -1268,21 +1320,25 @@ async function captureVideoBaseline(page: Page): Promise<VideoBaseline> {
  * Theo dõi ĐÚNG entry đó: ngay khi "Generating..." biến mất khỏi entry này mà
  * vẫn CHƯA có video mới (đã check ở trên trong CÙNG vòng lặp) và cũng KHÔNG
  * có dấu hiệu lỗi rõ ràng nào (paywall/toast/"Delete All Failed"), dừng chờ
- * NGAY, báo lỗi rõ ràng thay vì tiếp tục poll cho hết timeoutMs dù kết quả
- * job đã ngã ngũ.
+ * NGAY, báo lỗi rõ ràng.
+ *
+ * KHÔNG dùng timeout tổng — video thật có thể mất rất lâu (nhiều phút tới
+ * hàng giờ tuỳ độ dài/độ phức tạp), một mốc thời gian cố định luôn có nguy cơ
+ * cắt ngang job vẫn đang chạy bình thường. Vòng lặp chỉ dừng khi "ngã ngũ"
+ * thật sự: có video mới (thành công), hoặc 1 trong các dấu hiệu lỗi rõ ràng ở
+ * trên (paywall/toast/"Delete All Failed"/"Generating..." biến mất không rõ
+ * lý do) — không có đường nào khác thoát khỏi vòng lặp.
  */
 async function waitForNewVideo(
   page: Page,
   baseline: VideoBaseline,
-  timeoutMs: number,
 ): Promise<Locator> {
   const videos = historyVideoLocator(page);
-  const start = Date.now();
   const pollIntervalMs = 5000;
   let trackedFeedId: string | null = null;
   let sawGeneratingOnTrackedEntry = false;
 
-  while (Date.now() - start < timeoutMs) {
+  while (true) {
     const count = await videos.count();
     if (count > baseline.count) {
       const currentFirstSrc = await videos.first().getAttribute("src");
@@ -1318,11 +1374,14 @@ async function waitForNewVideo(
 
     if (!trackedFeedId) {
       const currentFeedIds = await getHistoryFeedIds(page);
-      trackedFeedId = currentFeedIds.find((id) => !baseline.feedIds.has(id)) ?? null;
+      trackedFeedId =
+        currentFeedIds.find((id) => !baseline.feedIds.has(id)) ?? null;
     }
 
     if (trackedFeedId) {
-      const trackedEntry = page.locator(`div[data-feed-id="${trackedFeedId}"]`).first();
+      const trackedEntry = page
+        .locator(`div[data-feed-id="${trackedFeedId}"]`)
+        .first();
 
       // Check TRỰC TIẾP <video> trong ĐÚNG entry đang theo dõi — đáng tin cậy
       // và nhanh hơn dựa vào count() chung của historyVideoLocator (scope cả
@@ -1361,10 +1420,6 @@ async function waitForNewVideo(
 
     await page.waitForTimeout(pollIntervalMs);
   }
-
-  throw new GenerationError(
-    `Hết thời gian chờ tạo video (timeout ${timeoutMs}ms)`,
-  );
 }
 
 /**

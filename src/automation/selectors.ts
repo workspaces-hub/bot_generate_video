@@ -337,10 +337,19 @@ export const generatingIndicatorLocator = (scope: Page | Locator): Locator =>
  * Your Plan, Subscribe, Redeem a Code") có thể che kín trang khi tài khoản
  * không đủ credit để generate. Phát hiện riêng để báo lỗi rõ ràng thay vì
  * để timeout mơ hồ hoặc khớp nhầm chữ trong nội dung popup.
+ *
+ * "Top up = Bonus Credits!" xác nhận qua debug thật (job
+ * THE_LAST_TRAIN_NORTH_..._SCENE_48_VIDEO): bấm Generate khi fee (60) > credit
+ * còn lại (47) khiến site hiện popup mời nạp thêm credit này THAY VÌ bắt đầu
+ * generate — không khớp 2 candidate cũ ở trên (text hoàn toàn khác), khiến
+ * waitForNewVideo phải đợi hết NGUYÊN generationTimeoutMs (vd 20 phút) mới
+ * timeout mơ hồ, dù thực ra đã "ngã ngũ" (không đủ credit) ngay từ lúc bấm
+ * Generate.
  */
 export const creditPaywallModalCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/redeem a code/i),
   () => page.getByText(/choose your plan/i),
+  () => page.getByText(/top up = bonus credits/i),
 ];
 
 /**
@@ -514,6 +523,18 @@ export const creditBalanceLocator = (page: Page): Locator =>
   page
     .locator("span.text-hl_text_00.select-none")
     .filter({ hasText: /^[\d,]+$/ });
+
+/**
+ * Số "fee" (credit sẽ bị trừ cho lượt tạo ảnh/video hiện tại) hiển thị cạnh
+ * icon coin trên trang tạo ảnh/video — KHÁC creditBalanceLocator (số credit
+ * CÒN LẠI của cả tài khoản). DOM thật client cung cấp:
+ * `<div class="flex items-center gap-1"><svg class="text-hl_text_00 h-4 w-4">...</svg><span class="text-hl_text_00 cl_hl_H9_B">72</span></div>`.
+ * Dò theo class "cl_hl_H9_B" — class riêng của số fee, không trùng với
+ * "select-none" của creditBalanceLocator — lọc thêm text phải là số nguyên
+ * (có thể có dấu phẩy ngăn hàng nghìn) để tránh khớp nhầm.
+ */
+export const generationFeeLocator = (page: Page): Locator =>
+  page.locator("span.cl_hl_H9_B").filter({ hasText: /^[\d,]+$/ });
 
 export async function getEntryFeedId(entry: Locator): Promise<string | null> {
   return entry.locator("div[data-feed-id]").first().getAttribute("data-feed-id").catch(() => null);
