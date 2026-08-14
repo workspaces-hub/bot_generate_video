@@ -587,7 +587,7 @@ export async function askChatAI(
       // if (result.isComplete) {
       if (downloadedFiles.length > 0) {
       }
-      await captureSnapshot(page, jobId, "result");
+      // await captureSnapshot(page, jobId, "result");
       break;
       // }
 

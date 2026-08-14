@@ -155,11 +155,11 @@ export async function generateImage(
       await selectChipOption(page, modelChipCandidates(page), model, "model");
     }
     await selectImageCount(page, imageCount);
-    await captureSnapshot(
-      page,
-      jobId + "-before-generate-cl ick",
-      "before-generate-click",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-before-generate-cl ick",
+    //   "before-generate-click",
+    // );
     // Chụp baseline TRƯỚC khi bấm Generate để sau đó biết chính xác ảnh
     // nào là MỚI (không phải ảnh cũ nhất trong lịch sử) — cùng cách tiếp
     // cận đã dùng cho video (xem waitForNewVideo trong aiVideo.ts).
@@ -169,11 +169,11 @@ export async function generateImage(
     await dismissBlockingOverlays(page);
     const generateButton = await firstVisible(generateButtonCandidates(page));
     await clickDismissingModals(page, generateButton);
-    await captureSnapshot(
-      page,
-      jobId + "-after-generate-click",
-      "after-generate-click",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-after-generate-click",
+    //   "after-generate-click",
+    // );
 
     const newEntry = await waitForNewImageEntry(
       page,

@@ -253,11 +253,11 @@ async function attemptGenerateVideo(
     // gì xảy ra (không "Creating...", không video mới) sau khi chờ hết
     // timeout. Thử xác nhận popup này (best-effort, không lỗi nếu không có).
     await confirmTermsPopupIfPresent(page);
-    await captureSnapshot(
-      page,
-      jobId + "-after-generate-click",
-      "after-generate-click",
-    );
+    // await captureSnapshot(
+    //   page,
+    //   jobId + "-after-generate-click",
+    //   "after-generate-click",
+    // );
 
     const newVideo = await waitForNewVideo(page, baseline);
 

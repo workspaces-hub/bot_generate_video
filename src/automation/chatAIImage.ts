@@ -268,7 +268,13 @@ export async function generateReferenceImage(
   refImagePaths?: string[],
 ): Promise<GenerateReferenceImageResult> {
   return enqueueImageGeneration(() =>
-    generateReferenceImageInternal(prompt, destDir, baseFileName, jobId, refImagePaths),
+    generateReferenceImageInternal(
+      prompt,
+      destDir,
+      baseFileName,
+      jobId,
+      refImagePaths,
+    ),
   );
 }
 
@@ -407,7 +413,7 @@ async function attemptGenerateReferenceImage(
     let latest: Locator;
     for (let attempt = 0; ; attempt++) {
       await sendImagePrompt(page, `${prompt}`);
-      await captureSnapshot(page, jobId, "result");
+      // await captureSnapshot(page, jobId, "result");
 
       const messages = assistantMessageLocator(page);
       if ((await messages.count()) === 0) {
@@ -439,9 +445,8 @@ async function attemptGenerateReferenceImage(
       if ((await images.count()) > 0) break;
 
       const latestText = await latest.innerText().catch(() => "");
-      const isChatAISideFailure = /wasn'?t able to generate|error on (my|our) side/i.test(
-        latestText,
-      );
+      const isChatAISideFailure =
+        /wasn'?t able to generate|error on (my|our) side/i.test(latestText);
       if (isChatAISideFailure && attempt < maxChatAITextFailureRetries) {
         console.warn(
           `[chatAIImage] ChatAI báo lỗi phía họ (lần ${attempt + 1}/${maxChatAITextFailureRetries}), gõ lại prompt để thử lại: "${latestText.slice(0, 200)}"`,
@@ -474,9 +479,7 @@ async function attemptGenerateReferenceImage(
     // mạng thật, không tự huỷ giữa chừng).
     const response = await page.context().request.get(src, { timeout: 0 });
     if (!response.ok()) {
-      throw new ChatAIImageError(
-        `Tải ảnh thất bại: HTTP ${response.status()}`,
-      );
+      throw new ChatAIImageError(`Tải ảnh thất bại: HTTP ${response.status()}`);
     }
 
     await fs.promises.mkdir(destDir, { recursive: true });
