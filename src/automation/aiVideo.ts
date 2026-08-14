@@ -208,7 +208,7 @@ async function attemptGenerateVideo(
       getAvailableCredit(page),
     ]);
     if (fee !== null && credit !== null) {
-      if (fee < credit) {
+      if (fee > credit) {
         if (
           usingReferenceImages ||
           usingCharacterReference ||

@@ -50,14 +50,22 @@ export const promptInputCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
- * Chip chọn model trong toolbar khung nhập prompt, hiện nhãn dạng "Hailuo 2.3".
- * Regex "hailuo" bên dưới KHỚP TEXT THẬT do chính site hiển thị (tên model
- * của bên thứ 3) — KHÔNG phải do code tự đặt tên, nên KHÔNG đổi được, khác
- * với các identifier/comment khác trong codebase (đã đổi hết sang "AIVideo"
- * theo yêu cầu người dùng) — đổi regex này sẽ khiến không khớp được text
- * thật trên UI nữa.
+ * Chip chọn model trong toolbar khung nhập prompt — nhãn hiển thị đổi theo
+ * model ĐANG chọn (vd "Hailuo 2.3", "MiniMax H3", tuỳ site đổi model mặc định
+ * theo thời gian), nên KHÔNG thể chỉ dò cố định 1 text pattern như trước.
+ * DOM thật xác nhận (debug "<jobId>-before-generate-click" job SCENE_02, lúc
+ * site đang mặc định model "MiniMax H3" — KHÔNG khớp regex /hailuo\s*\d/i cũ
+ * → chip không tìm thấy → selectChipOption âm thầm bỏ qua, giữ nguyên model
+ * mặc định của site dù muốn đổi model khác):
+ * `<div data-tour="model-selection-guide" class="flex h-8 cursor-pointer ...">...<div class="min-w-[32px] truncate text-[13px] ...">MiniMax H3</div>...</div>`
+ * — chip này là <div> (KHÔNG có role="button"), nhưng có
+ * `data-tour="model-selection-guide"` CỐ ĐỊNH, không phụ thuộc model đang
+ * hiển thị — dùng làm candidate CHÍNH. 2 candidate cũ (regex "hailuo") giữ
+ * lại làm fallback — text đó vẫn KHỚP TEXT THẬT site hiển thị lúc model đang
+ * chọn là dòng Hailuo, KHÔNG phải do code tự đặt tên nên không đổi được.
  */
 export const modelChipCandidates = (page: Page): Array<() => Locator> => [
+  () => page.locator('[data-tour="model-selection-guide"]'),
   () => page.getByRole("button", { name: /hailuo\s*\d/i }),
   () => page.getByText(/hailuo\s*\d(\.\d)?(\s*fast)?/i),
 ];
