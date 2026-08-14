@@ -216,7 +216,7 @@ async function attemptGenerateVideo(
         ) {
           throw new GenerationError("Tài khoản hết credit");
         } else {
-          model = "Hailuo 2.0";
+          model = "Hailuo 2.3";
         }
       }
     }
