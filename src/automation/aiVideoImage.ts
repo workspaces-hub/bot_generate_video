@@ -13,9 +13,9 @@ import {
   ensureLoggedIn,
   extractDownloadUrlWithoutWatermark,
   fetchWithRetry,
-  // getAvailableCredit,
+  getAvailableCredit,
   getFlightDataText,
-  // getGenerationFee,
+  getGenerationFee,
   gotoWithRetry,
   selectChipOption,
 } from "./aiVideo";
@@ -139,15 +139,15 @@ export async function generateImage(
     const promptInput = await firstVisible(promptInputCandidates(page), 10_000);
     await clickDismissingModals(page, promptInput);
     await promptInput.fill(prompt);
-    // const [fee, credit] = await Promise.all([
-    //   getGenerationFee(page),
-    //   getAvailableCredit(page),
-    // ]);
-    // if (fee !== null && credit !== null) {
-    //   if (fee < credit) {
-    //     model = "Image-1.0";
-    //   }
-    // }
+    const [fee, credit] = await Promise.all([
+      getGenerationFee(page),
+      getAvailableCredit(page),
+    ]);
+    if (fee !== null && credit !== null) {
+      if (fee < credit) {
+        model = "Image-1.0";
+      }
+    }
 
     // Cùng chip model dùng chung với trang tạo video (toolbar khung nhập
     // prompt) — xem chú thích selectChipOption trong aiVideo.ts.
