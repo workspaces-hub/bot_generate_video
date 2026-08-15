@@ -9,7 +9,11 @@ import {
 } from "../automation/aiVideo";
 import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
-import { generatedDirFor } from "../automation/storyboardPipeline";
+import {
+  generatedDirFor,
+  sanitizeId,
+  type StoryboardEntry,
+} from "../automation/storyboardPipeline";
 import { config } from "../config";
 import {
   confirmImageGeneration,
@@ -222,26 +226,57 @@ async function nextBackupVersion(
 }
 
 /**
+ * Đánh dấu "success": true cho ĐÚNG entry có id khớp targetId (so theo
+ * sanitizeId — cùng quy ước đặt tên file <id>.<đuôi> dùng trong
+ * storyboardPipeline.ts) trong file JSON storyboard ở jsonPath — dùng khi
+ * user tự upload thay thế 1 file (xem tryReplaceGeneratedFile): file đã
+ * THAY THẾ THỦ CÔNG coi như thành công, không cần chạy lại generate cho entry
+ * đó nữa (các hàm generate*ForFile resume theo field "success", xem
+ * storyboardPipeline.ts). Trả về true nếu tìm thấy VÀ đã cập nhật, false nếu
+ * không tìm thấy entry khớp (file JSON có thể đã bị xoá/đổi tên) — KHÔNG
+ * throw, để lỗi ở bước này không làm mất kết quả file đã thay thế thành công.
+ */
+async function markStoryboardEntrySuccess(
+  jsonPath: string,
+  targetId: string,
+): Promise<boolean> {
+  const raw = await fs.readFile(jsonPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  const entry = entries.find((e) => e.id && sanitizeId(e.id) === targetId);
+  if (!entry) return false;
+
+  entry.success = true;
+  await fs.writeFile(jsonPath, JSON.stringify(entries, null, 2), "utf-8");
+  return true;
+}
+
+/**
  * User gửi lại ảnh/video có TÊN FILE ĐÚNG format bot tự đặt tên khi gửi kết
- * quả (KHÔNG dựa vào caption — Telegram nén ảnh gửi kiểu "photo" mất hết tên
- * file gốc, và caption user gõ tay dễ gõ sai/thiếu; tên file client giữ
- * nguyên khi user tải về rồi gửi lại đáng tin cậy hơn) — coi đây là yêu cầu
- * THAY THẾ file đã generate trước đó bằng file mới (sửa tay 1 ảnh/video bị
- * lỗi mà không cần chạy lại cả job ChatAI). Backup file cũ (nếu có) thành
- * "<tên>_vXX.<đuôi>" (XX tăng dần theo số lần thay thế, xem
- * nextBackupVersion) trước khi ghi đè — không mất dữ liệu cũ, file MỚI
- * upload giữ nguyên tên gốc. Trả về true nếu ĐÃ xử lý (tên file khớp format)
- * — handler gọi hàm này phải dừng lại ngay, không xử lý tiếp theo luồng
- * ảnh/video tham chiếu thường.
+ * quả — ưu tiên tên file thật (document/video: Telegram giữ nguyên tên file
+ * gốc, đáng tin cậy hơn), fallback về caption nếu không có tên file khớp
+ * (photo: Telegram nén ảnh nên PhotoSize KHÔNG có file_name, chỉ còn cách
+ * dựa vào caption user tự gõ) — coi đây là yêu cầu THAY THẾ file đã generate
+ * trước đó bằng file mới (sửa tay 1 ảnh/video bị lỗi mà không cần chạy lại cả
+ * job ChatAI). Backup file cũ (nếu có) thành "<tên>_vXX.<đuôi>" (XX tăng dần
+ * theo số lần thay thế, xem nextBackupVersion) trước khi ghi đè — không mất
+ * dữ liệu cũ, file MỚI upload giữ nguyên tên gốc. Sau khi ghi file xong,
+ * đánh dấu luôn entry tương ứng trong JSON storyboard là "success": true
+ * (xem markStoryboardEntrySuccess) — để lần chạy lại/resume sau (vd bấm
+ * "Tiếp tục tạo video") không generate đè lên file vừa thay thế thủ công.
+ * Trả về true nếu ĐÃ xử lý (tên file HOẶC caption khớp format) — handler gọi
+ * hàm này phải dừng lại ngay, không xử lý tiếp theo luồng ảnh/video tham
+ * chiếu thường.
  */
 async function tryReplaceGeneratedFile(
   ctx: Context,
   fileId: string,
   fileName: string | undefined,
+  caption: string | undefined,
   promptMessageId: number,
 ): Promise<boolean> {
-  if (!fileName) return false;
-  const match = fileName.trim().match(REPLACEMENT_FILENAME_PATTERN);
+  const match =
+    fileName?.trim().match(REPLACEMENT_FILENAME_PATTERN) ??
+    caption?.trim().match(REPLACEMENT_FILENAME_PATTERN);
   if (!match) return false;
 
   const [, jsonBaseName, targetFileName] = match;
@@ -270,6 +305,18 @@ async function tryReplaceGeneratedFile(
     const buffer = Buffer.from(await response.arrayBuffer());
     await fs.writeFile(targetPath, buffer);
 
+    const targetId = path.parse(targetFileName).name;
+    const jsonPath = path.join(dir, `${jsonBaseName}.json`);
+    await markStoryboardEntrySuccess(jsonPath, targetId).catch(
+      (err) => {
+        console.error(
+          `[bot] Cập nhật success cho entry "${targetId}" trong "${jsonPath}" thất bại:`,
+          err,
+        );
+        return false;
+      },
+    );
+
     await ctx.reply(
       `✅ Đã thay thế "${targetFileName}" trong "${jsonBaseName}".`,
       { reply_parameters: { message_id: promptMessageId } },
@@ -286,17 +333,50 @@ async function tryReplaceGeneratedFile(
 }
 
 /**
+ * Copy field "success" từ entry CŨ sang entry MỚI có CÙNG id (so theo
+ * sanitizeId — cùng quy ước với markStoryboardEntrySuccess) — dùng khi user
+ * upload lại JSON storyboard đè lên file đã có (xem
+ * tryHandleReferenceJsonUpload): user có thể chỉ sửa vài prompt rồi upload
+ * lại NGUYÊN file, các entry KHÔNG đổi id mà đã generate xong ở file cũ
+ * không nên bị coi như "chưa chạy" chỉ vì đây là 1 lần upload mới — mutate
+ * trực tiếp từng phần tử trong newEntries, trả về số entry đã copy được.
+ */
+function mergeStoryboardSuccess(
+  oldEntries: StoryboardEntry[],
+  newEntries: StoryboardEntry[],
+): number {
+  const oldSuccessById = new Map<string, boolean>();
+  for (const e of oldEntries) {
+    if (e.id && e.success !== undefined) {
+      oldSuccessById.set(sanitizeId(e.id), e.success);
+    }
+  }
+
+  let mergedCount = 0;
+  for (const e of newEntries) {
+    if (!e.id) continue;
+    const oldSuccess = oldSuccessById.get(sanitizeId(e.id));
+    if (oldSuccess !== undefined) {
+      e.success = oldSuccess;
+      mergedCount++;
+    }
+  }
+  return mergedCount;
+}
+
+/**
  * User upload TRỰC TIẾP 1 file .json (KHÔNG cần caption đặc biệt như
  * tryReplaceGeneratedFile) — coi đây là kịch bản storyboard cho folder
  * generated/<tên file json>/ (cùng quy ước tên với
  * generatedDirFor). Nếu folder CHƯA có (lần đầu upload json này): tạo
  * folder + copy file vào làm kịch bản chính. Nếu folder đã có SẴN 1 file json
  * chính rồi: backup file cũ thành "<tên>_vXX.json" (XX tăng dần, xem
- * nextBackupVersion) trước khi copy file MỚI vào thay thế (giữ nguyên tên
- * gốc) — GIỐNG cơ chế tryReplaceGeneratedFile, dùng chung nextBackupVersion.
- * Trả về true nếu ĐÃ xử lý (đuôi .json) — handler gọi hàm này phải dừng lại
- * ngay, không rơi xuống luồng upload prompt file (.txt/.md) hay ảnh/video
- * tham chiếu thường.
+ * nextBackupVersion), rồi COPY "success" từ các entry cũ sang entry mới
+ * khớp id (xem mergeStoryboardSuccess) trước khi ghi file MỚI vào thay thế
+ * (giữ nguyên tên gốc) — GIỐNG cơ chế tryReplaceGeneratedFile, dùng chung
+ * nextBackupVersion. Trả về true nếu ĐÃ xử lý (đuôi .json) — handler gọi hàm
+ * này phải dừng lại ngay, không rơi xuống luồng upload prompt file (.txt/.md)
+ * hay ảnh/video tham chiếu thường.
  */
 async function tryHandleReferenceJsonUpload(
   ctx: Context,
@@ -317,17 +397,11 @@ async function tryHandleReferenceJsonUpload(
     await fs.mkdir(dir, { recursive: true });
 
     let backupNote = "";
+    let mergedCount = 0;
     const targetExists = await fs
       .access(targetPath)
       .then(() => true)
       .catch(() => false);
-    if (targetExists) {
-      const { name, ext } = path.parse(normalizedFileName);
-      const version = await nextBackupVersion(dir, name, ext);
-      const backupFileName = `${name}_v${String(version).padStart(2, "0")}${ext}`;
-      await fs.copyFile(targetPath, path.join(dir, backupFileName));
-      backupNote = ` (đã sao lưu bản cũ thành "${backupFileName}")`;
-    }
 
     const fileUrl = await ctx.telegram.getFileLink(fileId);
     const response = await fetch(fileUrl);
@@ -335,7 +409,37 @@ async function tryHandleReferenceJsonUpload(
       throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
     }
     const buffer = Buffer.from(await response.arrayBuffer());
-    await fs.writeFile(targetPath, buffer);
+
+    if (targetExists) {
+      const { name, ext } = path.parse(normalizedFileName);
+      const version = await nextBackupVersion(dir, name, ext);
+      const backupFileName = `${name}_v${String(version).padStart(2, "0")}${ext}`;
+      await fs.copyFile(targetPath, path.join(dir, backupFileName));
+      backupNote = ` (đã sao lưu bản cũ thành "${backupFileName}")`;
+
+      try {
+        const oldEntries: StoryboardEntry[] = JSON.parse(
+          await fs.readFile(targetPath, "utf-8"),
+        );
+        const newEntries: StoryboardEntry[] = JSON.parse(
+          buffer.toString("utf-8"),
+        );
+        mergedCount = mergeStoryboardSuccess(oldEntries, newEntries);
+        await fs.writeFile(
+          targetPath,
+          JSON.stringify(newEntries, null, 2),
+          "utf-8",
+        );
+      } catch (err) {
+        console.error(
+          `[bot] Copy success từ JSON cũ sang JSON mới thất bại (ghi nguyên file mới upload, không merge):`,
+          err,
+        );
+        await fs.writeFile(targetPath, buffer);
+      }
+    } else {
+      await fs.writeFile(targetPath, buffer);
+    }
 
     await ctx.reply(
       `✅ Đã lưu kịch bản "${normalizedFileName}".`,
@@ -913,10 +1017,20 @@ export function registerHandlers(bot: Telegraf): void {
   bot.on(message("photo"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
-    // KHÔNG gọi tryReplaceGeneratedFile ở đây — Telegram nén ảnh gửi kiểu
-    // "photo" nên KHÔNG giữ tên file gốc (PhotoSize không có file_name).
-    // Muốn thay thế file đã generate, user phải gửi qua nút đính kèm (📎,
-    // dạng "document") để giữ nguyên tên file — xem bot.on(message("document")).
+    // Ảnh gửi kiểu "photo" bị Telegram nén nên PhotoSize KHÔNG có file_name —
+    // chỉ còn dựa vào caption (nếu user gõ đúng format) để nhận ra yêu cầu
+    // thay thế file, xem tryReplaceGeneratedFile.
+    if (
+      await tryReplaceGeneratedFile(
+        ctx,
+        ctx.message.photo[ctx.message.photo.length - 1].file_id,
+        undefined,
+        ctx.message.caption,
+        ctx.message.message_id,
+      )
+    ) {
+      return;
+    }
 
     const userId = ctx.from.id;
 
@@ -976,16 +1090,17 @@ export function registerHandlers(bot: Telegraf): void {
   bot.on(message("video"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
 
-    if (
-      await tryReplaceGeneratedFile(
-        ctx,
-        ctx.message.video.file_id,
-        ctx.message.video.file_name,
-        ctx.message.message_id,
-      )
-    ) {
-      return;
-    }
+    // if (
+    //   await tryReplaceGeneratedFile(
+    //     ctx,
+    //     ctx.message.video.file_id,
+    //     ctx.message.video.file_name,
+    //     ctx.message.caption,
+    //     ctx.message.message_id,
+    //   )
+    // ) {
+    //   return;
+    // }
 
     const userId = ctx.from.id;
     if (
@@ -1043,6 +1158,7 @@ export function registerHandlers(bot: Telegraf): void {
         ctx,
         ctx.message.document.file_id,
         ctx.message.document.file_name,
+        ctx.message.caption,
         ctx.message.message_id,
       )
     ) {
