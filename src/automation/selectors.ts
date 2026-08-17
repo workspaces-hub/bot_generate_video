@@ -541,9 +541,24 @@ export const historyEntryLocator = (page: Page): Locator =>
 export const historyImageEntryLocator = (page: Page): Locator =>
   historyEntryLocator(page).filter({ hasNot: page.locator("video") });
 
-/** Các ảnh (có thể nhiều, vd 4 ảnh/lần generate) bên trong 1 entry lịch sử. */
+/**
+ * Ảnh THẬT SỰ đã generate xong (có thể nhiều, vd 4 ảnh/lần) bên trong 1
+ * entry lịch sử — PHẢI loại trừ 2 ảnh placeholder site tự chèn lúc card còn
+ * đang "Generating..." (DOM thật do người dùng cung cấp trực tiếp):
+ * `<img alt="creating default bg..." src=".../creating-default-bg-light.<hash>.png">`
+ * (nền mờ) và
+ * `<img alt="Creating Pulse..." src=".../creating-pulse.<hash>.svg">`
+ * (hiệu ứng nhấp nháy) — CẢ 2 đều có src hợp lệ (khớp "img[src]" bình
+ * thường) dù ảnh CHƯA xong, nên nếu không loại trừ sẽ đếm nhầm card đang xử
+ * lý thành "đã có ảnh" (khiến waitForEntryImagesToSettle trong
+ * aiVideoImage.ts tưởng đã ổn định/xong sớm, hoặc downloadImagesInEntry cố
+ * tải nhầm ảnh placeholder). Match theo tên file cố định (bỏ qua hash động
+ * phía sau), không phụ thuộc "alt" (dễ đổi theo ngôn ngữ hơn).
+ */
 export const entryImagesLocator = (entry: Locator): Locator =>
-  entry.locator("div[data-feed-id] img[src]:visible");
+  entry.locator(
+    'div[data-feed-id] img[src]:not([src*="creating-default-bg"]):not([src*="creating-pulse"]):visible',
+  );
 
 /**
  * Số credit còn lại của tài khoản, hiện ở sidebar trái cạnh nhãn gói đang

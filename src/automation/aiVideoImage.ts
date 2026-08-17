@@ -385,6 +385,25 @@ async function waitForNewImageEntry(
 }
 
 /**
+ * Card LỖI trong entry — DOM thật do người dùng cung cấp trực tiếp (batch 4
+ * ảnh, CẢ 4 card cùng rơi vào trạng thái này 1 lượt): mỗi card
+ * `[data-card-id]` mang "data-batch-disabled" + aria-disabled="true", KHÔNG
+ * có <img src> bên trong, chỉ icon ảnh vỡ + 1 nút tròn info
+ * (`absolute bottom-3 right-3`) để xem lý do lỗi. Trước đây từng thử dùng
+ * riêng "data-batch-disabled" để phát hiện sớm nhưng SAI (marker này còn
+ * dùng cho ít nhất 3 trạng thái ĐANG XỬ LÝ khác — spinner/progress ring/%) —
+ * nên ở đây bắt buộc thêm điều kiện KHÔNG có <img src> để loại các card đã
+ * xong thật, và chỉ kết luận "lỗi" khi seri TẤT CẢ card trong entry đều rơi
+ * vào trạng thái này CÙNG LÚC (không phải chỉ 1 vài card — 1 vài card lỗi
+ * xen giữa các card khác vẫn đang xử lý bình thường không tính).
+ */
+function countErrorCards(entry: Locator): Locator {
+  return entry.locator(
+    "[data-card-id][data-batch-disabled]:not(:has(img[src]))",
+  );
+}
+
+/**
  * Entry mới xuất hiện trong lịch sử KHÔNG có nghĩa cả 4 ảnh đã render xong —
  * site có thể thêm khối entry trước rồi lấp dần từng ảnh vào sau (giống
  * cách reference-image thumbnail vẫn "aria-busy" một lúc sau khi đã upload
@@ -392,14 +411,10 @@ async function waitForNewImageEntry(
  * thêm trong vài giây liên tiếp) trước khi coi là "đã đủ", thay vì đọc số
  * lượng ngay lúc entry vừa xuất hiện — tránh chỉ tải được 1-2/4 ảnh.
  *
- * BỎ HẲN cách dùng "data-batch-disabled" để phát hiện sớm case "cả 4 ảnh
- * đều lỗi" (từng thử 2 lần, cả 2 đều sai): marker này được site dùng cho
- * NHIỀU trạng thái "chưa phải asset hoàn chỉnh" khác nhau — không chỉ lỗi
- * thật mà cả đang xử lý (đã gặp ít nhất 3 kiểu UI khác nhau: spinner tròn,
- * progress ring %, và cả trạng thái % không có nút Cancel/Recreate nào) —
- * không có tín hiệu phủ định nào đủ tin cậy để loại trừ hết. Chấp nhận đánh
- * đổi: case "cả 4 đều lỗi" sẽ chờ hết timeoutMs (10 phút) mới báo lỗi, đổi
- * lấy việc không bao giờ cắt ngang 1 job đang generate bình thường.
+ * Thoát SỚM (không cần đợi hết timeoutMs) nếu TOÀN BỘ card trong entry đều
+ * là card lỗi (xem countErrorCards) — kiểm tra MỖI vòng poll, không cần chờ
+ * ổn định thêm vì đây là tín hiệu DOM trực tiếp (không suy đoán qua thời
+ * gian như trước).
  */
 async function waitForEntryImagesToSettle(
   page: Page,
@@ -407,6 +422,8 @@ async function waitForEntryImagesToSettle(
   timeoutMs = 600_000,
 ): Promise<void> {
   const images = entryImagesLocator(entry);
+  const totalCards = entry.locator("[data-card-id]");
+  const errorCards = countErrorCards(entry);
   const start = Date.now();
   const pollIntervalMs = 15000;
   const requiredStableMs = 120000;
@@ -415,9 +432,18 @@ async function waitForEntryImagesToSettle(
   let stableSince = Date.now();
 
   while (Date.now() - start < timeoutMs) {
-    if (Date.now() - stableSince >= requiredStableMs && lastCount > 0) {
+    const total = await totalCards.count();
+    const errored = await errorCards.count();
+    if (total > 0 && errored === total) {
+      throw new GenerationError(
+        `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi`,
+      );
+    }
+
+    if (lastCount > 0 && Date.now() - stableSince >= requiredStableMs) {
       return;
     }
+
     await page.waitForTimeout(pollIntervalMs);
     const count = await images.count();
     if (count !== lastCount) {
@@ -437,9 +463,17 @@ async function waitForEntryImagesToSettle(
  * media-card-wrapper và KHÔNG có thẻ <img src> bên trong (chỉ icon lỗi +
  * nút info), dù div[data-feed-id] vẫn tồn tại. Lọc theo ":has(img[src])" để
  * chỉ lấy card đã render ảnh thật, tránh cố tải ảnh không tồn tại.
+ *
+ * PHẢI loại trừ 2 ảnh placeholder site chèn lúc card còn "Generating..."
+ * (src chứa "creating-default-bg"/"creating-pulse" — cùng bằng chứng DOM
+ * thật đã dùng cho entryImagesLocator trong selectors.ts) — 2 ảnh này CŨNG
+ * khớp "img[src]" dù card chưa xong, nếu không loại trừ sẽ lấy nhầm feedId
+ * của card đang xử lý dở, cố tải ảnh chưa tồn tại.
  */
 async function getEntryFeedIds(entry: Locator): Promise<string[]> {
-  const cards = entry.locator("div[data-feed-id]:has(img[src])");
+  const cards = entry.locator(
+    'div[data-feed-id]:has(img[src]:not([src*="creating-default-bg"]):not([src*="creating-pulse"]))',
+  );
   const count = await cards.count();
   const ids: string[] = [];
   for (let i = 0; i < count; i++) {
