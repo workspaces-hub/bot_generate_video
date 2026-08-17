@@ -35,6 +35,7 @@ import {
   imageModeTabCandidates,
   modelChipCandidates,
   promptInputCandidates,
+  uploadedReferenceImageThumbnailLocator,
 } from "./selectors";
 
 export const MAX_REFERENCE_IMAGES = 16;
@@ -300,11 +301,20 @@ async function attemptUploadReferenceImage(
     await fileChooser.setFiles(imagePath);
     await page.waitForTimeout(1500);
 
-    // Xác nhận site THỰC SỰ ghi nhận ảnh vừa upload (đếm trong aria-label
-    // tăng đúng) — tránh lặp lại lỗi từng gặp: setFiles() không báo lỗi gì
-    // nhưng site vẫn hiện "(0/16)" vì click trúng nhầm phần tử khác.
-    const currentCount = await getReferenceImageCount(page);
-    if (currentCount !== null && currentCount < expectedCountAfter) {
+    // Xác nhận site THỰC SỰ ghi nhận ảnh vừa upload — tránh lặp lại lỗi từng
+    // gặp: setFiles() không báo lỗi gì nhưng site vẫn hiện "(0/16)" vì click
+    // trúng nhầm phần tử khác. getReferenceImageCount() chỉ đọc được số đếm
+    // "(N/M)" ở mode "Image Refs" — mode "Character Refs" (model
+    // "Image-1.0") KHÔNG có định dạng này nên luôn trả về null, khiến bước
+    // xác nhận bị BỎ QUA hoàn toàn nếu chỉ dựa vào nó (xác nhận qua debug
+    // thật: job Bread_Mice_SCENE_01_START — upload thất bại âm thầm, không
+    // có thumbnail nào nhưng code vẫn tiếp tục bấm Generate). Fallback đếm
+    // TRỰC TIẾP số thumbnail đã gắn (uploadedReferenceImageThumbnailLocator)
+    // khi getReferenceImageCount() không đọc được.
+    const currentCount =
+      (await getReferenceImageCount(page)) ??
+      (await uploadedReferenceImageThumbnailLocator(page).count());
+    if (currentCount < expectedCountAfter) {
       throw new Error(
         `Site chưa ghi nhận ảnh vừa upload (đếm hiện tại: ${currentCount}/${expectedCountAfter} kỳ vọng)`,
       );

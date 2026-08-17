@@ -500,6 +500,20 @@ export const busyReferenceImageThumbnailLocator = (page: Page): Locator =>
   page.locator('[aria-label="Uploaded image, click to preview"][aria-busy="true"]');
 
 /**
+ * Thumbnail ảnh tham chiếu đã upload, KHÔNG phân biệt còn busy hay đã xong —
+ * dùng để ĐẾM tổng số ảnh đã thực sự gắn vào khung nhập, thay thế
+ * getReferenceImageCount() ở mode "Character Refs" (model "Image-1.0" trên
+ * trang tạo ảnh): mode đó không có aria-label dạng "(N/M)" như "Image Refs"
+ * nên getReferenceImageCount() luôn trả về null — khiến bước xác nhận upload
+ * thành công trong attemptUploadReferenceImage (aiVideoImage.ts) bị BỎ QUA
+ * hoàn toàn, không phát hiện được lúc upload thất bại âm thầm (đã xác nhận
+ * qua debug thật: job Bread_Mice_SCENE_01_START — không có thumbnail nào
+ * hiện ra nhưng code vẫn bấm Generate).
+ */
+export const uploadedReferenceImageThumbnailLocator = (page: Page): Locator =>
+  page.locator('[aria-label="Uploaded image, click to preview"]');
+
+/**
  * DOM thật xác nhận: mỗi loại file dùng aria-label KHÁC NHAU khi đang xử lý
  * — ảnh: "Uploaded image, click to preview" (có hậu tố ", click to
  * preview"), video: "Uploaded video" (KHÔNG có hậu tố đó). Vì vậy chỉ dùng
