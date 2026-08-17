@@ -197,9 +197,17 @@ const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file"
  * tên file json và tên file ảnh/video). Tách theo dấu "__" ĐẦU TIÊN —
  * jsonBaseName lấy từ sanitizeId (storyboardPipeline.ts) chỉ có gạch dưới
  * ĐƠN, không có "__", nên phần còn lại sau "__" đầu tiên chắc chắn là tên
- * file gốc (kèm đuôi).
+ * file gốc (kèm đuôi). Dùng cho fileName (tên file THẬT — luôn có đuôi).
  */
 const REPLACEMENT_FILENAME_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
+
+/**
+ * GIỐNG REPLACEMENT_FILENAME_PATTERN nhưng KHÔNG bắt buộc đuôi file — dùng
+ * cho caption user tự gõ tay, không cần nhớ gõ kèm đuôi. Đuôi (nếu user có
+ * gõ) vẫn nằm nguyên trong nhóm 2; tryReplaceGeneratedFile tự kiểm tra bằng
+ * path.extname() và mặc định ".png" khi nhóm 2 không có đuôi nào.
+ */
+const REPLACEMENT_CAPTION_PATTERN = /^(.+?)__([^/\\]+)$/;
 
 /**
  * Tìm số version kế tiếp cho backup "<name>_vXX<ext>" trong dir — quét các
@@ -274,12 +282,19 @@ async function tryReplaceGeneratedFile(
   caption: string | undefined,
   promptMessageId: number,
 ): Promise<boolean> {
-  const match =
-    fileName?.trim().match(REPLACEMENT_FILENAME_PATTERN) ??
-    caption?.trim().match(REPLACEMENT_FILENAME_PATTERN);
+  const fileNameMatch = fileName?.trim().match(REPLACEMENT_FILENAME_PATTERN);
+  const captionMatch = fileNameMatch
+    ? null
+    : caption?.trim().match(REPLACEMENT_CAPTION_PATTERN);
+  const match = fileNameMatch ?? captionMatch;
   if (!match) return false;
 
-  const [, jsonBaseName, targetFileName] = match;
+  const [, jsonBaseName, rawTargetFileName] = match;
+  // Caption không bắt buộc gõ đuôi (REPLACEMENT_CAPTION_PATTERN không bắt
+  // buộc "." như REPLACEMENT_FILENAME_PATTERN) — mặc định ".png" nếu thiếu.
+  const targetFileName = path.extname(rawTargetFileName)
+    ? rawTargetFileName
+    : `${rawTargetFileName}.png`;
   const dir = generatedDirFor(jsonBaseName);
   const targetPath = path.join(dir, targetFileName);
 
@@ -307,15 +322,13 @@ async function tryReplaceGeneratedFile(
 
     const targetId = path.parse(targetFileName).name;
     const jsonPath = path.join(dir, `${jsonBaseName}.json`);
-    await markStoryboardEntrySuccess(jsonPath, targetId).catch(
-      (err) => {
-        console.error(
-          `[bot] Cập nhật success cho entry "${targetId}" trong "${jsonPath}" thất bại:`,
-          err,
-        );
-        return false;
-      },
-    );
+    await markStoryboardEntrySuccess(jsonPath, targetId).catch((err) => {
+      console.error(
+        `[bot] Cập nhật success cho entry "${targetId}" trong "${jsonPath}" thất bại:`,
+        err,
+      );
+      return false;
+    });
 
     await ctx.reply(
       `✅ Đã thay thế "${targetFileName}" trong "${jsonBaseName}".`,
@@ -441,13 +454,13 @@ async function tryHandleReferenceJsonUpload(
       await fs.writeFile(targetPath, buffer);
     }
 
-    await ctx.reply(
-      `✅ Đã lưu kịch bản "${normalizedFileName}".`,
-      { reply_parameters: { message_id: promptMessageId } },
-    );
+    await ctx.reply(`✅ Đã lưu kịch bản "${normalizedFileName}".`, {
+      reply_parameters: { message_id: promptMessageId },
+    });
   } catch (err) {
     console.error("[bot] Lưu file json tham chiếu thất bại:", err);
-    await ctx.telegram.sendMessage(config.adminsNotify,
+    await ctx.telegram.sendMessage(
+      config.adminsNotify,
       `❌ Không lưu được file json "${normalizedFileName}": ${err instanceof Error ? err.message : err}`,
     );
   }

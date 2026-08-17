@@ -144,7 +144,7 @@ export async function generateImage(
       getAvailableCredit(page),
     ]);
     if (fee !== null && credit !== null) {
-      if (fee < credit) {
+      if (fee > credit) {
         model = "Image-1.0";
       }
     }
