@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { FileChooser, Locator, Page } from "playwright";
 import { config } from "../config";
 import { getBrowserContext } from "./browser";
 import {
@@ -8,7 +8,6 @@ import {
   captureErrorSnapshot,
   captureSnapshot,
   clickDismissingModals,
-  confirmTermsPopupIfPresent,
   dismissBlockingOverlays,
   dismissPaywallIfBlocking,
   ensureLoggedIn,
@@ -23,6 +22,7 @@ import {
 import {
   addReferenceImageButtonCandidates,
   busyReferenceImageThumbnailLocator,
+  confirmCharacterButtonCandidates,
   creditPaywallModalCandidates,
   entryImagesLocator,
   errorIndicatorCandidates,
@@ -263,28 +263,35 @@ async function attemptUploadReferenceImage(
 
     // Model "Image-1.0" dùng chung nút "Upload Character Refs" với mode
     // Character Reference bên trang video (xem addReferenceImageButtonCandidates)
-    // — LẦN ĐẦU mỗi phiên bấm nút này hiện popup Ant Design "Subject
-    // Reference Terms of Use" TRƯỚC, CHƯA mở file picker ngay (DOM thật do
-    // người dùng cung cấp trực tiếp). Đăng ký chờ filechooser TRƯỚC khi click
-    // (tránh race — event có thể bắn ra ngay trong lúc click nếu ToS đã được
-    // đồng ý từ trước), rồi mới xác định: nếu ToS vừa hiện + vừa xác nhận,
-    // click LẠI nút để thực sự mở file picker (lần click đầu chỉ mở ToS);
-    // nếu không, dùng đúng file picker đã mở từ lần click đầu.
-    const firstClickFileChooser = page
+    // — bấm nút này hiện popup Ant Design "Subject Reference Terms of Use"
+    // TRƯỚC, CHƯA mở file picker ngay (DOM thật do người dùng cung cấp trực
+    // tiếp). QUAN TRỌNG: xác nhận qua debug thật — chính cú click nút
+    // "Confirm" trên popup ToS mới là thứ THỰC SỰ mở file picker, click LẠI
+    // nút upload ban đầu sau khi confirm KHÔNG mở được gì (ToS hiện lại/
+    // timeout). Đăng ký chờ filechooser TRƯỚC khi click nút upload lần đầu
+    // (tránh race — event có thể bắn ra ngay lúc click nếu ToS đã đồng ý từ
+    // trước, không hiện lại nữa).
+    const fileChooserAfterFirstClick = page
       .waitForEvent("filechooser", { timeout: 10_000 })
       .catch(() => null);
     await clickDismissingModals(page, addButton);
 
-    const confirmedTerms = await confirmTermsPopupIfPresent(page, 3000);
+    const termsConfirmButton = await firstVisible(
+      confirmCharacterButtonCandidates(page),
+      3000,
+    ).catch(() => null);
+    const canConfirmTerms =
+      termsConfirmButton !== null &&
+      (await termsConfirmButton.isEnabled().catch(() => false));
 
-    const fileChooser = confirmedTerms
+    const fileChooser: FileChooser | null = canConfirmTerms
       ? (
           await Promise.all([
             page.waitForEvent("filechooser", { timeout: 10_000 }),
-            clickDismissingModals(page, addButton),
+            termsConfirmButton!.click(),
           ])
         )[0]
-      : await firstClickFileChooser;
+      : await fileChooserAfterFirstClick;
 
     if (!fileChooser) {
       throw new Error("Không mở được file picker sau khi bấm nút upload");
