@@ -442,9 +442,18 @@ export const imageModeTabCandidates = (page: Page): Array<() => Locator> => [
  * nhận được DOM thật: aria-label="Upload Image Refs(N/16)" — số đếm N thay
  * đổi động sau mỗi lần upload, nên chỉ match phần PREFIX cố định, không
  * match cả cụm (khớp cả số sẽ luôn fail sau lần upload đầu vì số đổi).
+ *
+ * Nhãn nút đổi theo MODEL đang chọn trên trang tạo ảnh — DOM thật xác nhận
+ * (debug "<jobId>", job Bread_Mice_SCENE_01_START lúc model bị hạ về
+ * "Image-1.0" do thiếu credit, xem selectChipOption trong generateImage):
+ * `<div role="button" aria-label="Upload Character Refs" ...>` — model
+ * "Image-1.0" dùng CHUNG nhãn/thuộc tính với nút Character Reference của
+ * trang VIDEO (addCharacterRefButtonCandidates) thay vì "Upload Image Refs"
+ * như các model khác (vd "GPT Image 2"). Thêm làm fallback.
  */
 export const addReferenceImageButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /^Upload Image Refs/i }),
+  () => page.getByRole("button", { name: /^Upload Character Refs/i }),
 ];
 
 /**

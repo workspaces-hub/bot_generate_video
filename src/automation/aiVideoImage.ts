@@ -8,6 +8,7 @@ import {
   captureErrorSnapshot,
   captureSnapshot,
   clickDismissingModals,
+  confirmTermsPopupIfPresent,
   dismissBlockingOverlays,
   dismissPaywallIfBlocking,
   ensureLoggedIn,
@@ -259,10 +260,36 @@ async function attemptUploadReferenceImage(
       addReferenceImageButtonCandidates(page),
       8000,
     );
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent("filechooser", { timeout: 10_000 }),
-      clickDismissingModals(page, addButton),
-    ]);
+
+    // Model "Image-1.0" dùng chung nút "Upload Character Refs" với mode
+    // Character Reference bên trang video (xem addReferenceImageButtonCandidates)
+    // — LẦN ĐẦU mỗi phiên bấm nút này hiện popup Ant Design "Subject
+    // Reference Terms of Use" TRƯỚC, CHƯA mở file picker ngay (DOM thật do
+    // người dùng cung cấp trực tiếp). Đăng ký chờ filechooser TRƯỚC khi click
+    // (tránh race — event có thể bắn ra ngay trong lúc click nếu ToS đã được
+    // đồng ý từ trước), rồi mới xác định: nếu ToS vừa hiện + vừa xác nhận,
+    // click LẠI nút để thực sự mở file picker (lần click đầu chỉ mở ToS);
+    // nếu không, dùng đúng file picker đã mở từ lần click đầu.
+    const firstClickFileChooser = page
+      .waitForEvent("filechooser", { timeout: 10_000 })
+      .catch(() => null);
+    await clickDismissingModals(page, addButton);
+
+    const confirmedTerms = await confirmTermsPopupIfPresent(page, 3000);
+
+    const fileChooser = confirmedTerms
+      ? (
+          await Promise.all([
+            page.waitForEvent("filechooser", { timeout: 10_000 }),
+            clickDismissingModals(page, addButton),
+          ])
+        )[0]
+      : await firstClickFileChooser;
+
+    if (!fileChooser) {
+      throw new Error("Không mở được file picker sau khi bấm nút upload");
+    }
+
     await fileChooser.setFiles(imagePath);
     await page.waitForTimeout(1500);
 

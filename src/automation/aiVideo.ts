@@ -660,8 +660,13 @@ async function attemptUploadCharacterImage(
  * ở đây). Best-effort: không coi là lỗi nếu không thấy (popup có thể không
  * phải lúc nào cũng xuất hiện, vd với "Image Reference").
  */
-/** Trả về true nếu THỰC SỰ tìm thấy và bấm được nút Confirm (best-effort, không throw). */
-async function confirmTermsPopupIfPresent(
+/**
+ * Trả về true nếu THỰC SỰ tìm thấy và bấm được nút Confirm (best-effort,
+ * không throw). Xuất ra để aiVideoImage.ts dùng lại — cùng popup "Subject
+ * Reference Terms of Use" xuất hiện khi bấm nút "Upload Character Refs" ở
+ * trang tạo ảnh với model "Image-1.0" (xem attemptUploadReferenceImage).
+ */
+export async function confirmTermsPopupIfPresent(
   page: Page,
   timeoutMs = 15_000,
 ): Promise<boolean> {
