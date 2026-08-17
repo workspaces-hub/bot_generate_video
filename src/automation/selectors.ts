@@ -190,6 +190,24 @@ export const confirmCharacterButtonCandidates = (page: Page): Array<() => Locato
 ];
 
 /**
+ * Nút "Confirm" trong modal "Switch model confirmation" (Ant Modal.confirm)
+ * — tự hiện lên khi selectChipOption đổi model (vd hạ về model rẻ hơn do
+ * thiếu credit, xem generateImage/generateVideo) MÀ đang có ảnh tham chiếu
+ * đã upload: "Related uploaded image will be removed. Please confirm this
+ * action." DOM thật xác nhận :
+ * `<div class="ant-modal-confirm-btns"><button>Cancel</button><button class="ant-btn-primary">Confirm</button></div>`
+ * — scope trong .ant-modal-confirm-btns để KHÔNG lẫn với nút "Confirm" khác
+ * trên trang (vd confirmCharacterButtonCandidates ở trên, popup Terms of Use
+ * riêng của Character Reference).
+ */
+export const modelSwitchConfirmButtonCandidates = (page: Page): Array<() => Locator> => [
+  () =>
+    page
+      .locator(".ant-modal-confirm-btns")
+      .getByRole("button", { name: /^confirm$/i }),
+];
+
+/**
  * Nút "Start Frame" (upload ảnh khởi đầu video) hiện trực tiếp trong khung
  * nhập prompt tạo video, cạnh "End Frame". Locale JSON nhúng sẵn trong trang
  * xác nhận nhãn nút thật là "Start" (key "start_frame_upload_btn":"Start"),

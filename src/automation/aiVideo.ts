@@ -30,6 +30,7 @@ import {
   historyVideoLocator,
   isPageCrashError,
   modelChipCandidates,
+  modelSwitchConfirmButtonCandidates,
   openPopoverLocator,
   promptInputCandidates,
   resolutionChipCandidates,
@@ -680,6 +681,28 @@ async function confirmTermsPopupIfPresent(
 }
 
 /**
+ * Modal "Switch model confirmation" (Ant Modal.confirm) tự hiện lên khi
+ * selectChipOption đổi model MÀ đang có ảnh tham chiếu đã upload — đổi model
+ * sẽ XOÁ các ảnh đó, modal chặn lại yêu cầu xác nhận trước khi tiếp tục. Gọi
+ * NGAY sau khi bấm chọn option model trong dropdown (xem selectChipOption).
+ * Best-effort: đa số lần đổi model KHÔNG có ảnh tham chiếu nào nên modal này
+ * không xuất hiện — timeout ngắn (3s), không throw nếu không thấy.
+ *
+ * LƯU Ý: bấm Confirm ở đây đồng nghĩa CHẤP NHẬN mất ảnh tham chiếu đã upload
+ * — chấp nhận được vì việc đổi model (thường do thiếu credit, hạ về model rẻ
+ * hơn) là quyết định chủ động của code, không phải lỗi cần tránh.
+ */
+async function confirmModelSwitchIfPresent(page: Page): Promise<void> {
+  const confirmButton = await firstVisible(
+    modelSwitchConfirmButtonCandidates(page),
+    3000,
+  ).catch(() => null);
+  if (!confirmButton) return;
+  await confirmButton.click().catch(() => {});
+  await page.waitForTimeout(500);
+}
+
+/**
  * Sau khi upload ảnh nhân vật, site cần vài giây để nhận diện (character
  * detection) trước khi cho generate — do người dùng xác nhận trực tiếp qua
  * thao tác thủ công trên site. Poll tới khi 1 trong 2 điều xảy ra:
@@ -979,6 +1002,7 @@ export async function selectChipOption(
       3000,
     );
     await clickWithForceFallback(option);
+    await confirmModelSwitchIfPresent(page);
   } catch (err) {
     // console.warn(
     //   `[aiVideo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
