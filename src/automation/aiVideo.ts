@@ -1079,6 +1079,29 @@ async function dismissAntModalIfPresent(page: Page): Promise<boolean> {
 }
 
 /**
+ * Coach-mark onboarding tooltip (Ant Popover, KHÔNG phải .ant-modal-wrap —
+ * dismissAntModalIfPresent không nhận diện được) — DOM thật xác nhận (job
+ * `<div data-coach-mark="true">...<button aria-label="Close">`, nội dung
+ * "Let images join the conversation" (giới thiệu tính năng "@" mention). Tự
+ * hiện lên sau khi đã upload vài ảnh tham chiếu, có thể che đúng khu vực nút
+ * "Upload Image Refs"/"Upload Character Refs" kế bên — khiến click "thành
+ * công" (không throw) nhưng không mở được file picker hệ điều hành
+ * (waitForEvent("filechooser") timeout). Đóng bằng nút Close SCOPE bên trong
+ * chính popover này — KHÔNG dùng getByRole("button", {name: /close/i}) chung
+ * chung như dismissBlockingOverlays bên dưới (có thể khớp nhầm 1 phần tử
+ * "Close" khác đứng trước trong DOM nhưng không hiển thị).
+ */
+async function dismissCoachMarkIfPresent(page: Page): Promise<void> {
+  const closeButton = page
+    .locator('[data-coach-mark="true"] button[aria-label="Close"]')
+    .first();
+  if (await closeButton.isVisible({ timeout: 500 }).catch(() => false)) {
+    await closeButton.click().catch(() => {});
+    await page.waitForTimeout(300);
+  }
+}
+
+/**
  * Bấm 1 locator, nếu bị chặn bởi modal quảng cáo/sự kiện (site hay bật bất
  * chợt ở nhiều thời điểm) thì tự đóng modal rồi thử lại 1 lần trước khi báo
  * lỗi hẳn.
@@ -1125,6 +1148,7 @@ export async function clickDismissingModals(
  */
 export async function dismissBlockingOverlays(page: Page): Promise<void> {
   await dismissAntModalIfPresent(page);
+  await dismissCoachMarkIfPresent(page);
 
   await page.keyboard.press("Escape").catch(() => {});
   const closeButton = page
