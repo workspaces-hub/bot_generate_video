@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+.env_prd
 storage/session.json
 storage/chatgpt-session.json
 storage/manual-cookies.json
