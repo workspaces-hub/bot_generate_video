@@ -114,6 +114,20 @@ export async function generateImage(
       .catch(() => {});
     await dismissBlockingOverlays(page);
 
+    // Cùng lý do đã sửa cho video (xem chú thích generateVideo trong
+    // aiVideo.ts): gotoWithRetry chỉ chờ domcontentloaded, SPA còn cần thêm
+    // thời gian hydrate. PHẢI chờ TRƯỚC vòng lặp upload ảnh tham chiếu bên
+    // dưới, KHÔNG chỉ trước ô nhập prompt như trước đây — xác nhận qua debug
+    // thật (job Bread_Mice_SCENE_01_START): có ảnh tham chiếu vẫn gặp
+    // "Không tìm thấy phần tử nào khớp" ngay ở bước tìm nút "Upload Image
+    // Refs" đầu tiên (page bailout to client-side rendering, main content
+    // còn trắng tinh) vì trước đây chỉ chờ mạng rảnh khi referenceImagePaths
+    // rỗng — đặc biệt dễ gặp ngay sau khi browser vừa restart do crash
+    // (cold start chậm hơn bình thường).
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
+
     for (let i = 0; i < referenceImagePaths.length; i++) {
       await uploadReferenceImage(page, referenceImagePaths[i], i + 1);
     }
@@ -123,16 +137,6 @@ export async function generateImage(
       // rảnh (không còn request nào đang chạy) trước khi bấm Generate, để
       // tránh generate khi ảnh cuối vẫn đang tải lên dở dang.
       await waitForUploadsToSettle(page);
-    }
-
-    // Cùng lý do đã sửa cho video (xem chú thích generateVideo trong
-    // aiVideo.ts): gotoWithRetry chỉ chờ domcontentloaded, SPA còn cần thêm
-    // thời gian hydrate. Nếu không có ảnh tham chiếu thì không bước nào ở
-    // trên chờ mạng cả, nên vẫn cần chờ ở đây trước khi tìm ô nhập prompt.
-    if (referenceImagePaths.length === 0) {
-      await page
-        .waitForLoadState("networkidle", { timeout: 20_000 })
-        .catch(() => {});
     }
 
     await dismissBlockingOverlays(page);
