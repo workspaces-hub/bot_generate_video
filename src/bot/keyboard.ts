@@ -10,12 +10,15 @@ export const CHATAI_BUTTON_LABEL = "Tạo video từ kịch bản";
 export const CHATAI_CHECK_BUTTON_LABEL = "Check prompt kịch bản";
 /** Dừng SỚM các job đang chờ/đang gen ảnh-video của CHARACTER_REF_BUTTON_LABEL và CHATAI_BUTTON_LABEL — xem stopAll() trong queue.ts. */
 export const STOP_ALL_BUTTON_LABEL = "🛑 Stop All";
-/** Retry job "storyboardVideo"/"storyboardImagesAIVideo" đã lỗi trước đó (xem failedStoryboardJobs/continueFailedStoryboardVideo trong queue.ts) — user nhập tên file json, bot tự tra lại. */
+/** Retry job "storyboardVideo" đã lỗi trước đó (xem failedStoryboardJobs/continueFailedStoryboardVideo trong queue.ts) — user nhập tên file json, bot tự tra lại. */
 export const CONTINUE_VIDEO_BUTTON_LABEL = "Tiếp tục tạo video";
+/** Giống CONTINUE_VIDEO_BUTTON_LABEL nhưng cho job "storyboardImagesAIVideo" (gen ảnh CHARACTER/LOCATION/SCENE_SETTING) — xem continueFailedStoryboardImages trong queue.ts. */
+export const CONTINUE_SCENE_FRAME_BUTTON_LABEL = "Tiếp tục tạo frame";
 
 export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
-  [STOP_ALL_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
+  [CONTINUE_SCENE_FRAME_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
+  [STOP_ALL_BUTTON_LABEL],
   [IMAGE_BUTTON_LABEL, PROMPT_BUTTON_LABEL],
   [VIDEO_REF_BUTTON_LABEL, CHARACTER_REF_BUTTON_LABEL],
   [OMNI_REF_BUTTON_LABEL],

@@ -35,8 +35,22 @@ export const config = {
     process.env.AIVIDEO_CREATE_VIDEO_REF_PATH ??
     "/create/subject-reference-to-video",
 
+  // Session cho hàng đợi VIDEO (AIVideo) — xem getVideoBrowserContext trong
+  // browser.ts. Giữ nguyên tên biến môi trường STORAGE_STATE_PATH cũ (không
+  // đổi) để không phá session đã đăng nhập sẵn trên VPS.
   storageStatePath: path.resolve(
     process.env.STORAGE_STATE_PATH ?? "./storage/session.json",
+  ),
+  // Session RIÊNG cho hàng đợi ẢNH (AIVideo) — 2 TÀI KHOẢN KHÁC NHAU theo
+  // yêu cầu người dùng (không chỉ 2 browser context của CÙNG 1 tài khoản):
+  // gen ảnh và gen video giờ chạy song song ở 2 hàng đợi độc lập (xem
+  // imageJobs/videoJobs trong queue.ts), tách hẳn tài khoản để không tranh
+  // credit/rate-limit lẫn nhau. Đăng nhập bằng `npm run login -- image` (xem
+  // scripts/login.ts) — KHÁC lệnh đăng nhập tài khoản video (`npm run login`
+  // hoặc `npm run login -- video`).
+  aiVideoImageStorageStatePath: path.resolve(
+    process.env.AIVIDEO_IMAGE_STORAGE_STATE_PATH ??
+      "./storage/session-image.json",
   ),
   downloadDir: path.resolve(process.env.DOWNLOAD_DIR ?? "./storage/downloads"),
   // Ảnh tham chiếu tải từ Telegram (tính năng tạo ảnh) lưu tạm ở đây.

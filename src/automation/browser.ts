@@ -54,10 +54,34 @@ export function createBrowserContextManager(
 /**
  * Một BrowserContext dùng chung cho mọi job video/ảnh (AIVideo), được
  * tái sử dụng để tránh đăng nhập lại liên tục và giảm tải khi khởi động
- * Chrome. Mỗi job tự mở/đóng page riêng (xem aiVideo.ts).
+ * Chrome. Mỗi job tự mở/đóng page riêng (xem aiVideo.ts). Dùng cho các
+ * script CLI một lần (check-credit, download-video-by-feed-id, ...) — KHÔNG
+ * dùng cho bot lúc chạy thật, xem getImageBrowserContext/getVideoBrowserContext.
  */
 export const getBrowserContext = createBrowserContextManager(
   config.storageStatePath,
   "browser",
+  'Chạy "npm run login" trước khi tạo video.',
+);
+
+/**
+ * 2 BrowserContext RIÊNG BIỆT cho hàng đợi ẢNH và hàng đợi VIDEO (xem
+ * imageJobs/videoJobs trong queue.ts) — mỗi hàng đợi giờ chạy độc lập, có
+ * thể xử lý CÙNG LÚC (không còn xếp chung 1 hàng đợi như trước). Theo yêu
+ * cầu người dùng, dùng LUÔN 2 TÀI KHOẢN AIVideo KHÁC NHAU (2 session file
+ * khác nhau — aiVideoImageStorageStatePath riêng cho ảnh, storageStatePath
+ * như cũ cho video), KHÔNG chỉ 2 browser context của CÙNG 1 tài khoản — vừa
+ * tránh 2 tab thao tác đồng thời trên CÙNG tài khoản dễ xung đột, vừa tránh
+ * tranh credit/rate-limit giữa ảnh và video. Đăng nhập tài khoản ảnh bằng
+ * `npm run login -- image` (xem scripts/login.ts).
+ */
+export const getImageBrowserContext = createBrowserContextManager(
+  config.aiVideoImageStorageStatePath,
+  "browser-image",
+  'Chạy "npm run login -- image" trước khi tạo ảnh.',
+);
+export const getVideoBrowserContext = createBrowserContextManager(
+  config.storageStatePath,
+  "browser-video",
   'Chạy "npm run login" trước khi tạo video.',
 );

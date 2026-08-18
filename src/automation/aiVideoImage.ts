@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FileChooser, Locator, Page } from "playwright";
 import { config } from "../config";
-import { getBrowserContext } from "./browser";
+import { getImageBrowserContext } from "./browser";
 import {
   GenerationError,
   captureErrorSnapshot,
@@ -95,7 +95,7 @@ export async function generateImage(
     );
   }
 
-  const context = await getBrowserContext();
+  const context = await getImageBrowserContext();
   const page = await context.newPage();
   try {
     const url = new URL(
@@ -129,16 +129,16 @@ export async function generateImage(
     await page
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
-    const [fee, credit] = await Promise.all([
-      getGenerationFee(page),
-      getAvailableCredit(page),
-    ]);
-    if (fee !== null && credit !== null) {
-      if (fee > credit) {
-        model = "Image-1.0";
-      }
-    }
-
+    // const [fee, credit] = await Promise.all([
+    //   getGenerationFee(page),
+    //   getAvailableCredit(page),
+    // ]);
+    // if (fee !== null && credit !== null) {
+    //   if (fee > credit) {
+    //     model = "Image-1.0";
+    //   }
+    // }
+    model = "GPT Image 2";
     // Cùng chip model dùng chung với trang tạo video (toolbar khung nhập
     // prompt) — xem chú thích selectChipOption trong aiVideo.ts.
     if (model) {

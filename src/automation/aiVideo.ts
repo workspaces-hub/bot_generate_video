@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
-import { getBrowserContext } from "./browser";
+import { getVideoBrowserContext } from "./browser";
 import {
   addCharacterRefButtonCandidates,
   addOmniReferenceButtonCandidates,
@@ -114,7 +114,7 @@ async function attemptGenerateVideo(
     );
   }
 
-  const context = await getBrowserContext();
+  const context = await getVideoBrowserContext();
   const page = await context.newPage();
   try {
     const usingReferenceImages = referenceImagePaths.length > 0;
@@ -204,24 +204,24 @@ async function attemptGenerateVideo(
     if (endFramePath) {
       await uploadEndFrame(page, endFramePath);
     }
-    const [fee, credit] = await Promise.all([
-      getGenerationFee(page),
-      getAvailableCredit(page),
-    ]);
-    if (fee !== null && credit !== null) {
-      if (fee > credit) {
-        if (
-          usingReferenceImages ||
-          usingCharacterReference ||
-          usingOmniReference
-        ) {
-          throw new GenerationError("Tài khoản hết credit");
-        } else {
-          model = "Hailuo 2.3";
-        }
-      }
-    }
-
+    // const [fee, credit] = await Promise.all([
+    //   getGenerationFee(page),
+    //   getAvailableCredit(page),
+    // ]);
+    // if (fee !== null && credit !== null) {
+    //   if (fee > credit) {
+    //     if (
+    //       usingReferenceImages ||
+    //       usingCharacterReference ||
+    //       usingOmniReference
+    //     ) {
+    //       throw new GenerationError("Tài khoản hết credit");
+    //     } else {
+    //       model = "Hailuo 2.3";
+    //     }
+    //   }
+    // }
+    model = "Hailuo 2.3";
     if (model) {
       await selectChipOption(page, modelChipCandidates(page), model, "model");
     }
