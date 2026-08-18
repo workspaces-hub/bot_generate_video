@@ -8,6 +8,7 @@ import {
   captureErrorSnapshot,
   captureSnapshot,
   clickDismissingModals,
+  clickWithForceFallback,
   dismissBlockingOverlays,
   dismissPaywallIfBlocking,
   ensureLoggedIn,
@@ -275,7 +276,18 @@ async function attemptUploadReferenceImage(
     const fileChooserAfterFirstClick = page
       .waitForEvent("filechooser", { timeout: 10_000 })
       .catch(() => null);
-    await clickDismissingModals(page, addButton);
+    // Icon chip model (vd "Nano Banana 2 model icon") đôi khi đè lên đúng
+    // nút này, khiến Playwright báo "subtree intercepts pointer events" và
+    // click thường không bao giờ qua được (xác nhận qua log lỗi thật, job
+    // Bread_Mice_1_SCENE_001_START) — dismissBlockingOverlays không dọn được
+    // vì đây không phải modal/popup, chỉ là 1 icon layout đè lên. Fallback
+    // force click bỏ qua kiểm tra bị che của Playwright sau khi click
+    // thường (có dismiss modal) thất bại.
+    try {
+      await clickDismissingModals(page, addButton);
+    } catch {
+      await clickWithForceFallback(addButton, 15_000);
+    }
 
     const termsConfirmButton = await firstVisible(
       confirmCharacterButtonCandidates(page),

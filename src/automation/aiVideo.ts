@@ -1215,9 +1215,11 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
  * sách option trong popover và liên tục thay đổi vị trí — khiến Playwright
  * coi phần tử đích là "not stable"/bị che, click thường không bao giờ qua
  * được. Fallback: bấm thẳng vào toạ độ phần tử (force), bỏ qua các kiểm tra
- * ổn định/che khuất của Playwright.
+ * ổn định/che khuất của Playwright. Xuất ra để aiVideoImage.ts dùng lại —
+ * cùng vấn đề với icon chip model (vd "Nano Banana 2 model icon") đè lên nút
+ * "Upload Image Refs" (xem attemptUploadReferenceImage).
  */
-async function clickWithForceFallback(
+export async function clickWithForceFallback(
   locator: Locator,
   timeoutMs = 10_000,
 ): Promise<void> {

@@ -1235,6 +1235,27 @@ export function registerHandlers(bot: Telegraf): void {
           ctx.message.document.file_id,
           ext,
         );
+        // Nối thêm nội dung format hướng dẫn xử lý (config.formatOuput) vào
+        // cuối file TRƯỚC KHI upload lên ChatAI, theo yêu cầu người dùng —
+        // đọc lỗi/file không tồn tại thì bỏ qua bước này (không chặn cả job
+        // ChatAI chỉ vì thiếu file phụ trợ này).
+        const promptFileContent = await fs.readFile(promptFilePath, "utf-8");
+        const formatOutputContent = await fs
+          .readFile(config.formatOuput, "utf-8")
+          .catch((err) => {
+            console.error(
+              `[bot] Không đọc được file format output (${config.formatOuput}), bỏ qua:`,
+              err,
+            );
+            return "";
+          });
+        if (formatOutputContent) {
+          await fs.writeFile(
+            promptFilePath,
+            `${promptFileContent}\n${formatOutputContent}`,
+            "utf-8",
+          );
+        }
       } catch (err) {
         console.error("[bot] Tải file prompt ChatAI thất bại:", err);
         await ctx.reply(
