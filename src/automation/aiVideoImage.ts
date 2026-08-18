@@ -141,9 +141,22 @@ export async function generateImage(
     // }
     model = "GPT Image 2";
     // Cùng chip model dùng chung với trang tạo video (toolbar khung nhập
-    // prompt) — xem chú thích selectChipOption trong aiVideo.ts.
+    // prompt) — xem chú thích selectChipOption trong aiVideo.ts. Đọc nhãn
+    // chip HIỆN TẠI trước — nếu đã đúng model cần chọn thì bỏ qua luôn,
+    // KHÔNG gọi selectChipOption: đổi model (kể cả "đổi" sang model đang
+    // chọn sẵn) có thể hiện popup "Switch model confirmation" làm MẤT ảnh
+    // tham chiếu đã upload trước đó (xem confirmModelSwitchIfPresent trong
+    // aiVideo.ts) — tránh gọi khi không cần thiết.
     if (model) {
-      await selectChipOption(page, modelChipCandidates(page), model, "model");
+      const modelChip = await firstVisible(modelChipCandidates(page), 3000).catch(
+        () => null,
+      );
+      const currentModelLabel = modelChip
+        ? (await modelChip.innerText().catch(() => "")).trim()
+        : "";
+      if (currentModelLabel.toLowerCase() !== model.toLowerCase()) {
+        await selectChipOption(page, modelChipCandidates(page), model, "model");
+      }
     }
 
     for (let i = 0; i < referenceImagePaths.length; i++) {
