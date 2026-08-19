@@ -279,8 +279,8 @@ function continueFailedStoryboardJob(
   type: FailableStoryboardJob["type"],
 ): boolean {
   const folderExists = fs.existsSync(generatedDirFor(jsonFileName));
-  const failedIndex = failedStoryboardJobs.findIndex(
-    (j) => j.type === type && j.jsonPath.includes(jsonFileName),
+  const failedIndex = failedStoryboardJobs.findIndex((j) =>
+    j.jsonPath.includes(jsonFileName),
   );
   if (!folderExists || failedIndex === -1) {
     return false;
@@ -752,11 +752,7 @@ function persistPendingSceneConfirmations(): void {
     });
     fs.writeFileSync(
       PENDING_SCENE_CONFIRMATIONS_FILE,
-      JSON.stringify(
-        Array.from(pendingSceneConfirmations.entries()),
-        null,
-        2,
-      ),
+      JSON.stringify(Array.from(pendingSceneConfirmations.entries()), null, 2),
       "utf-8",
     );
   } catch (err) {
