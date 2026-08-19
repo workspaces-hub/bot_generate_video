@@ -287,6 +287,7 @@ function continueFailedStoryboardJob(
   }
 
   const [failedJob] = failedStoryboardJobs.splice(failedIndex, 1);
+  failedJob.type = type;
   persistFailedStoryboardJobs();
 
   enqueueJob(failedJob);
