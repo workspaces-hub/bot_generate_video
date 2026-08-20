@@ -63,20 +63,49 @@ async function insertPromptText(
 const MAX_TURNS_WAITING_FOR_FILE = 30;
 
 /**
+ * Chờ file tile trong composer hết trạng thái "đang upload" — xác nhận qua
+ * debug HTML thật (before-click ask.html, job so sánh output_local.json/
+ * output_vps.json): file tile lúc CHƯA upload xong là
+ * `[role="group"][aria-label="<tên file>"]` chứa 1 progress ring SVG
+ * (`circle[stroke-dashoffset]`, dashoffset > 0 = chưa đầy vòng) và nút bên
+ * trong mang class "cursor-wait"; icon "đã xong" (checkmark) cùng lúc đó bị
+ * ẩn (`display: none !important`). Confirm site có bấm Send NGAY LÚC NÀY vẫn
+ * cho qua (không disable nút Send) — đây chính là nguyên nhân storyboard bị
+ * ChatAI đọc thiếu/dở dang trên môi trường chậm (VPS/Xvfb): code trước đây
+ * chỉ chờ cố định vài giây, không xác minh DOM thật. Chờ VÔ THỜI HẠN (không
+ * timeout cố định) tới khi progress ring này biến mất mới coi là upload xong.
+ * Tile biến mất hẳn khỏi composer (vd trường hợp hiếm gặp) cũng coi là xong,
+ * không chặn vô ích.
+ */
+async function waitForAttachmentUploadToSettle(
+  page: Page,
+  fileName: string,
+): Promise<void> {
+  await page.waitForFunction(
+    (name) => {
+      const tile = Array.from(document.querySelectorAll('[role="group"]')).find(
+        (g) => g.getAttribute("aria-label") === name,
+      );
+      if (!tile) return true;
+      return tile.querySelector("circle[stroke-dashoffset]") === null;
+    },
+    fileName,
+    { timeout: 0 },
+  );
+}
+
+/**
  * Đính kèm 1 file lên composer TRƯỚC khi gõ prompt — dùng khi user gửi prompt
  * qua file (.txt/.md) thay vì gõ/dán trực tiếp: UPLOAD file đó lên ChatAI rồi chỉ
  * gõ 1 câu ngắn yêu cầu ChatAI đọc file, thay vì dán nguyên nội dung file làm
  * prompt text (tránh dán prompt siêu dài, và để ChatAI tự đọc file y hệt cách
  * user thật đính kèm). Cùng cơ chế setInputFiles() đã dùng cho ảnh tham chiếu
- * (uploadReferenceImages trong chatAIImage.ts) — CHƯA có DOM thật xác nhận
- * thời gian xử lý upload với file KHÔNG PHẢI ảnh (vd .txt/.md), chờ tạm 3s
- * trước khi gõ prompt tiếp; cần chỉnh lại nếu qua debug snapshot thấy ChatAI
- * generate khi file chưa upload xong (vd còn thumbnail "đang tải" trong
- * composer).
+ * (uploadReferenceImages trong chatAIImage.ts).
  */
 async function uploadAttachment(page: Page, filePath: string): Promise<void> {
   await fileUploadInputLocator(page).setInputFiles(filePath);
-  await page.waitForTimeout(3000);
+  await waitForAttachmentUploadToSettle(page, path.basename(filePath));
+  await page.waitForTimeout(1000);
 }
 
 /**
@@ -144,9 +173,10 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   } else {
     await insertPromptText(page, textarea, text);
   }
-
+  // await captureSnapshot(page, "before-click ask", "before-click ask");
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
   await sendButton.click();
+  // await captureSnapshot(page, "after-click ask", "after-click ask");
 
   // Chờ nút "Stop generating" xuất hiện (ChatAI bắt đầu trả lời) — best-effort,
   // không throw nếu không thấy (có thể trả lời quá nhanh, đã xong trước khi
@@ -587,7 +617,7 @@ export async function askChatAI(
       // if (result.isComplete) {
       if (downloadedFiles.length > 0) {
       }
-      // await captureSnapshot(page, jobId, "result");
+      await captureSnapshot(page, jobId, "result");
       break;
       // }
 
@@ -597,10 +627,7 @@ export async function askChatAI(
       // và tránh nhầm với file thật khi đọc lại sau này.
       for (const filePath of downloadedFiles) {
         await fs.promises.unlink(filePath).catch((err) => {
-          console.warn(
-            `[chatAI] Không xoá được file nháp "${filePath}":`,
-            err,
-          );
+          console.warn(`[chatAI] Không xoá được file nháp "${filePath}":`, err);
         });
       }
       downloadedFiles = [];

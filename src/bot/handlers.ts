@@ -1252,7 +1252,10 @@ export function registerHandlers(bot: Telegraf): void {
         if (formatOutputContent) {
           await fs.writeFile(
             promptFilePath,
-            `${promptFileContent}\n${formatOutputContent}`,
+            promptFileContent.replace(
+              "# ĐÂY LÀ KỊCH BẢN",
+              `${formatOutputContent}\n# ĐÂY LÀ KỊCH BẢN`,
+            ),
             "utf-8",
           );
         }
