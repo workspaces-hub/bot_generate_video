@@ -437,21 +437,36 @@ export interface GenerateVideosResult {
  *   → start, ảnh sau → end.
  * - 0 ảnh: trả về rỗng (video thuần từ prompt, không upload ảnh nào).
  */
-function assignStartEndFrames(
-  refPaths: string[],
-): Pick<GenerateVideoOptions, "startFramePath" | "endFramePath"> {
-  if (refPaths.length === 0) return {};
-  if (refPaths.length === 1) return { startFramePath: refPaths[0] };
+interface StartEndFrameRef {
+  /** type khai báo trong entry.ref (vd "SCENE_SETTING_START"/"SCENE_SETTING_END"/"CHARACTER"/"LOCATION") — dùng để xác định vai trò, KHÔNG đoán qua tên file. */
+  type?: string;
+  path: string;
+}
 
-  const startPath = refPaths.find((p) => /start/i.test(path.basename(p)));
-  const endPath = refPaths.find((p) => /end/i.test(path.basename(p)));
-  if (startPath || endPath) {
-    return {
-      startFramePath: startPath ?? refPaths.find((p) => p !== endPath),
-      endFramePath: endPath,
-    };
+/**
+ * Xác định startFramePath/endFramePath dựa THẲNG vào type + thứ tự khai báo
+ * trong entry.ref (đúng hợp đồng JSON format_output.txt), không còn đoán qua
+ * tên file như trước:
+ * - Có ref type "SCENE_SETTING_START": ref đó LUÔN là start, ref còn lại
+ *   (thường "SCENE_SETTING_END") là end.
+ * - Không có "SCENE_SETTING_START" (clip N từ 2 trở đi: ref = [END_N-1,
+ *   END_N], CẢ 2 CÙNG type "SCENE_SETTING_END"): giữ ĐÚNG thứ tự khai báo —
+ *   ref ĐẦU TIÊN (END của clip trước, đóng vai start kế thừa) → start, ref
+ *   THỨ HAI (END của clip hiện tại) → end.
+ */
+function assignStartEndFrames(
+  refs: StartEndFrameRef[],
+): Pick<GenerateVideoOptions, "startFramePath" | "endFramePath"> {
+  if (refs.length === 0) return {};
+  if (refs.length === 1) return { startFramePath: refs[0].path };
+
+  const startRef = refs.find((r) => r.type === "SCENE_SETTING_START");
+  if (startRef) {
+    const endRef = refs.find((r) => r !== startRef);
+    return { startFramePath: startRef.path, endFramePath: endRef?.path };
   }
-  return { startFramePath: refPaths[0], endFramePath: refPaths[1] };
+
+  return { startFramePath: refs[0].path, endFramePath: refs[1].path };
 }
 
 /**
@@ -534,7 +549,8 @@ export async function generateVideosForFile(
           Boolean(r.id) &&
           (r.type === "CHARACTER" ||
             r.type === "LOCATION" ||
-            r.type === "SCENE_SETTING"),
+            r.type === "SCENE_SETTING_START" ||
+            r.type === "SCENE_SETTING_END"),
       );
 
       const refPaths: string[] = [];
@@ -548,10 +564,15 @@ export async function generateVideosForFile(
       // );
       // }
 
+      // Gắn type khai báo trong entry.ref theo ĐÚNG THỨ TỰ với refPaths —
+      // assignStartEndFrames dùng type này để xác định start/end (xem
+      // docstring hàm đó), KHÔNG đoán qua tên file nữa.
       const options: GenerateVideoOptions =
         refPaths.length >= 3
           ? { omniReferencePaths: refPaths }
-          : assignStartEndFrames(refPaths);
+          : assignStartEndFrames(
+              refs.map((r, i) => ({ type: r.type, path: refPaths[i] })),
+            );
 
       // Check lại NGAY TRƯỚC khi gọi generateVideo (không chỉ ở đầu vòng for)
       // — resolveRefImagePath ở trên là async (đọc đĩa), Stop All có thể vừa
@@ -637,7 +658,8 @@ export async function generateSceneImagesForFile(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "SCENE_SETTING") return false;
+      if (e.type !== "SCENE_SETTING_START" && e.type !== "SCENE_SETTING_END")
+        return false;
       // Chỉ gen khi "prompt" là string thật — xem lý do ở generateReferenceImagesForFile.
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
@@ -655,16 +677,18 @@ export async function generateSceneImagesForFile(
     if (entry?.success) continue;
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     try {
-      // Xác nhận qua thực tế (job d1bf82f7, entry SCENE_19_END): JSON
-      // storyboard có thể tự khai báo ref TỚI 1 entry SCENE_SETTING khác (vd
-      // "SCENE_19_START" làm ảnh "opening frame" cho "SCENE_19_END") — chấp
-      // nhận cả type SCENE_SETTING, không chỉ CHARACTER/LOCATION.
+      // Entry SCENE_SETTING_END luôn ref TỚI 1 entry boundary khác (chính nó
+      // là SCENE_SETTING_START của cùng run, hoặc SCENE_SETTING_END của clip
+      // liền trước — xem PHẦN 2 hợp đồng JSON/format_output.txt) làm "ảnh mở
+      // đầu" trước khi vẽ tiếp — chấp nhận cả 2 type boundary, không chỉ
+      // CHARACTER/LOCATION.
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
           Boolean(r.id) &&
           (r.type === "CHARACTER" ||
             r.type === "LOCATION" ||
-            r.type === "SCENE_SETTING"),
+            r.type === "SCENE_SETTING_START" ||
+            r.type === "SCENE_SETTING_END"),
       );
       const refPaths: string[] = [];
       for (const ref of refs) {
@@ -679,7 +703,7 @@ export async function generateSceneImagesForFile(
         refPaths,
       );
       console.log(
-        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đã lưu: ${result.path}`,
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${result.path}`,
       );
       entry.success = true;
       entry.chatAISessionId = result.sessionId;
@@ -694,12 +718,12 @@ export async function generateSceneImagesForFile(
       }
     } catch (err) {
       console.error(
-        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — lỗi:`,
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
         err instanceof Error ? err.message : err,
       );
       entry.success = false;
       failed++;
-      failedEntries.push({ id: entry.id, type: "SCENE_SETTING" });
+      failedEntries.push({ id: entry.id, type: entry.type });
     }
     await saveEntries(inputPath, entries);
     // Chờ giữa các lần gọi gen ảnh liên tiếp — tránh gửi request quá nhanh
@@ -748,7 +772,8 @@ export async function generateSceneImagesForFileViaAIVideo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "SCENE_SETTING") return false;
+      if (e.type !== "SCENE_SETTING_START" && e.type !== "SCENE_SETTING_END")
+        return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -787,7 +812,7 @@ export async function generateSceneImagesForFileViaAIVideo(
 
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     console.log(
-      `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đang tạo ảnh (aiVideo)...`,
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (aiVideo)...`,
     );
     let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
     try {
@@ -796,7 +821,8 @@ export async function generateSceneImagesForFileViaAIVideo(
           Boolean(r.id) &&
           (r.type === "CHARACTER" ||
             r.type === "LOCATION" ||
-            r.type === "SCENE_SETTING"),
+            r.type === "SCENE_SETTING_START" ||
+            r.type === "SCENE_SETTING_END"),
       );
       const refPaths: string[] = [];
       for (const ref of refs) {
@@ -826,7 +852,7 @@ export async function generateSceneImagesForFileViaAIVideo(
         await fs.promises.unlink(extra).catch(() => {});
       }
       console.log(
-        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đã lưu: ${destPath}`,
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${destPath}`,
       );
       entry.success = true;
       succeeded++;
@@ -840,12 +866,12 @@ export async function generateSceneImagesForFileViaAIVideo(
       }
     } catch (err) {
       console.error(
-        `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — lỗi:`,
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
         err instanceof Error ? err.message : err,
       );
       entry.success = false;
       failed++;
-      failedEntries.push({ id: entry.id, type: "SCENE_SETTING" });
+      failedEntries.push({ id: entry.id, type: entry.type });
       if (onEntryError) {
         await onEntryError(entry.id).catch((err) => {
           console.error(

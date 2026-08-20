@@ -811,11 +811,14 @@ export function getChatAIPendingCount(): number {
 }
 
 /**
- * Đọc jsonPath, kiểm tra TOÀN BỘ entry type "SCENE_SETTING" đã "success":
- * true chưa — dùng để hàng đợi VIDEO biết 1 job "storyboardVideo" đã SẴN
- * SÀNG lấy ra xử lý hay chưa (xem findNextReadyVideoJobIndex). Không có entry
- * SCENE_SETTING nào (mảng rỗng sau filter) coi như ĐÃ sẵn sàng (every() trên
- * mảng rỗng trả về true) — không chặn oan storyboard không dùng SCENE_SETTING.
+ * Đọc jsonPath, kiểm tra TOÀN BỘ entry type "SCENE_SETTING_START"/
+ * "SCENE_SETTING_END" đã "success": true chưa — dùng để hàng đợi VIDEO biết 1
+ * job "storyboardVideo" đã SẴN SÀNG lấy ra xử lý hay chưa (xem
+ * findNextReadyVideoJobIndex). Schema JSON mới (xem format_output.txt) tách 1
+ * type "SCENE_SETTING" cũ thành 2 type boundary START/END — cả 2 đều phải
+ * xong thì VIDEO mới đủ cả start lẫn end frame để gen. Không có entry
+ * boundary nào (mảng rỗng sau filter) coi như ĐÃ sẵn sàng (every() trên mảng
+ * rỗng trả về true) — không chặn oan storyboard không dùng SCENE_SETTING.
  * Đọc/parse lỗi (file đang ghi dở, chưa tồn tại...) coi là CHƯA sẵn sàng, thử
  * lại ở lượt quét sau — KHÔNG throw, tránh làm hỏng cả vòng quét.
  */
@@ -826,7 +829,9 @@ function isJsonSceneSettingReady(jsonPath: string): boolean {
     );
     if (!Array.isArray(entries)) return false;
     return entries
-      .filter((e) => e?.type === "SCENE_SETTING")
+      .filter(
+        (e) => e?.type === "SCENE_SETTING_START" || e?.type === "SCENE_SETTING_END",
+      )
       .every((e) => e?.success === true);
   } catch {
     return false;
