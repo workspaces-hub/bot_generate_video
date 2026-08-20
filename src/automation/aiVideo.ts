@@ -11,7 +11,6 @@ import {
   antModalWrapperLocator,
   anyVideoInputModeChipCandidates,
   busyOmniReferenceThumbnailLocator,
-  busyReferenceImageThumbnailLocator,
   characterDetectionFailedCandidates,
   confirmCharacterButtonCandidates,
   creditBalanceLocator,
@@ -37,6 +36,7 @@ import {
   returnToLatestButtonCandidates,
   signInIndicatorCandidates,
   startFrameButtonCandidates,
+  topPromoBannerCloseButtonLocator,
 } from "./selectors";
 
 export class GenerationError extends Error {}
@@ -285,22 +285,19 @@ async function waitForFrameUploadToSettle(
   page: Page,
   label: string,
 ): Promise<void> {
-  try {
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(
-          '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
-        ).length === 0,
-      { timeout: 60_000 },
-    );
-  } catch {
-    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
-    if (stillBusy > 0) {
-      throw new GenerationError(
-        `Ảnh ${label} vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh bị site từ chối.`,
-      );
-    }
-  }
+  // Xác nhận qua log lỗi thật (job "Bread_Mice_2_SCENE_01_VIDEO"): ảnh start
+  // frame lấy từ SCENE_SETTING vừa gen (có thể nặng/độ phân giải cao) đôi khi
+  // xử lý lâu hơn vài phút trên site — timeout cố định khiến job fail hẳn
+  // (không retry) dù ảnh thực ra chỉ cần thêm thời gian là xong. Chờ VÔ THỜI
+  // HẠN (timeout: 0) tới khi hết aria-busy thay vì fail sau N giây — vẫn
+  // không bao giờ bấm Generate lúc ảnh chưa lên xong (đúng chủ đích ban đầu).
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(
+        '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
+      ).length === 0,
+    { timeout: 0 },
+  );
   await page
     .waitForLoadState("networkidle", { timeout: 15_000 })
     .catch(() => {});
@@ -824,22 +821,15 @@ async function waitForVideoRefImageUploadsToSettle(page: Page): Promise<void> {
     .waitForLoadState("networkidle", { timeout: 15_000 })
     .catch(() => {});
 
-  try {
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(
-          '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
-        ).length === 0,
-      { timeout: 60_000 },
-    );
-  } catch {
-    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
-    if (stillBusy > 0) {
-      throw new GenerationError(
-        `Còn ${stillBusy} ảnh tham chiếu vẫn đang xử lý (aria-busy) sau 60s chờ — không bấm Generate để tránh dùng ảnh chưa load xong.`,
-      );
-    }
-  }
+  // Cùng lý do đã sửa cho waitForFrameUploadToSettle — bỏ hẳn timeout, chờ
+  // VÔ THỜI HẠN tới khi hết aria-busy thay vì fail sau N giây.
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(
+        '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
+      ).length === 0,
+    { timeout: 0 },
+  );
 }
 
 /**
@@ -1174,8 +1164,21 @@ export async function clickDismissingModals(
  * bug scrollIntoView với flex-col-reverse ở nhiều engine trình duyệt). Set
  * thẳng scrollTop=0 bằng JS đáng tin cậy hơn nhiều so với chỉ bấm nút
  * "Return to Latest" (nút này không phải lúc nào cũng hiện/tìm được).
+ *
+ * Đóng SỚM NHẤT banner quảng cáo "MiniMax H3 Is Live" (xem
+ * topPromoBannerCloseButtonLocator) — TOÀN BỘ banner (không chỉ nút riêng)
+ * bấm được và điều hướng THẲNG sang domain marketing khác hẳn
+ * (design.minimax.io), mất hết trang tạo ảnh/video đang thao tác dở — xác
+ * nhận qua debug thật (job 8-TNCPA_SUU): trang chuyển hẳn sang "MiniMax
+ * Design", không còn nút Generate/Create nào. Đóng banner này TRƯỚC các bước
+ * khác để loại bỏ vùng bấm nhầm nguy hiểm càng sớm càng tốt.
  */
 export async function dismissBlockingOverlays(page: Page): Promise<void> {
+  const topBannerClose = topPromoBannerCloseButtonLocator(page).first();
+  if (await topBannerClose.isVisible({ timeout: 500 }).catch(() => false)) {
+    await topBannerClose.click().catch(() => {});
+  }
+
   await dismissAntModalIfPresent(page);
   await dismissCoachMarkIfPresent(page);
 

@@ -258,6 +258,23 @@ export const returnToLatestButtonCandidates = (page: Page): Array<() => Locator>
 ];
 
 /**
+ * Banner quảng cáo vàng cố định trên đầu trang ("MiniMax H3 Is Live |
+ * Download MiniMax Design...") — DOM thật xác nhận: TOÀN BỘ banner (không
+ * chỉ nút "Explore Now") mang class "cursor-pointer" trên cả div bao ngoài
+ * `bg-[#F4F55C]`, click bất kỳ đâu trong dải 44px này (kể cả lệch toạ độ do
+ * layout đổi) đều điều hướng THẲNG sang trang marketing "MiniMax Design"
+ * (design.minimax.io, domain KHÁC hẳn hailuoai.video) — mất hẳn trang tạo
+ * ảnh/video đang thao tác dở, không có nút Generate/Create nào ở trang mới
+ * (xác nhận qua debug thật: lỗi "Không tìm thấy phần tử nào khớp" cho
+ * generateButtonCandidates, screenshot cho thấy đã ở hẳn trang MiniMax
+ * Design). Nút Close (X) riêng của banner này nằm ở góc phải — đóng SỚM và
+ * CHỦ ĐỘNG (xem dismissBlockingOverlays trong aiVideo.ts) để loại bỏ hẳn
+ * vùng bấm nhầm nguy hiểm này, thay vì chỉ tránh né toạ độ.
+ */
+export const topPromoBannerCloseButtonLocator = (page: Page): Locator =>
+  page.locator('div[class*="F4F55C"] span.absolute.cursor-pointer');
+
+/**
  * Các option trong popover model là <div class="... cursor-pointer"> THƯỜNG
  * (không có role option/menuitem/button nào cả) — nên getByRole không bao
  * giờ khớp được, phải dựa vào text. Dùng exact-match làm ưu tiên số 1 để
