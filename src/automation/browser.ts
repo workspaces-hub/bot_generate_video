@@ -30,6 +30,7 @@ export function createBrowserContextManager(
     const context = await browser.newContext({
       storageState: hasSession ? storageStatePath : undefined,
       viewport: { width: 1440, height: 900 },
+      locale: "en-US",
     });
 
     // Nếu Chrome crash ("Target crashed") hoặc bị đóng vì bất kỳ lý do

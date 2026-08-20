@@ -99,7 +99,7 @@ export const config = {
   proxyServer: process.env.PROXY_SERVER || undefined,
   proxyUsername: process.env.PROXY_USERNAME || undefined,
   proxyPassword: process.env.PROXY_PASSWORD || undefined,
-  formatOuput: "storage/format_output.txt",
+  formatOuput: "format_output.txt",
   defaultModelVideo: process.env.DEFAULT_MODEL_VIDEL || "Hailuo 2.0",
 };
 

@@ -115,6 +115,25 @@ async function main(): Promise<void> {
     // toggle "Enable memory" render bằng div/span khác).
     console.log("\n=== (fallback) toàn bộ text hiển thị trong panel lúc này ===\n");
     console.log((await scope.innerText().catch(() => "")).slice(0, 4000));
+
+    // Tab "General" — kiểm tra riêng setting "Language": Custom Instructions/
+    // Personalization đã xác nhận GIỐNG HỆT NHAU giữa 2 tài khoản (rỗng cả
+    // 2 bên), nhưng người dùng nghi vấn 2 tài khoản khác nhau ở NGÔN NGỮ
+    // GIAO DIỆN (setting riêng, nằm ở tab General chứ không phải
+    // Personalization) — kiểm tra luôn để đối chiếu.
+    const generalTab = page
+      .getByRole("tab", { name: /^general$/i })
+      .or(page.getByRole("button", { name: /^general$/i }))
+      .or(page.getByText(/^General$/i));
+    await generalTab.first().click({ timeout: 10_000 });
+    await page.waitForTimeout(1000);
+    await captureSnapshot(page, `${jobId}-general-tab`, "general-tab");
+
+    const generalDialog = page.locator('[role="dialog"]').first();
+    const generalScope =
+      (await generalDialog.count()) > 0 ? generalDialog : page.locator("body");
+    console.log("\n=== Tab General — toàn bộ text hiển thị ===\n");
+    console.log((await generalScope.innerText().catch(() => "")).slice(0, 4000));
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
     console.error(
