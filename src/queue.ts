@@ -830,7 +830,8 @@ function isJsonSceneSettingReady(jsonPath: string): boolean {
     if (!Array.isArray(entries)) return false;
     return entries
       .filter(
-        (e) => e?.type === "SCENE_SETTING_START" || e?.type === "SCENE_SETTING_END",
+        (e) =>
+          e?.type === "SCENE_SETTING_START" || e?.type === "SCENE_SETTING_END",
       )
       .every((e) => e?.success === true);
   } catch {
@@ -907,7 +908,8 @@ async function processImageQueue(): Promise<void> {
             sendImageNow,
             notifyImageError,
           );
-          const readyForScene = refResult.failed === 0;
+          const readyForScene =
+            refResult.failed === 0 && refResult.succeeded > 0;
 
           // Xong không lỗi — hỏi xác nhận qua nút "Tạo ảnh scene" (job
           // "storyboardSceneImagesAIVideo", RIÊNG type — xem docstring
