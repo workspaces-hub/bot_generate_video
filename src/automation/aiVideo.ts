@@ -221,7 +221,7 @@ async function attemptGenerateVideo(
     //     }
     //   }
     // }
-    model = "Hailuo 2.3";
+    model = config.defaultModelVideo;
     if (model) {
       await selectChipOption(page, modelChipCandidates(page), model, "model");
     }
