@@ -19,33 +19,51 @@ export function createBrowserContextManager(
 ): () => Promise<BrowserContext> {
   let contextPromise: Promise<BrowserContext> | null = null;
 
-  return function getContext(): Promise<BrowserContext> {
+  async function launchNewContext(): Promise<BrowserContext> {
+    const browser = await launchRealChrome(useProxy);
+    const hasSession = fs.existsSync(storageStatePath);
+    if (!hasSession) {
+      console.warn(
+        `[${logLabel}] Không tìm thấy session tại ${storageStatePath}. ${loginHint}`,
+      );
+    }
+    const context = await browser.newContext({
+      storageState: hasSession ? storageStatePath : undefined,
+      viewport: { width: 1440, height: 900 },
+    });
+
+    // Nếu Chrome crash ("Target crashed") hoặc bị đóng vì bất kỳ lý do
+    // gì, contextPromise đã cache PHẢI được xoá — nếu không, mọi job sau
+    // đó sẽ luôn tái sử dụng browser đã chết và fail mãi mãi, cho tới khi
+    // restart bot thủ công. Xoá cache để lần gọi tiếp theo tự khởi động
+    // lại Chrome mới (tự phục hồi).
+    browser.on("disconnected", () => {
+      console.warn(`[${logLabel}] Chrome đã ngắt kết nối/crash — sẽ khởi động lại ở job tiếp theo.`);
+      contextPromise = null;
+    });
+
+    return context;
+  }
+
+  return async function getContext(): Promise<BrowserContext> {
+    if (contextPromise) {
+      // Xác nhận qua log thật (nhiều job liên tiếp cùng lỗi "Target page,
+      // context or browser has been closed" NGAY SAU 1 lần crash, kể cả lần
+      // retry trong generateVideo/generateImage — xem isPageCrashError):
+      // event "disconnected" ở trên đôi khi CHƯA kịp bắn ra (race điều kiện
+      // với chính promise reject của thao tác đang chạy dở lúc crash) nên
+      // contextPromise cache lúc đó vẫn còn trỏ tới context ĐÃ CHẾT. Chủ
+      // động kiểm tra isConnected() TRƯỚC khi tái sử dụng, không chỉ trông
+      // chờ vào sự kiện "disconnected" — nếu context cache đã chết, xoá
+      // ngay để launch lại Chrome MỚI thay vì trả về context chết khiến lần
+      // retry (dù đã được viết đúng) vẫn fail lại ngay lập tức.
+      const existing = await contextPromise.catch(() => null);
+      if (!existing || !existing.browser()?.isConnected()) {
+        contextPromise = null;
+      }
+    }
     if (!contextPromise) {
-      contextPromise = (async () => {
-        const browser = await launchRealChrome(useProxy);
-        const hasSession = fs.existsSync(storageStatePath);
-        if (!hasSession) {
-          console.warn(
-            `[${logLabel}] Không tìm thấy session tại ${storageStatePath}. ${loginHint}`,
-          );
-        }
-        const context = await browser.newContext({
-          storageState: hasSession ? storageStatePath : undefined,
-          viewport: { width: 1440, height: 900 },
-        });
-
-        // Nếu Chrome crash ("Target crashed") hoặc bị đóng vì bất kỳ lý do
-        // gì, contextPromise đã cache PHẢI được xoá — nếu không, mọi job sau
-        // đó sẽ luôn tái sử dụng browser đã chết và fail mãi mãi, cho tới khi
-        // restart bot thủ công. Xoá cache để lần gọi tiếp theo tự khởi động
-        // lại Chrome mới (tự phục hồi).
-        browser.on("disconnected", () => {
-          console.warn(`[${logLabel}] Chrome đã ngắt kết nối/crash — sẽ khởi động lại ở job tiếp theo.`);
-          contextPromise = null;
-        });
-
-        return context;
-      })();
+      contextPromise = launchNewContext();
     }
     return contextPromise;
   };
