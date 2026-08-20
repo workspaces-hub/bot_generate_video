@@ -301,6 +301,22 @@ export async function generateReferenceImagesForFileViaAIVideo(
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
     if (entry?.success) continue;
+
+    // Cùng lý do đã sửa cho generateSceneImagesForFileViaAIVideo: ảnh id này
+    // đã tồn tại sẵn trong folder generated/ (vd user tự upload thay thế,
+    // hoặc lần chạy trước đã lưu file nhưng saveEntries chưa kịp ghi
+    // "success": true) — không gen lại tốn credit, chỉ đánh dấu success.
+    const existingImagePath = await findExistingImageById(
+      outputDir,
+      sanitizeId(entry.id),
+    );
+    if (existingImagePath) {
+      entry.success = true;
+      succeeded++;
+      await saveEntries(inputPath, entries);
+      continue;
+    }
+
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     console.log(
       `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (aiVideo)...`,
@@ -376,13 +392,27 @@ export async function generateReferenceImagesForFileViaAIVideo(
  * đuôi THẬT của ảnh ChatAI trả về, có thể không phải .png — xem
  * guessImageExtension trong chatAIImage.ts).
  */
-async function resolveRefImagePath(dir: string, id: string): Promise<string> {
+/**
+ * Tìm file ảnh theo id (đã sanitize) trong 1 folder, không throw nếu không
+ * có — dùng để kiểm tra ảnh ĐÃ TỒN TẠI SẴN trước khi generate (xem
+ * generateSceneImagesForFileViaAIVideo: id đã có file trong folder generated/
+ * thì bỏ qua gen lại, chỉ đánh dấu success luôn).
+ */
+async function findExistingImageById(
+  dir: string,
+  id: string,
+): Promise<string | null> {
   const exact = path.join(dir, `${id}.png`);
   if (fs.existsSync(exact)) return exact;
 
   const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
   const match = files.find((f) => f.startsWith(`${id}.`));
-  if (match) return path.join(dir, match);
+  return match ? path.join(dir, match) : null;
+}
+
+async function resolveRefImagePath(dir: string, id: string): Promise<string> {
+  const found = await findExistingImageById(dir, id);
+  if (found) return found;
 
   throw new Error(
     `Không tìm thấy file ảnh tham chiếu cho id "${id}" trong ${dir}`,
@@ -559,7 +589,7 @@ export async function generateVideosForFile(
       failedEntries.push({ id: entry.id, type: "VIDEO" });
     }
     await saveEntries(inputPath, entries);
-    await sleep(15000)
+    await sleep(15000);
   }
 
   return { outputDir, succeeded, failed, failedEntries };
@@ -740,6 +770,21 @@ export async function generateSceneImagesForFileViaAIVideo(
   for (const entry of targets) {
     if (isStopStoryboardRequested()) break;
     if (entry?.success) continue;
+
+    // Ảnh id này đã tồn tại sẵn trong folder generated/ (vd user tự upload
+    // thay thế, hoặc lần chạy trước đã lưu file nhưng saveEntries chưa kịp
+    // ghi "success": true) — không gen lại tốn credit, chỉ đánh dấu success.
+    const existingImagePath = await findExistingImageById(
+      outputDir,
+      sanitizeId(entry.id),
+    );
+    if (existingImagePath) {
+      entry.success = true;
+      succeeded++;
+      await saveEntries(inputPath, entries);
+      continue;
+    }
+
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     console.log(
       `[storyboardPipeline] [SCENE_SETTING] ${entry.id} — đang tạo ảnh (aiVideo)...`,
