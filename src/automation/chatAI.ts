@@ -352,9 +352,9 @@ async function downloadAttachedFiles(
   promptFileName?: string,
 ): Promise<string[]> {
   const downloadLinks = downloadFileLinkLocator(message);
-  const inlineLinks = inlineFileLinkLocator(message);
+  // const inlineLinks = inlineFileLinkLocator(message);
   let attachments = downloadLinks;
-  if ((await attachments.count()) === 0) attachments = inlineLinks;
+  // if ((await attachments.count()) === 0) attachments = inlineLinks;
   if ((await attachments.count()) === 0) attachments = fileCardLocator(message);
   const count = await attachments.count();
   const savedPaths: string[] = [];
@@ -562,12 +562,77 @@ function isIncompleteText(text: string): boolean {
   );
 }
 
-/** Lấy file đính kèm (nếu có) và nội dung text của tin nhắn trả lời MỚI NHẤT từ ChatAI. */
+/**
+ * ChatAI đọc được file đính kèm nhưng khẳng định (SAI, xác nhận qua debug
+ * thật job 35941268/1aacc019, file đính kèm THẬT SỰ có kịch bản ở cuối)
+ * rằng file "chưa chứa kịch bản phim", yêu cầu người dùng gửi lại kịch bản —
+ * thường gặp với file rất dài (kịch bản nằm ở cuối file, có thể ChatAI chưa
+ * xử lý/để ý tới phần đó). Nhận diện qua các cách diễn đạt thực tế đã gặp:
+ * "chưa có/chứa kịch bản...", "gửi tiếp/gửi lại kịch bản phim...".
+ */
+function isMissingScriptText(text: string): boolean {
+  return /chưa (có|chứa) kịch bản|gửi (tiếp|lại) (toàn bộ )?kịch bản|gửi kịch bản phim/i.test(
+    text,
+  );
+}
+
+/**
+ * Đánh dấu đầu phần kịch bản thật trong file đính kèm (xem
+ * prompt_master.txt/format_output.txt) — export để handlers.ts dùng chung
+ * khi chèn nội dung config.formatOuput vào TRƯỚC marker này trong file user
+ * upload (xem tryReplaceGeneratedFile/chatAI document handler), tránh viết
+ * trùng regex ở 2 nơi.
+ */
+export const SCRIPT_SECTION_MARKER = /#\s*ĐÂY LÀ KỊCH BẢN/i;
+
+/**
+ * Cắt phần kịch bản thật (từ dòng "# ĐÂY LÀ KỊCH BẢN" tới hết file) ra khỏi
+ * file đính kèm — dùng khi ChatAI báo nhầm "chưa có kịch bản" (xem
+ * isMissingScriptText). Thay vì upload lại NGUYÊN file dài (có thể lại bị bỏ
+ * sót y hệt lần trước, xem job 35941268/1aacc019: file 97KB, kịch bản nằm ở
+ * cuối), gửi THẲNG đúng đoạn kịch bản dưới dạng text để chắc chắn ChatAI đọc
+ * trọn vẹn không phải tìm lại trong 1 file lớn. Trả về null nếu không tìm
+ * thấy marker (file không theo đúng cấu trúc mong đợi) — caller tự fallback.
+ */
+async function extractScriptFromAttachment(
+  filePath: string,
+): Promise<string | null> {
+  const content = await fs.promises
+    .readFile(filePath, "utf-8")
+    .catch(() => null);
+  if (!content) return null;
+  const match = content.match(SCRIPT_SECTION_MARKER);
+  if (!match || match.index === undefined) return null;
+  const script = content.slice(match.index).trim();
+  return script || null;
+}
+
+/**
+ * Lấy file đính kèm (nếu có) và nội dung text của tin nhắn trả lời MỚI NHẤT
+ * từ ChatAI.
+ *
+ * minMessageCount: số tin nhắn trả lời TỐI THIỂU phải đếm được trước khi đọc
+ * — caller truyền vào (số tin nhắn đã thấy ở lượt TRƯỚC + 1) để đảm bảo hàm
+ * này đọc đúng tin nhắn MỚI vừa được gửi lên, không phải tin nhắn CŨ còn sót
+ * lại từ lượt trước. Xác nhận qua debug thật (job 22446d34): sendMessage
+ * chỉ chờ tới khi nút "Stop generating" biến mất — DOM có thể vẫn kẹt tin
+ * nhắn CŨ 1 lúc SAU đó trước khi tin nhắn mới thật sự append vào DOM. Code
+ * cũ chỉ chờ "count !== 0" (đúng cho lượt ĐẦU TIÊN, khi count đang là 0) —
+ * từ lượt thứ 2 trở đi, count đã ≥ 1 sẵn từ lượt trước nên điều kiện đó luôn
+ * đúng NGAY LẬP TỨC dù tin nhắn mới CHƯA kịp xuất hiện, khiến hàm đọc lại
+ * đúng tin nhắn CŨ (2 lượt liên tiếp cho kết quả snapshot giống hệt nhau).
+ */
 async function readLatestAssistantMessage(
   page: Page,
   jobId: string,
   promptFileName?: string,
-): Promise<{ downloadedFiles: string[]; isComplete: boolean }> {
+  minMessageCount = 1,
+): Promise<{
+  downloadedFiles: string[];
+  isComplete: boolean;
+  missingScript: boolean;
+  messageCount: number;
+}> {
   const messages = assistantMessageLocator(page);
   // Xác nhận qua debug thật (job 98d9a048): dù sendMessage đã xác nhận ChatAI
   // trả lời xong thật (hasSeenGenerating true, nút Stop đã biến mất hẳn),
@@ -575,10 +640,11 @@ async function readLatestAssistantMessage(
   // URL chưa kịp đổi sang "/c/...") 1 lúc trước khi lịch sử hội thoại thật sự
   // render ra DOM — không phải do sendMessage kết luận sai, mà do trang tải
   // chậm SAU KHI đã xong. Poll thêm vài giây thay vì throw ngay ở lần check
-  // đầu tiên.
+  // đầu tiên. Chờ tới khi ĐẠT minMessageCount (không chỉ khác 0) — xem
+  // docstring hàm này.
   let count = await messages.count();
   const pollDeadline = Date.now() + 30_000;
-  while (count === 0 && Date.now() < pollDeadline) {
+  while (count < minMessageCount && Date.now() < pollDeadline) {
     await page.waitForTimeout(1000);
     count = await messages.count();
   }
@@ -606,6 +672,8 @@ async function readLatestAssistantMessage(
     downloadedFiles,
     isComplete:
       !isIncompleteText(text) && (hasFullJsonFile || isCompletionText(text)),
+    missingScript: isMissingScriptText(text),
+    messageCount: count,
   };
 }
 
@@ -673,6 +741,7 @@ export async function askChatAI(
     let messageToSend = prompt;
     let downloadedFiles: string[] = [];
     let auditRequested = false;
+    let lastMessageCount = 0;
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
       await sendMessage(page, messageToSend);
 
@@ -680,8 +749,47 @@ export async function askChatAI(
         page,
         jobId,
         promptFileName,
+        lastMessageCount + 1,
       );
+      lastMessageCount = result.messageCount;
       await captureSnapshot(page, jobId, "result");
+
+      // Xác nhận qua log lỗi thật (job 35941268/1aacc019): ChatAI đọc được
+      // file đính kèm nhưng khẳng định SAI là "chưa chứa kịch bản phim" dù
+      // file THẬT SỰ có kịch bản (thường gặp với file rất dài, kịch bản nằm
+      // ở cuối) — gửi lại đúng "yes"/tiếp tục không giải quyết được gì vì
+      // ChatAI đang chờ NỘI DUNG kịch bản, không phải xác nhận tiếp tục. Chủ
+      // động upload LẠI file đính kèm (nếu có) rồi báo rõ đã gửi lại, thay vì
+      // rơi vào nhánh "chưa hoàn thiện" bên dưới (gửi CONTINUE_MESSAGE sẽ vô
+      // ích, lặp lại đúng lỗi này tới hết MAX_TURNS_WAITING_FOR_FILE).
+      if (result.missingScript) {
+        for (const filePath of result.downloadedFiles) {
+          await fs.promises.unlink(filePath).catch(() => {});
+        }
+        await captureSnapshot(
+          page,
+          `${jobId}-missing-script-turn-${turn}`,
+          `missing-script-turn-${turn}`,
+        );
+        const scriptText = attachmentPath
+          ? await extractScriptFromAttachment(attachmentPath)
+          : null;
+
+        if (scriptText) {
+          // Gửi THẲNG đúng đoạn kịch bản dưới dạng text (không upload lại
+          // nguyên file dài) — chắc chắn ChatAI đọc trọn vẹn, không phải tự
+          // tìm lại trong 1 file lớn (nơi đã bỏ sót lần trước).
+          messageToSend = `Bạn báo chưa thấy kịch bản — đây là kịch bản phim đầy đủ (trích từ file đính kèm ban đầu), dùng đúng nội dung này, không cần hỏi lại:\n\n${scriptText}\n\nHãy tiếp tục xử lý theo đúng workflow/quy tắc đã nêu trong file đính kèm ban đầu.`;
+        } else if (attachmentPath) {
+          await uploadAttachment(page, attachmentPath);
+          messageToSend =
+            "Tôi vừa gửi lại đúng file kịch bản phim ở trên (file đính kèm) — file này CÓ đầy đủ kịch bản, nằm ở cuối file sau phần hướng dẫn/quy tắc xử lý. Hãy đọc lại toàn bộ file đính kèm (kể cả phần cuối) rồi tiếp tục xử lý theo đúng workflow đã nêu, không cần hỏi lại kịch bản nữa.";
+        } else {
+          messageToSend =
+            "Kịch bản phim đã có sẵn trong nội dung tôi gửi ở trên — hãy đọc lại toàn bộ (kể cả phần cuối) và tiếp tục xử lý, không cần hỏi lại.";
+        }
+        continue;
+      }
 
       // Xác nhận qua log lỗi thật (ChatAI tự báo: "do giới hạn xử lý trong
       // lượt này tôi mới serialize phần đầu storyboard. Cần tiếp tục mở rộng
@@ -692,6 +800,8 @@ export async function askChatAI(
       // hơn 1 lượt mới xong (thường xảy ra với kịch bản dài) — đây chính là
       // nguyên nhân thật của toàn bộ chênh lệch "output ngắn hơn" đã thấy
       // trước giờ, không phải do model/locale/prompt. Bật lại gate này.
+      downloadedFiles = result.downloadedFiles
+      break
       if (result.isComplete) {
         // Ưu tiên file MỚI của lượt này (nếu có) làm kết quả hiện tại; nếu
         // lượt này không đính kèm gì (vd chỉ xác nhận lại bằng lời sau lượt
@@ -702,7 +812,6 @@ export async function askChatAI(
             await fs.promises.unlink(oldPath).catch(() => {});
           }
           downloadedFiles = result.downloadedFiles;
-          break
         }
 
         if (!auditRequested) {
@@ -713,7 +822,6 @@ export async function askChatAI(
         }
         break;
       }
-      break
 
       // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
       // có) chỉ là bản nháp/trung gian (xem docstring askChatAI), KHÔNG phải

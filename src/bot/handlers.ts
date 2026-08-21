@@ -8,6 +8,7 @@ import {
   MAX_VIDEO_REF_IMAGES,
 } from "../automation/aiVideo";
 import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
+import { SCRIPT_SECTION_MARKER } from "../automation/chatAI";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import {
   generatedDirFor,
@@ -1250,11 +1251,20 @@ export function registerHandlers(bot: Telegraf): void {
             return "";
           });
         if (formatOutputContent) {
+          // Dùng SCRIPT_SECTION_MARKER (regex, xem chatAI.ts) thay vì so
+          // khớp chuỗi cố định — chấp nhận biến thể khoảng trắng/hoa thường
+          // sau "#" (vd "#ĐÂY LÀ KỊCH BẢN", "# Đây là kịch bản") thay vì chỉ
+          // khớp đúng y hệt "# ĐÂY LÀ KỊCH BẢN". Escape "$" trong
+          // formatOutputContent trước khi đưa vào chuỗi thay thế — String.replace
+          // với regex coi "$&"/"$1"/"$$"... trong chuỗi thay thế là cú pháp đặc
+          // biệt, "$$" mới ra đúng 1 ký tự "$" — nếu formatOutputContent tình cờ
+          // chứa "$" (vd giá tiền) sẽ bị thay sai mà không báo lỗi.
+          const escapedFormatOutput = formatOutputContent.replace(/\$/g, "$$$$");
           await fs.writeFile(
             promptFilePath,
             promptFileContent.replace(
-              "# ĐÂY LÀ KỊCH BẢN",
-              `${formatOutputContent}\n# ĐÂY LÀ KỊCH BẢN`,
+              SCRIPT_SECTION_MARKER,
+              `${escapedFormatOutput}\n# ĐÂY LÀ KỊCH BẢN`,
             ),
             "utf-8",
           );
