@@ -193,7 +193,7 @@ async function downloadTelegramFile(
  * downloadTelegramFile + submitChatAIJob), ChatAI tự đọc nội dung file, không cần
  * dán nguyên văn bản file làm prompt text nữa (tránh dán prompt siêu dài).
  */
-const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file";
+const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file sau";
 
 /**
  * Tên file dạng "<tên file json>__<tên file ảnh/video>.<đuôi>" — ĐÚNG format

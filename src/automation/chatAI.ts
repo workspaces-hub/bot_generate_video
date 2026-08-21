@@ -105,7 +105,24 @@ async function waitForAttachmentUploadToSettle(
 async function uploadAttachment(page: Page, filePath: string): Promise<void> {
   await fileUploadInputLocator(page).setInputFiles(filePath);
   await waitForAttachmentUploadToSettle(page, path.basename(filePath));
-  await page.waitForTimeout(1000);
+
+  // Xác nhận qua thực tế (job 35941268, file 97KB/~2371 dòng): ChatAI trả
+  // lời "file bạn gửi chưa chứa kịch bản phim" dù file THẬT SỰ có kịch bản ở
+  // cuối — waitForAttachmentUploadToSettle chỉ xác nhận file đã UPLOAD/TRUYỀN
+  // xong (spinner phía client hết), không đảm bảo ChatAI đã xử lý/index xong
+  // NỘI DUNG file phía server (đọc để trả lời) — với file lớn, việc đó có
+  // thể mất lâu hơn hẳn việc chỉ truyền xong bytes. Chờ thêm buffer ổn định
+  // TỈ LỆ THEO KÍCH THƯỚC file (không có tín hiệu DOM nào báo "đã index xong"
+  // để bám vào) trước khi gõ prompt/bấm Send.
+  const fileSizeBytes = await fs.promises
+    .stat(filePath)
+    .then((s) => s.size)
+    .catch(() => 0);
+  const extraSettleMs = Math.min(
+    60_000,
+    Math.max(1000, Math.round(fileSizeBytes / 1024) * 100),
+  );
+  await page.waitForTimeout(extraSettleMs);
 }
 
 /**
@@ -676,6 +693,7 @@ export async function askChatAI(
             await fs.promises.unlink(oldPath).catch(() => {});
           }
           downloadedFiles = result.downloadedFiles;
+          break
         }
 
         if (!auditRequested) {

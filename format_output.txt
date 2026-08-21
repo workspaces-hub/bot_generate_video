@@ -37,7 +37,7 @@ Không thêm field khác. File phải là JSON hợp lệ, không có comment, m
 
 3. NGUYÊN TẮC BOUNDARY LIÊN TIẾP — BẮT BUỘC
 
-Mỗi continuity run chỉ có một SCENE_SETTING_START riêng tại clip đầu tiên. Từ clip thứ hai trở đi trong cùng run, không tạo item SCENE_SETTING_START mới; exact last stable frame của VIDEO trước trở thành trực tiếp first-frame boundary của VIDEO tiếp theo.
+Mỗi continuity run chỉ có một SCENE_SETTING_START riêng tại clip đầu tiên. Từ clip thứ hai trở đi trong cùng run, không tạo item SCENE_SETTING_START mới; 
 
 Trong cùng một shot / continuity run:
 
@@ -64,9 +64,7 @@ Về execution:
 
 - Chỉ START_01 của một continuity run mới được phép tạo từ CHARACTER + LOCATION assets.
 - Từ clip 2 trở đi, không tạo, image-generate, repaint, regenerate, restage hoặc reinterpret START frame mới.
-- First-frame asset thực tế của VIDEO_N với N từ 2 trở đi phải là exact last stable frame được extract trực tiếp từ VIDEO_N-1.
-- Không gọi image generator để tạo first frame cho clip 2 trở đi.
-- Nếu cần deterministic resize hoặc đổi định dạng, phải giữ toàn bộ frame, đúng aspect ratio, không crop, không generative fill và không content-aware modification.
+- First-frame asset thực tế của VIDEO_N với N từ 2 trở đi phải là end frame (type SCENE_SETTING_END) VIDEO_N-1.
 
 
 4. QUY TẮC THEO TYPE
@@ -105,7 +103,6 @@ Clip N từ 2 trở đi trong cùng run
 - Không tạo item SCENE_SETTING_START cho clip N.
 - Không có id SHOT_XX_CLIP_N_START.
 - First-frame boundary của clip N là SHOT_XX_CLIP_N-1_END được dùng trực tiếp với alias type SCENE_SETTING_START.
-- Asset thực tế phải được frame-extract trực tiếp từ VIDEO_N-1; không gọi image generator.
 
 SCENE_SETTING_END của mọi clip
 
@@ -129,7 +126,7 @@ VIDEO của clip đầu continuity run
 - ref phải có đúng hai item và đúng thứ tự:
   1. SHOT_XX_CLIP_01_START, type SCENE_SETTING_START.
   2. SHOT_XX_CLIP_01_END, type SCENE_SETTING_END.
-- prompt: chỉ chứa END FRAME image prompt của cùng shot, dùng START FRAME làm primary visual continuity anchor và tập trung mô tả delta.
+- prompt:  dùng START FRAME làm primary visual continuity anchor và tập trung mô tả delta từ start đến end frame.
 - prompt phải bắt đầu bằng “Continuous six-second cinematic shot bounded exactly by the referenced START FRAME and END FRAME."
 - prompt BẮT BUỘC phải nêu đủ, bằng tiếng Anh, ngay trong cùng field (không được thiếu bất kỳ mục nào dưới đây, kể cả khi prompt đã dài):
   1. Mô tả HÀNH ĐỘNG CỤ THỂ của CHÍNH clip này (ai làm gì, với đạo cụ/bối cảnh nào, diễn biến ra sao trong đúng khoảng thời gian của clip) — lấy trực tiếp từ timeline câu chuyện đã phân tích ở PHẦN trên, viết CỤ THỂ cho riêng clip này, KHÔNG được là câu mô tả chung chung/rút gọn kiểu "natural human motion, cinematic camera movement" thay cho hành động thật.
@@ -174,7 +171,6 @@ Thứ tự vật lý của các item trong root array là bắt buộc, không c
    - Xuất clip đầu đúng thứ tự liền kề: SCENE_SETTING_START của clip 01 → SCENE_SETTING_END của clip 01 → VIDEO của clip 01.
    - Sau đó, với từng clip N từ 2 trở đi, xuất đúng một cặp liền kề: SCENE_SETTING_END của clip N → VIDEO của clip N.
    - Lặp theo số clip tăng dần cho đến hết run.
-5. Sau khi hoàn tất run hiện tại, mới xuất SCENE_SETTING_START của clip 01 thuộc run kế tiếp và tiếp tục cùng quy tắc.
 
 Mẫu thứ tự tổng quát bắt buộc:
 
@@ -300,3 +296,4 @@ Nguyên tắc tuyệt đối:
 END CỦA CLIP TRƯỚC PHẢI TRỞ THÀNH NGUỒN TRỰC TIẾP VÀ FIRST-FRAME BOUNDARY CỦA VIDEO CLIP SAU.
 KHÔNG TẠO ITEM SCENE_SETTING_START TỪ CLIP THỨ HAI TRỞ ĐI TRONG CÙNG CONTINUITY RUN.
 VIDEO ĐẦU MỖI RUN THAM CHIẾU START_01 VÀ END_01; MỌI VIDEO SAU THAM CHIẾU END CỦA CLIP TRƯỚC VÀ END CỦA CHÍNH NÓ.
+PHẦN QUAN TRỌNG: CHỈ KHI PHÂN TÍCH TOÀN BỘ KỊCH BẢN VÀ GHI RA FILE XONG THÌ MỚI GỬI FILE JSON VÀ THÔNG BÁO HOÀN THÀNH. nếu chưa xử lý xong thì coi như chưa phản hồi xong
