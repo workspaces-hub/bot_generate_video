@@ -300,22 +300,3 @@ Nguyên tắc tuyệt đối:
 END CỦA CLIP TRƯỚC PHẢI TRỞ THÀNH NGUỒN TRỰC TIẾP VÀ FIRST-FRAME BOUNDARY CỦA VIDEO CLIP SAU.
 KHÔNG TẠO ITEM SCENE_SETTING_START TỪ CLIP THỨ HAI TRỞ ĐI TRONG CÙNG CONTINUITY RUN.
 VIDEO ĐẦU MỖI RUN THAM CHIẾU START_01 VÀ END_01; MỌI VIDEO SAU THAM CHIẾU END CỦA CLIP TRƯỚC VÀ END CỦA CHÍNH NÓ.
-# ĐÂY LÀ KỊCH BẢN
-
-Gia đình có hai anh em. Khi cha mẹ mất, người anh tham lam chiếm hết gia tài, chỉ cho em một túp lều nhỏ và một cây khế.
-
-Người em chăm chỉ làm ăn, sống hiền lành. Đến mùa, cây khế sai trĩu quả. Một hôm, có con chim lạ bay đến ăn khế. Thấy vậy, người em than:
-
-"Chim ăn hết khế của tôi thì tôi biết lấy gì mà sống?"
-
-Chim đáp:
-
-"Ăn một quả, trả cục vàng. May túi ba gang, mang đi mà đựng."
-
-Người em làm theo. Chim đưa anh đến một hòn đảo đầy vàng bạc. Anh chỉ lấy vừa đủ túi ba gang rồi trở về, từ đó sống sung túc.
-
-Người anh biết chuyện liền đổi hết gia sản để lấy cây khế. Khi chim đến ăn khế, anh cũng than phiền. Chim vẫn nói:
-
-"Ăn một quả, trả cục vàng. May túi ba gang, mang đi mà đựng."
-
-Nhưng người anh tham lam, may một chiếc túi thật lớn. Khi đến đảo vàng, anh nhét đầy túi. Trên đường bay về, túi quá nặng khiến chim không mang nổi. Người anh rơi xuống biển và mất tất cả.
