@@ -506,6 +506,21 @@ function isCompletionText(text: string): boolean {
   return /production-ready/i.test(text) && /đầy đủ/i.test(text);
 }
 
+/**
+ * ChatAI TỰ BÁO rõ ràng là CHƯA xong (xác nhận qua log lỗi thật: "do giới
+ * hạn xử lý trong lượt này tôi mới serialize phần đầu storyboard. Cần tiếp
+ * tục mở rộng các continuity run còn lại") — luôn ưu tiên tín hiệu này HƠN
+ * hasFullJsonFile, vì ChatAI vẫn đặt tên file đính kèm đúng quy ước
+ * "_full.json" (theo yêu cầu ở prompt_master.txt) NGAY CẢ KHI file đó chỉ
+ * mới chứa phần đầu storyboard — nếu chỉ dựa vào tên file, vòng lặp sẽ dừng
+ * nhầm ở file dở dang này.
+ */
+function isIncompleteText(text: string): boolean {
+  return /giới hạn xử lý|chưa (thể )?hoàn thành|chưa hoàn thiện|cần tiếp tục|còn lại|continuity run còn|phần đầu|mới serialize|chỉ (mới|vừa) (tạo|serialize|xuất)/i.test(
+    text,
+  );
+}
+
 /** Lấy file đính kèm (nếu có) và nội dung text của tin nhắn trả lời MỚI NHẤT từ ChatAI. */
 async function readLatestAssistantMessage(
   page: Page,
@@ -541,12 +556,15 @@ async function readLatestAssistantMessage(
   );
   const text = await latest.innerText().catch(() => "");
   // Tên file "full.json" chỉ tính là dấu hiệu hoàn thiện khi có 1 file THẬT
-  // đã tải về mang tên đó (xem comment isCompletionText).
+  // đã tải về mang tên đó (xem comment isCompletionText) — NHƯNG vẫn phải
+  // thua tín hiệu "tự báo chưa xong" (xem isIncompleteText) vì ChatAI có thể
+  // đặt tên file này đúng quy ước dù nội dung mới chỉ là phần đầu.
   const hasFullJsonFile = downloadedFiles.some((p) => /full\.json$/i.test(p));
 
   return {
     downloadedFiles,
-    isComplete: hasFullJsonFile || isCompletionText(text),
+    isComplete:
+      !isIncompleteText(text) && (hasFullJsonFile || isCompletionText(text)),
   };
 }
 
@@ -609,17 +627,19 @@ export async function askChatAI(
         promptFileName,
       );
       downloadedFiles = result.downloadedFiles;
-      // console.log(
-      //   "result.isComplete, downloadedFiles.length",
-      //   result.isComplete,
-      //   downloadedFiles.length,
-      // );
-      // if (result.isComplete) {
-      if (downloadedFiles.length > 0) {
-      }
       await captureSnapshot(page, jobId, "result");
-      break;
-      // }
+      // Xác nhận qua log lỗi thật (ChatAI tự báo: "do giới hạn xử lý trong
+      // lượt này tôi mới serialize phần đầu storyboard. Cần tiếp tục mở rộng
+      // các continuity run còn lại"): gate isComplete này TRƯỚC ĐÂY bị comment
+      // out kèm break vô điều kiện ngay lượt đầu tiên — khiến vòng lặp gửi
+      // tiếp "yes"/continue bên dưới (vốn đã viết đúng) KHÔNG BAO GIỜ chạy,
+      // nhận storyboard DỞ DANG làm kết quả cuối bất cứ khi nào ChatAI cần
+      // hơn 1 lượt mới xong (thường xảy ra với kịch bản dài) — đây chính là
+      // nguyên nhân thật của toàn bộ chênh lệch "output ngắn hơn" đã thấy
+      // trước giờ, không phải do model/locale/prompt. Bật lại gate này.
+      if (result.isComplete) {
+        break;
+      }
 
       // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
       // có) chỉ là bản nháp/trung gian (xem docstring askChatAI), KHÔNG phải
