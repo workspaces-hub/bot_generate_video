@@ -59,27 +59,33 @@ export const assistantMessageLocator = (page: Page): Locator =>
 
 /**
  * File ChatAI tạo ra và đính kèm trong 1 tin nhắn trả lời (vd qua code
- * interpreter/canvas) — DOM thật xác nhận (job 6d869584): ChatAI KHÔNG dùng
- * thẻ <a> cho việc này (khác phỏng đoán ban đầu), mà dùng 2 loại <button>:
- * 1. Link-text NGAY TRONG đoạn trả lời, nhãn "Download <filename>":
+ * interpreter/canvas) — DOM thật xác nhận ChatAI dùng NHIỀU kiểu UI khác
+ * nhau cho việc này tuỳ phiên/thời điểm (site đổi UI khá thường xuyên):
+ * 1. Link-text tiếng Anh NGAY TRONG đoạn trả lời, nhãn "Download <filename>":
  *    `<button aria-label="Download meta.json">Download meta.json</button>`
- *    — bấm vào kích hoạt download thật NGAY (xem downloadFileLinkLocator,
- *    ưu tiên dùng cái này để tải).
+ *    (job 6d869584) — bấm vào kích hoạt download thật NGAY (xem
+ *    downloadFileLinkLocator, ưu tiên dùng cái này để tải).
  * 2. Thẻ "card" file hiện dưới câu trả lời:
  *    `<button aria-label="meta.json" class="group/open-file ...">` — bấm
  *    vào MỞ PREVIEW (canvas), không chắc tải thẳng (xem fileCardLocator,
- *    chỉ dùng làm fallback khi không có nút "Download ..." nào).
- * fileAttachmentLocator gộp cả 2 — dùng để CHECK "đã có file xuất hiện chưa"
+ *    dùng làm fallback khi không có nút "Download ..." nào).
+ * 3. Link-text TIẾNG VIỆT, có emoji, NGAY TRONG đoạn văn (job 4c746641,
+ *    KHÔNG khớp cả 2 pattern trên nên trước đây bị bỏ sót hoàn toàn — file
+ *    JSON có thật, ChatAI báo đã tạo, nhưng bot không tải được gì cả):
+ *    `<button aria-label="📄 Tải file pip_mouse_..._full.json" class="behavior-btn ... entity-underline ...">📄 Tải file ..._full.json</button>`
+ *    — nhận diện qua aria-label KẾT THÚC bằng ".json" (xem inlineFileLinkLocator).
+ * fileAttachmentLocator gộp cả 3 — dùng để CHECK "đã có file xuất hiện chưa"
  * (vd sendMessage coi đây là dấu hiệu ChatAI trả lời xong); còn lúc THỰC SỰ bấm
  * tải (downloadAttachedFiles trong chatAI.ts) phải ưu tiên
- * downloadFileLinkLocator trước, không bấm cả 2 cho cùng 1 file (tránh tải
- * trùng/mở preview thừa).
+ * downloadFileLinkLocator/inlineFileLinkLocator trước, không bấm nhiều nút
+ * cho CÙNG 1 file (tránh tải trùng/mở preview thừa).
  */
 export const fileAttachmentLocator = (message: Locator): Locator =>
   message.locator(
     [
       'button[aria-label^="Download "]',
       'button[class*="group/open-file"]',
+      'button[aria-label$=".json"]',
     ].join(", "),
   );
 
@@ -98,7 +104,21 @@ export const downloadFileLinkLocator = (message: Locator): Locator =>
     'button[aria-label^="Download "]:not([aria-label="Download file"])',
   );
 
-/** Thẻ "card" file (mở preview/canvas, không chắc tải thẳng) — chỉ dùng fallback khi downloadFileLinkLocator rỗng. */
+/**
+ * Link-text TIẾNG VIỆT kèm emoji, nhãn "📄 Tải file <filename>", NGAY TRONG
+ * đoạn văn trả lời — DOM thật xác nhận (job 4c746641):
+ * `<button aria-label="📄 Tải file pip_mouse_..._full.json" class="behavior-btn ... entity-underline ...">`,
+ * hoàn toàn KHÔNG khớp downloadFileLinkLocator (không bắt đầu bằng
+ * "Download ") lẫn fileCardLocator (không có class "group/open-file") — nhận
+ * diện qua aria-label kết thúc bằng ".json" (đủ đặc trưng, ChatAI luôn đặt
+ * tên file JSON output theo đúng đuôi này). Bấm vào cũng kích hoạt download
+ * thật (cùng cơ chế downloadFileLinkLocator), ưu tiên dùng trước
+ * fileCardLocator.
+ */
+export const inlineFileLinkLocator = (message: Locator): Locator =>
+  message.locator('button[aria-label$=".json"]');
+
+/** Thẻ "card" file (mở preview/canvas, không chắc tải thẳng) — chỉ dùng fallback khi downloadFileLinkLocator/inlineFileLinkLocator rỗng. */
 export const fileCardLocator = (message: Locator): Locator =>
   message.locator('button[class*="group/open-file"]');
 

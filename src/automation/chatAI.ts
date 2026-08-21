@@ -13,6 +13,7 @@ import {
   fileAttachmentLocator,
   fileCardLocator,
   fileUploadInputLocator,
+  inlineFileLinkLocator,
   promptTextareaCandidates,
   regenerateErrorButtonCandidates,
   sendButtonCandidates,
@@ -335,6 +336,14 @@ async function sendMessage(page: Page, text: string): Promise<void> {
  * TRƯỚC; nếu không có nút nào (count 0) mới fallback sang fileCardLocator —
  * KHÔNG bấm cả 2 cho cùng 1 file (tránh tải trùng/mở preview thừa không cần
  * thiết khi nút "Download ..." đã đủ để tải thẳng).
+ *
+ * Xác nhận qua debug thật (job 4c746641): ChatAI đôi khi dùng HẲN 1 kiểu nút
+ * link-text THỨ BA — "📄 Tải file <filename>" (tiếng Việt, có emoji) — không
+ * khớp cả downloadFileLinkLocator lẫn fileCardLocator, khiến trước đây
+ * attachments.count() = 0 dù file JSON có thật trong tin nhắn, bot bỏ sót
+ * hoàn toàn (không log gì vì vòng lặp for còn chưa kịp chạy). Thử thêm
+ * inlineFileLinkLocator SAU downloadFileLinkLocator, TRƯỚC khi fallback
+ * sang fileCardLocator.
  */
 async function downloadAttachedFiles(
   page: Page,
@@ -343,10 +352,10 @@ async function downloadAttachedFiles(
   promptFileName?: string,
 ): Promise<string[]> {
   const downloadLinks = downloadFileLinkLocator(message);
-  const attachments =
-    (await downloadLinks.count()) > 0
-      ? downloadLinks
-      : fileCardLocator(message);
+  const inlineLinks = inlineFileLinkLocator(message);
+  let attachments = downloadLinks;
+  if ((await attachments.count()) === 0) attachments = inlineLinks;
+  if ((await attachments.count()) === 0) attachments = fileCardLocator(message);
   const count = await attachments.count();
   const savedPaths: string[] = [];
   // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file ChatAI
@@ -704,6 +713,7 @@ export async function askChatAI(
         }
         break;
       }
+      break
 
       // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
       // có) chỉ là bản nháp/trung gian (xem docstring askChatAI), KHÔNG phải
