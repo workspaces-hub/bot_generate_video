@@ -439,6 +439,21 @@ async function downloadAttachedFiles(
           }
         }
 
+        if (!previewText) {
+          // Xác nhận qua thực tế (job 38b68c7a): downloadFileLinkLocator
+          // không còn khớp nút nào trên bản UI mới của ChatAI (đã đổi hết
+          // sang aria-label "Download file"/"Download" chung chung, không
+          // còn "Download <tên file>"), buộc fallback sang panel xem trước —
+          // nếu clipboard/innerText ở panel này ĐỀU thất bại, trước đây
+          // code lặng lẽ bỏ qua (continue) không log gì, khiến không thể
+          // biết bước tải file đã fail ở đây khi xem log thật.
+          console.warn(
+            `[chatAI] Không đọc được nội dung preview file đính kèm (index ${i}) — panel${
+              panelAppeared ? " đã mở nhưng đọc rỗng" : " không mở ra được"
+            }, bỏ qua file này.`,
+          );
+        }
+
         if (previewText) {
           await fs.promises.mkdir(config.chatAIResultsDir, {
             recursive: true,
@@ -616,8 +631,22 @@ export async function askChatAI(
       await uploadAttachment(page, attachmentPath);
     }
 
+    // Xác nhận qua thực tế (job 38b68c7a): ChatAI có thể tự tin báo "Đã hoàn
+    // thành"/đính kèm đúng file "_full.json" NGAY CẢ KHI storyboard mới bao
+    // phủ một phần nhỏ kịch bản (vd 3/~14 sự kiện chính) — isComplete chỉ
+    // phát hiện đúng trường hợp ChatAI TỰ NHẬN chưa xong, không phát hiện
+    // được trường hợp ChatAI nhận NHẦM là đã xong. Vì vậy, lần đầu tiên
+    // isComplete = true, KHÔNG dừng ngay — bắt buộc thêm 1 lượt audit yêu
+    // cầu ChatAI tự đối chiếu lại toàn bộ file với kịch bản gốc trước khi
+    // thực sự chấp nhận là xong.
+    const AUDIT_MESSAGE =
+      "Trước khi coi là xong: hãy tự đối chiếu lại TOÀN BỘ file JSON storyboard vừa tạo với đúng kịch bản trong file nguồn đã gửi — liệt kê nội bộ từng sự kiện/hành động chính trong kịch bản theo đúng thứ tự và xác nhận MỖI sự kiện đó đã có ít nhất một continuity run/clip tương ứng trong file chưa. Nếu phát hiện BẤT KỲ đoạn nào của kịch bản (kể cả đoạn ở giữa hoặc cuối truyện) CHƯA được chuyển thành clip, hãy tiếp tục bổ sung ngay các continuity run còn thiếu và gửi lại TOÀN BỘ file JSON đầy đủ (không chỉ phần thêm), vẫn đặt tên chứa _full.json. Nếu đã xác nhận bao phủ đầy đủ toàn bộ kịch bản từ đầu đến cuối, trả lời ngắn gọn xác nhận lại, không cần gửi lại file.";
+    const CONTINUE_MESSAGE =
+      "yes. chỉ gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json";
+
     let messageToSend = prompt;
     let downloadedFiles: string[] = [];
+    let auditRequested = false;
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
       await sendMessage(page, messageToSend);
 
@@ -626,8 +655,8 @@ export async function askChatAI(
         jobId,
         promptFileName,
       );
-      downloadedFiles = result.downloadedFiles;
       await captureSnapshot(page, jobId, "result");
+
       // Xác nhận qua log lỗi thật (ChatAI tự báo: "do giới hạn xử lý trong
       // lượt này tôi mới serialize phần đầu storyboard. Cần tiếp tục mở rộng
       // các continuity run còn lại"): gate isComplete này TRƯỚC ĐÂY bị comment
@@ -638,6 +667,23 @@ export async function askChatAI(
       // nguyên nhân thật của toàn bộ chênh lệch "output ngắn hơn" đã thấy
       // trước giờ, không phải do model/locale/prompt. Bật lại gate này.
       if (result.isComplete) {
+        // Ưu tiên file MỚI của lượt này (nếu có) làm kết quả hiện tại; nếu
+        // lượt này không đính kèm gì (vd chỉ xác nhận lại bằng lời sau lượt
+        // audit, không gửi lại file không đổi), GIỮ NGUYÊN file tốt nhất đã
+        // có từ lượt trước — không xoá oan.
+        if (result.downloadedFiles.length > 0) {
+          for (const oldPath of downloadedFiles) {
+            await fs.promises.unlink(oldPath).catch(() => {});
+          }
+          downloadedFiles = result.downloadedFiles;
+        }
+
+        if (!auditRequested) {
+          auditRequested = true;
+          await captureSnapshot(page, `${jobId}-before-audit`, "before-audit");
+          messageToSend = AUDIT_MESSAGE;
+          continue;
+        }
         break;
       }
 
@@ -645,12 +691,11 @@ export async function askChatAI(
       // có) chỉ là bản nháp/trung gian (xem docstring askChatAI), KHÔNG phải
       // kết quả cuối — xoá luôn khỏi đĩa để tránh rác lại config.chatAIResultsDir
       // và tránh nhầm với file thật khi đọc lại sau này.
-      for (const filePath of downloadedFiles) {
+      for (const filePath of result.downloadedFiles) {
         await fs.promises.unlink(filePath).catch((err) => {
           console.warn(`[chatAI] Không xoá được file nháp "${filePath}":`, err);
         });
       }
-      downloadedFiles = [];
 
       // Chưa có file — chụp lại trạng thái hiện tại TRƯỚC KHI gửi "yes" để
       // còn biết ChatAI đang dừng ở đâu (phần nào) nếu vòng lặp không bao giờ
@@ -662,8 +707,7 @@ export async function askChatAI(
         `${jobId}-no-file-turn-${turn}`,
         `no-file-turn-${turn}`,
       );
-      messageToSend =
-        "yes. chỉ gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json";
+      messageToSend = CONTINUE_MESSAGE;
     }
 
     return { downloadedFiles };
