@@ -19,6 +19,7 @@ import {
   sendButtonCandidates,
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
+  workModeToggleLocator,
 } from "./chatAISelectors";
 import { firstVisible } from "./selectors";
 // captureSnapshot/captureErrorSnapshot đã tổng quát (chỉ cần Page + jobId),
@@ -678,6 +679,29 @@ async function readLatestAssistantMessage(
 }
 
 /**
+ * Chọn mode "Công việc"/"Work" thay vì "Trò chuyện"/"Chat" (DOM thật xác
+ * nhận: radio group `data-tpp-toggle-value="chatgpt|work"`) — best-effort,
+ * không throw nếu không tìm thấy toggle (có thể site đã đổi giao diện, hoặc
+ * tài khoản không có tính năng này) và bỏ qua nếu đã ở đúng mode "work"
+ * (aria-checked="true") để tránh click thừa.
+ */
+async function selectWorkMode(page: Page): Promise<void> {
+  try {
+    const workToggle = workModeToggleLocator(page).first();
+    const alreadyOn =
+      (await workToggle.getAttribute("aria-checked").catch(() => null)) ===
+      "true";
+    if (alreadyOn) return;
+    await workToggle.click({ timeout: 10000 });
+  } catch (err) {
+    console.warn(
+      "[chatAI] Không chọn được mode 'Work' (best-effort, bỏ qua):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
  * Mở ChatAI, gửi prompt, chờ ChatAI trả lời xong, rồi thử tải file ChatAI
  * đính kèm (nếu có, xem downloadAttachedFiles) về config.chatAIResultsDir.
  *
@@ -721,6 +745,7 @@ export async function askChatAI(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
+    await selectWorkMode(page);
     if (attachmentPath) {
       await uploadAttachment(page, attachmentPath);
     }
@@ -800,8 +825,8 @@ export async function askChatAI(
       // hơn 1 lượt mới xong (thường xảy ra với kịch bản dài) — đây chính là
       // nguyên nhân thật của toàn bộ chênh lệch "output ngắn hơn" đã thấy
       // trước giờ, không phải do model/locale/prompt. Bật lại gate này.
-      downloadedFiles = result.downloadedFiles
-      break
+      downloadedFiles = result.downloadedFiles;
+      break;
       if (result.isComplete) {
         // Ưu tiên file MỚI của lượt này (nếu có) làm kết quả hiện tại; nếu
         // lượt này không đính kèm gì (vd chỉ xác nhận lại bằng lời sau lượt

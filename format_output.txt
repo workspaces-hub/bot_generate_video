@@ -3,6 +3,15 @@ PHẦN HỢP ĐỒNG XUẤT JSON CỐ ĐỊNH
 ======================================================================
 
 1. OUTPUT file
+
+QUY TẮC KHI JSON QUÁ DÀI ĐỂ XUẤT TRONG 1 LƯỢT — BẮT BUỘC:
+- Nếu storyboard đầy đủ tạo ra một JSON quá dài để hoàn tất trong một lượt trả lời, đó KHÔNG phải lý do để dừng lại, rút gọn, tóm tắt hay bỏ bớt item — vẫn phải tiếp tục xử lý/ghi file cho tới khi TOÀN BỘ kịch bản đã được chuyển thành JSON đầy đủ.
+- Được phép mất NHIỀU lượt/nhiều lần thao tác với công cụ tạo file để hoàn tất — mỗi lượt tiếp tục ghi thêm vào ĐÚNG CÙNG 1 file cho tới khi xong, không tạo nhiều file rời rạc theo từng phần.
+- CHỈ được coi là ĐÃ HOÀN THÀNH khi file JSON hoàn chỉnh (tên chứa "_full.json") đã THỰC SỰ được tạo và đính kèm NGAY TRONG chính lượt trả lời đó, chứa TRỌN VẸN toàn bộ storyboard (không phải bản rút gọn/một phần).
+- Nếu lượt trả lời hiện tại CHƯA đính kèm file JSON đầy đủ đó — bất kể đã nói "sẽ tiếp tục xử lý", "sẽ gửi sau khi hoàn tất", "file quá dài nên sẽ xuất riêng", đã tóm tắt kế hoạch, hay bất kỳ lý do nào khác — lượt trả lời đó PHẢI được coi là CÒN ĐANG TRẢ LỜI DỞ DANG, KHÔNG được dùng các cụm như "Đã hoàn thành", không được thống kê số lượng CHARACTER/LOCATION/VIDEO như thể đã xong.
+- Không được dừng giữa chừng để chờ xác nhận/chờ lượt sau rồi mới tiếp tục — nếu output quá dài không thể xong trong 1 lượt, vẫn phải tiếp tục xử lý và ghi file NGAY, không tạm dừng lại chỉ để thông báo kế hoạch hoặc lý do vì sao file dài.
+- Việc phân tích/lên kế hoạch nội bộ (Character Bible, Location Bible, chia clip...) KHÔNG được tính là dấu hiệu hoàn thành — chỉ file JSON đính kèm ĐẦY ĐỦ, THỰC TẾ mới tính.
+
 - Tạo đúng một file JSON hoàn chỉnh; tên file phải chứa “_full.json”.
 - Root của file phải là một JSON array.
 - Không in nội dung JSON storyboard trong chat.
@@ -123,9 +132,10 @@ SCENE_SETTING_END của mọi clip
 VIDEO của clip đầu continuity run
 
 - id theo mẫu SHOT_XX_CLIP_01_VIDEO.
-- ref phải có đúng hai item và đúng thứ tự:
+- ref phải có ĐÚNG HAI item, không hơn không kém, và đúng thứ tự:
   1. SHOT_XX_CLIP_01_START, type SCENE_SETTING_START.
   2. SHOT_XX_CLIP_01_END, type SCENE_SETTING_END.
+- CẤM TUYỆT ĐỐI: KHÔNG được thêm CHARACTER hoặc LOCATION vào ref của VIDEO, dù nhân vật/bối cảnh có xuất hiện trong clip — ref của VIDEO CHỈ chứa đúng 2 boundary ở trên, không thêm bất kỳ item nào khác. Nhân vật/bối cảnh xuất hiện trong clip đã được thể hiện qua ref của SCENE_SETTING_START/SCENE_SETTING_END tương ứng, không cần (và không được) lặp lại ở ref của VIDEO.
 - prompt:  dùng START FRAME làm primary visual continuity anchor và tập trung mô tả delta từ start đến end frame.
 - prompt phải bắt đầu bằng “Continuous six-second cinematic shot bounded exactly by the referenced START FRAME and END FRAME."
 - prompt BẮT BUỘC phải nêu đủ, bằng tiếng Anh, ngay trong cùng field (không được thiếu bất kỳ mục nào dưới đây, kể cả khi prompt đã dài):
@@ -141,10 +151,11 @@ VIDEO của clip đầu continuity run
 VIDEO của clip N từ 2 trở đi trong cùng run
 
 - id theo mẫu SHOT_XX_CLIP_N_VIDEO.
-- ref phải có đúng hai item và đúng thứ tự:
+- ref phải có ĐÚNG HAI item, không hơn không kém, và đúng thứ tự:
   1. SHOT_XX_CLIP_N-1_END, type SCENE_SETTING_START.
   2. SHOT_XX_CLIP_N_END, type SCENE_SETTING_END.
 - ref[0] dùng alias type SCENE_SETTING_START dù id trỏ tới item có type SCENE_SETTING_END.
+- CẤM TUYỆT ĐỐI: KHÔNG được thêm CHARACTER hoặc LOCATION vào ref của VIDEO, dù nhân vật/bối cảnh có xuất hiện trong clip — ref của VIDEO CHỈ chứa đúng 2 boundary ở trên, không thêm bất kỳ item nào khác. Nhân vật/bối cảnh xuất hiện trong clip đã được thể hiện qua ref của SCENE_SETTING_START/SCENE_SETTING_END tương ứng, không cần (và không được) lặp lại ở ref của VIDEO.
 - prompt: chỉ chứa VIDEO PROMPT dùng trực tiếp để gen video.
 - prompt phải bắt đầu bằng “Continuous six-second cinematic shot bounded exactly by the referenced START FRAME and END FRAME."
 - prompt BẮT BUỘC phải nêu đủ, bằng tiếng Anh, ngay trong cùng field (không được thiếu bất kỳ mục nào dưới đây, kể cả khi prompt đã dài) — GIỐNG HỆT yêu cầu ở "VIDEO của clip đầu continuity run" phía trên, áp dụng lại cho MỌI clip, không chỉ clip đầu:
@@ -259,7 +270,7 @@ Nếu bất kỳ quy tắc nào ở phần khác có thể được hiểu theo 
 - Mỗi VIDEO có duration là số giây hợp lệ theo cấu hình ở PHẦN 1.
 - Mỗi continuity run có đúng một SCENE_SETTING_START tại clip đầu.
 - Không tồn tại SCENE_SETTING_START cho clip N từ 2 trở đi.
-- Mỗi VIDEO có đúng một first-frame boundary ref và một END boundary ref.
+- Mỗi VIDEO có đúng một first-frame boundary ref và một END boundary ref, TỔNG CỘNG ĐÚNG 2 phần tử trong ref — kiểm tra lại KHÔNG có VIDEO nào bị lẫn thêm CHARACTER hoặc LOCATION vào ref (lỗi hay gặp: thêm ref tới nhân vật/bối cảnh xuất hiện trong clip). Nếu phát hiện, xoá các ref CHARACTER/LOCATION đó khỏi VIDEO trước khi lưu file — chỉ giữ đúng 2 boundary.
 - VIDEO của clip đầu ref đúng thứ tự START_01 → END_01.
 - VIDEO_N từ clip 2 trở đi ref đúng thứ tự END_N-1 với alias SCENE_SETTING_START → END_N.
 - END của clip đầu run ref START của chính clip đó ở vị trí đầu tiên, type SCENE_SETTING_START.
@@ -296,4 +307,4 @@ Nguyên tắc tuyệt đối:
 END CỦA CLIP TRƯỚC PHẢI TRỞ THÀNH NGUỒN TRỰC TIẾP VÀ FIRST-FRAME BOUNDARY CỦA VIDEO CLIP SAU.
 KHÔNG TẠO ITEM SCENE_SETTING_START TỪ CLIP THỨ HAI TRỞ ĐI TRONG CÙNG CONTINUITY RUN.
 VIDEO ĐẦU MỖI RUN THAM CHIẾU START_01 VÀ END_01; MỌI VIDEO SAU THAM CHIẾU END CỦA CLIP TRƯỚC VÀ END CỦA CHÍNH NÓ.
-PHẦN QUAN TRỌNG: CHỈ KHI PHÂN TÍCH TOÀN BỘ KỊCH BẢN VÀ GHI RA FILE XONG THÌ MỚI GỬI FILE JSON VÀ THÔNG BÁO HOÀN THÀNH. nếu chưa xử lý xong thì coi như chưa phản hồi xong
+PHẦN QUAN TRỌNG: CHỈ KHI PHÂN TÍCH TOÀN BỘ KỊCH BẢN VÀ GHI RA FILE XONG THÌ MỚI GỬI FILE JSON VÀ THÔNG BÁO HOÀN THÀNH. Nếu chưa xử lý xong thì coi như chưa phản hồi xong — kể cả khi đã trả lời kiểu "tôi sẽ tiếp tục xử lý và gửi file sau", "sẽ gửi file khi hoàn tất", "JSON quá dài nên sẽ xuất riêng thành file" hoặc bất kỳ câu tương đương nào KHÔNG kèm file JSON đầy đủ thật sự đính kèm ngay trong tin nhắn đó, vẫn phải coi là CHƯA HOÀN THÀNH. JSON dài KHÔNG phải lý do để dừng lại/rút gọn/bỏ bớt item — phải tiếp tục xử lý ngay, mất bao nhiêu lượt cũng được, miễn ghi vào ĐÚNG CÙNG 1 file cho tới khi đầy đủ, không được dừng lại chờ được hỏi tiếp mới làm nốt.

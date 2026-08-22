@@ -17,6 +17,16 @@ export const promptTextareaCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
+ * Toggle "Trò chuyện" (Chat) / "Công việc" (Work) — DOM thật xác nhận: 1 cặp
+ * `<button role="radio" data-tpp-toggle-value="chatgpt|work">` (radio group,
+ * `aria-checked="true"` trên nút đang chọn). Nhận diện qua attribute
+ * `data-tpp-toggle-value="work"` (ổn định, không phụ thuộc ngôn ngữ hiển thị
+ * — tiếng Việt là "Công việc", tiếng Anh là "Work").
+ */
+export const workModeToggleLocator = (page: Page): Locator =>
+  page.locator('button[role="radio"][data-tpp-toggle-value="work"]');
+
+/**
  * CHƯA có DOM thật xác nhận (tính năng upload ảnh tham chiếu mới, chưa chạy
  * qua debug snapshot thực tế) — <input type="file"> phục vụ nút "+"/"Add
  * photos & files" trong composer thường bị ẨN (display:none/aria-hidden),
