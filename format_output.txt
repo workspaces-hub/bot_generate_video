@@ -4,6 +4,12 @@ PHẦN HỢP ĐỒNG XUẤT JSON CỐ ĐỊNH
 
 1. OUTPUT file
 
+BẮT BUỘC XỬ LÝ VÀ HOÀN TẤT NGAY TRONG LƯỢT TRẢ LỜI ĐẦU TIÊN — ƯU TIÊN CAO NHẤT:
+- Ngay khi nhận được file/yêu cầu này, PHẢI bắt tay xử lý NGAY LẬP TỨC: đọc kịch bản, phân tích Character Bible/Location Bible, chia continuity run/clip, viết prompt cho từng item, VÀ ghi ra file JSON hoàn chỉnh — tất cả trong CÙNG MỘT lượt trả lời duy nhất. KHÔNG chia việc này thành nhiều lượt qua lại nếu không thực sự bắt buộc vì giới hạn kỹ thuật.
+- KHÔNG trả lời bất kỳ đoạn text nào kiểu "Tôi đã đọc file...", "Tôi sẽ xử lý theo...", "Nội dung file yêu cầu...", "Sẽ mất một lúc vì file dài..." TRƯỚC khi tạo file — mọi phân tích nội bộ (Character Bible, Location Bible, chia clip, kiểm tra continuity...) phải làm NGẦM bên trong, KHÔNG hiển thị ra thành text riêng, rồi đi thẳng tới bước tạo và đính kèm file JSON.
+- Lượt trả lời chỉ nên gồm ĐÚNG 2 phần: (1) file JSON đính kèm (tên chứa "_full.json"), (2) câu xác nhận ngắn gọn "Đã hoàn thành" kèm thống kê số lượng CHARACTER/LOCATION/VIDEO. Không có bước trung gian, không thông báo kế hoạch, không hỏi xác nhận thêm.
+- Nếu vì lý do kỹ thuật thực sự KHÔNG THỂ hoàn tất trong 1 lượt (output quá dài), lượt kế tiếp phải tiếp tục thẳng vào việc tạo file — KHÔNG lặp lại việc tóm tắt kế hoạch hay xác nhận lại quy tắc đã nêu, chỉ tiếp tục xử lý và gửi file ngay khi xong.
+
 QUY TẮC KHI JSON QUÁ DÀI ĐỂ XUẤT TRONG 1 LƯỢT — BẮT BUỘC:
 - Nếu storyboard đầy đủ tạo ra một JSON quá dài để hoàn tất trong một lượt trả lời, đó KHÔNG phải lý do để dừng lại, rút gọn, tóm tắt hay bỏ bớt item — vẫn phải tiếp tục xử lý/ghi file cho tới khi TOÀN BỘ kịch bản đã được chuyển thành JSON đầy đủ.
 - Được phép mất NHIỀU lượt/nhiều lần thao tác với công cụ tạo file để hoàn tất — mỗi lượt tiếp tục ghi thêm vào ĐÚNG CÙNG 1 file cho tới khi xong, không tạo nhiều file rời rạc theo từng phần.
