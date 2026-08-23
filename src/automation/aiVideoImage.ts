@@ -22,7 +22,6 @@ import {
 } from "./aiVideo";
 import {
   addReferenceImageButtonCandidates,
-  busyReferenceImageThumbnailLocator,
   confirmCharacterButtonCandidates,
   creditPaywallModalCandidates,
   entryImagesLocator,
@@ -225,22 +224,18 @@ async function waitForUploadsToSettle(page: Page): Promise<void> {
     .waitForLoadState("networkidle", { timeout: 15_000 })
     .catch(() => {});
 
-  try {
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(
-          '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
-        ).length === 0,
-      { timeout: 600_000 },
-    );
-  } catch {
-    const stillBusy = await busyReferenceImageThumbnailLocator(page).count();
-    if (stillBusy > 0) {
-      throw new GenerationError(
-        `Còn ${stillBusy} ảnh tham chiếu vẫn đang xử lý (aria-busy) sau 600s chờ — không bấm Generate để tránh dùng ảnh chưa load xong.`,
-      );
-    }
-  }
+  // Xác nhận qua log lỗi thật:
+  // timeout cố định 600s vẫn khiến job fail hẳn khi site xử lý ảnh tham chiếu
+  // lâu hơn mốc đó — cùng lý do đã sửa cho waitForFrameUploadToSettle/
+  // waitForVideoRefImageUploadsToSettle (aiVideo.ts). Chờ VÔ THỜI HẠN
+  // (timeout: 0) tới khi hết aria-busy thay vì fail sau N giây.
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(
+        '[aria-label="Uploaded image, click to preview"][aria-busy="true"]',
+      ).length === 0,
+    { timeout: 0 },
+  );
 }
 
 /**

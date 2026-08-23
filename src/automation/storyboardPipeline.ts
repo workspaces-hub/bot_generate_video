@@ -373,6 +373,7 @@ export async function generateReferenceImagesForFileViaAIVideo(
             err,
           );
         });
+        await sleep(1000);
       }
     }
     await saveEntries(inputPath, entries);
@@ -604,13 +605,13 @@ export async function generateVideosForFile(
       );
       if (onEntryError) {
         await onEntryError(entry.id).catch((err) => {});
+        await sleep(1000)
       }
       entry.success = false;
       failed++;
       failedEntries.push({ id: entry.id, type: "VIDEO" });
     }
     await saveEntries(inputPath, entries);
-    await sleep(15000);
   }
 
   return { outputDir, succeeded, failed, failedEntries };
@@ -879,6 +880,7 @@ export async function generateSceneImagesForFileViaAIVideo(
             err,
           );
         });
+        await sleep(1000);
       }
     }
     await saveEntries(inputPath, entries);
