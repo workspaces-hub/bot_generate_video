@@ -434,6 +434,46 @@ function countErrorCards(entry: Locator): Locator {
 }
 
 /**
+ * Nút tròn info (`absolute bottom-3 right-3`, xem chú thích countErrorCards)
+ * ở góc dưới-phải mỗi card lỗi — hover vào để mở popover chứa "Recreate",
+ * "Retry", "Copy Creation ID", "Delete" (DOM thật do người dùng cung cấp qua
+ * screenshot).
+ */
+function errorCardInfoTriggerLocator(card: Locator): Locator {
+  return card.locator(".absolute.bottom-3.right-3").first();
+}
+
+/**
+ * Hover icon info của MỖI card lỗi trong entry rồi bấm "Retry" nếu popover có
+ * nút đó (best-effort — bỏ qua card nào hover/không thấy nút Retry cũng
+ * không throw, để không chặn cả job vì 1 card không retry được). Theo yêu
+ * cầu người dùng: card lỗi không coi là lỗi THẬT ngay — phải thử Retry
+ * trước, retry cũng lỗi mới tính là lỗi (xem waitForEntryImagesToSettle).
+ */
+async function retryErrorCards(page: Page, entry: Locator): Promise<void> {
+  const cards = countErrorCards(entry);
+  const count = await cards.count();
+  for (let i = 0; i < count; i++) {
+    try {
+      await errorCardInfoTriggerLocator(cards.nth(i)).hover({ timeout: 3000 });
+      const retryButton = page.getByRole("button", { name: /^Retry$/i });
+      const hasRetry = await retryButton
+        .first()
+        .isVisible({ timeout: 2000 })
+        .catch(() => false);
+      if (hasRetry) {
+        await retryButton.first().click({ timeout: 2000 }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn(
+        `[aiVideoImage] Không hover/bấm Retry được cho card lỗi (index ${i}), bỏ qua:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+}
+
+/**
  * Entry mới xuất hiện trong lịch sử KHÔNG có nghĩa cả 4 ảnh đã render xong —
  * site có thể thêm khối entry trước rồi lấp dần từng ảnh vào sau (giống
  * cách reference-image thumbnail vẫn "aria-busy" một lúc sau khi đã upload
@@ -445,6 +485,13 @@ function countErrorCards(entry: Locator): Locator {
  * là card lỗi (xem countErrorCards) — kiểm tra MỖI vòng poll, không cần chờ
  * ổn định thêm vì đây là tín hiệu DOM trực tiếp (không suy đoán qua thời
  * gian như trước).
+ *
+ * Theo yêu cầu người dùng: KHÔNG coi "tất cả card lỗi" là lỗi thật ngay —
+ * lần ĐẦU TIÊN phát hiện, thử hover icon info + bấm "Retry" trên từng card
+ * (xem retryErrorCards), rồi tiếp tục chờ xem card có generate lại thành
+ * công không. Chỉ khi sau khi đã Retry mà VẪN toàn bộ card lỗi mới thực sự
+ * ném lỗi — Retry chỉ thử ĐÚNG 1 lần cho cả entry (không lặp vô hạn nếu site
+ * cứ lỗi liên tục).
  */
 async function waitForEntryImagesToSettle(
   page: Page,
@@ -456,17 +503,35 @@ async function waitForEntryImagesToSettle(
   const errorCards = countErrorCards(entry);
   const start = Date.now();
   const pollIntervalMs = 15000;
-  const requiredStableMs = 120000;
+  // Theo yêu cầu người dùng (giảm thời gian gen ảnh, đang ~4 phút/lần): mốc
+  // ổn định 120s (2 phút) trước đây là phỏng đoán an toàn, không có bằng
+  // chứng thực tế cần dài vậy — đây là phần "đệm cứng" cộng thêm SAU KHI ảnh
+  // đã render xong thật, chiếm gần nửa tổng thời gian chờ. Giảm còn 30s (2
+  // vòng poll) — ảnh thường lấp đầy trong vài chục giây sau khi entry xuất
+  // hiện, không phải vài phút; nếu sau này thấy thiếu ảnh (case ảnh lấp rất
+  // chậm) mới cần tăng lại.
+  const requiredStableMs = 45000;
 
   let lastCount = await images.count();
   let stableSince = Date.now();
+  let hasRetried = false;
 
   while (Date.now() - start < timeoutMs) {
     const total = await totalCards.count();
     const errored = await errorCards.count();
     if (total > 0 && errored === total) {
+      if (!hasRetried) {
+        hasRetried = true;
+        await retryErrorCards(page, entry);
+        // Cho card vừa Retry đủ thời gian bắt đầu xử lý lại trước khi kiểm
+        // tra tiếp — reset mốc ổn định vì trạng thái card vừa thay đổi.
+        stableSince = Date.now();
+        lastCount = await images.count();
+        await page.waitForTimeout(pollIntervalMs);
+        continue;
+      }
       throw new GenerationError(
-        `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi`,
+        `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi (đã thử Retry nhưng vẫn lỗi)`,
       );
     }
 

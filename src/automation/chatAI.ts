@@ -236,7 +236,7 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // timeout dù ChatAI xong từ lâu. Vì vậy: nếu tin nhắn trả lời MỚI NHẤT đã có
   // file đính kèm hiện ra (fileAttachmentLocator), coi đó là dấu hiệu xong
   // THAY THẾ cho việc chờ nút Stop biến mất.
-  const stableRequiredMs = 5000;
+  const stableRequiredMs = 30000;
   const pollIntervalMs = 5000;
   // Xác nhận qua debug thật (job d077805e, chatAIImage.ts): ChatAI đôi khi báo
   // lỗi THẬT ("Something went wrong. Please try again." kèm nút Retry,
@@ -345,6 +345,15 @@ async function sendMessage(page: Page, text: string): Promise<void> {
  * hoàn toàn (không log gì vì vòng lặp for còn chưa kịp chạy). Thử thêm
  * inlineFileLinkLocator SAU downloadFileLinkLocator, TRƯỚC khi fallback
  * sang fileCardLocator.
+ *
+ * Xác nhận qua debug thật (job pip_boulangerie, HTML): CÙNG 1 tên file có
+ * thể xuất hiện dưới dạng NHIỀU nút trích dẫn (citation) rải rác trong cùng
+ * 1 đoạn văn trả lời (thấy tới 9 lần khớp cùng 1 filename trong 1 tin nhắn)
+ * — nếu dùng inlineFileLinkLocator, "count" đếm được có thể > số file THẬT
+ * SỰ, khiến vòng lặp tải TRÙNG cùng 1 file nhiều lần (ra "<tên>.json",
+ * "<tên>-2.json"... dù chỉ có 1 kết quả). Dedupe theo aria-label (đúng bằng
+ * tên file) TRƯỚC khi lặp — mỗi tên file chỉ tải ĐÚNG 1 LẦN, dù khớp bao
+ * nhiêu nút.
  */
 async function downloadAttachedFiles(
   page: Page,
@@ -353,11 +362,26 @@ async function downloadAttachedFiles(
   promptFileName?: string,
 ): Promise<string[]> {
   const downloadLinks = downloadFileLinkLocator(message);
-  // const inlineLinks = inlineFileLinkLocator(message);
+  const inlineLinks = inlineFileLinkLocator(message);
   let attachments = downloadLinks;
-  // if ((await attachments.count()) === 0) attachments = inlineLinks;
+  if ((await attachments.count()) === 0) attachments = inlineLinks;
   if ((await attachments.count()) === 0) attachments = fileCardLocator(message);
-  const count = await attachments.count();
+  const totalMatched = await attachments.count();
+
+  // Dedupe theo aria-label (với cả 3 locator trên, aria-label luôn LÀ tên
+  // file thật hoặc chứa tên file) — giữ lại index ĐẦU TIÊN cho mỗi tên file,
+  // bỏ qua các lần khớp lặp lại sau đó của CÙNG 1 file.
+  const seenLabels = new Set<string>();
+  const indicesToProcess: number[] = [];
+  for (let i = 0; i < totalMatched; i++) {
+    const label =
+      (await attachments.nth(i).getAttribute("aria-label").catch(() => null)) ??
+      `__no-label-${i}`;
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
+    indicesToProcess.push(i);
+  }
+
   const savedPaths: string[] = [];
   // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file ChatAI
   // trả về giống tên file đó (giữ nguyên đuôi thật của file tải về, vd
@@ -367,7 +391,7 @@ async function downloadAttachedFiles(
     ? path.basename(promptFileName, path.extname(promptFileName))
     : null;
 
-  for (let i = 0; i < count; i++) {
+  for (const i of indicesToProcess) {
     try {
       // QUAN TRỌNG: gắn .catch() NGAY khi tạo promise (cùng statement), TRƯỚC
       // khi click() — nếu không, click() throw (vd element bị re-render/stale
