@@ -77,6 +77,58 @@ export const resolutionChipCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
+ * Chip chọn thời lượng video trong toolbar khung nhập prompt — DOM thật do
+ * người dùng cung cấp trực tiếp:
+ * `<div class="border-hl_line_01 ... sm:flex ..."><div>...768p</div><div class="bg-hl_line_01 h-[14px] w-[1px]"></div><div>...<svg>(clock)</svg><span>6s</span></div></div>`
+ * — độ phân giải ("768p") VÀ thời lượng ("6s") nằm CHUNG 1 chip (cả chip là
+ * <div cursor-pointer>, KHÔNG có role="button", giống modelChipCandidates),
+ * ngăn cách bởi 1 vạch chia dọc. Nhãn "Ns" luôn đi kèm 1 icon đồng hồ ngay
+ * trước đó. Ưu tiên scope trong đúng chip (class "border-hl_line_01") để
+ * tránh khớp nhầm chữ "Ns" ở nơi khác trên trang; getByText toàn trang giữ
+ * lại làm fallback.
+ */
+export const durationChipCandidates = (page: Page): Array<() => Locator> => [
+  () => page.locator("div.border-hl_line_01").getByText(/^\d{1,2}s$/i),
+  () => page.getByText(/^\d{1,2}s$/i),
+];
+
+/**
+ * Popover mở ra sau khi bấm chip resolution/duration CÓ đúng class
+ * "ant-popover-content" (là ant-popover thật), NHƯNG openPopoverLocator +
+ * dropdownOptionCandidates dùng chung cho model/resolution/duration lại
+ * không đáng tin cậy ở đây: trang luôn giữ mount SẴN 2 bản ant-popover ẨN
+ * khác (của popover chọn MODEL, "model-selection-options") cùng lúc với bản
+ * đang mở thật — .first() trong firstVisible luôn rơi trúng 1 bản ẩn đó thay
+ * vì bản đang mở (xác nhận qua nhiều lần debug thật:
+ * storage/debug/duration-attempt-*.html), gây báo sai trạng thái popover và
+ * chọn nhầm/không chọn được option.
+ *
+ * DOM thật do người dùng cung cấp trực tiếp cho đúng 1 option (unselected):
+ * `<div class="relative flex flex-1 items-center justify-center rounded-[6px]
+ * transition-all h-8 text-hl_text_02 hover:text-hl_text_00 cursor-pointer">
+ * <div class="flex items-center justify-center text-[11px] font-medium
+ * leading-[14px] tracking-[0.44px]">10s</div></div>` — không role, không
+ * class riêng để phân biệt "đây là option Duration" (class trùng hệt các
+ * option Resolution). Chữ "Duration" (tiêu đề section, xác nhận CHỈ xuất
+ * hiện đúng 1 lần trên toàn trang lúc popover mở) là điểm neo DUY NHẤT đáng
+ * tin cậy — khối option nằm ngay ở div-sibling kế tiếp của div bọc span đó.
+ */
+export const durationSectionOptionsLocator = (page: Page): Locator =>
+  page
+    .locator("span", { hasText: /^Duration$/i })
+    .locator("xpath=../following-sibling::div[1]");
+
+export const durationOptionLocator = (page: Page, targetText: string): Locator => {
+  const pattern = new RegExp(
+    `^${targetText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+    "i",
+  );
+  return durationSectionOptionsLocator(page).getByText(pattern, {
+    exact: true,
+  });
+};
+
+/**
  * DOM THẬT xác nhận (debug snapshot "<jobId>-before-generate-click"): chip
  * chọn SỐ LƯỢNG ảnh tạo ra mỗi lần generate là 1 `<div class="... cursor-pointer
  * ...">` chứa icon (stack/layers) + `<span class="ml-1 text-[13px]

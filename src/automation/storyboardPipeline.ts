@@ -576,21 +576,26 @@ export async function generateVideosForFile(
         refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
       }
 
-      // if (entry.duration) {
-      // console.warn(
-      //   `[storyboardPipeline] [VIDEO] ${entry.id} — field "duration" (${entry.duration}s) chưa được hỗ trợ tự động chọn trên AIVideo, bỏ qua.`,
-      // );
-      // }
+      // Field "duration" (giây) trong JSON storyboard — trước đây bị bỏ qua
+      // hoàn toàn (chỉ log cảnh báo, đã comment sẵn). Giờ truyền thẳng vào
+      // GenerateVideoOptions.duration (chuẩn hoá về "Ns", khớp nhãn chip
+      // durationChipCandidates) để tự chọn đúng thời lượng trên AIVideo.
+      const duration =
+        typeof entry.duration === "number" && entry.duration > 0
+          ? `${Math.round(entry.duration)}s`
+          : undefined;
 
       // Gắn type khai báo trong entry.ref theo ĐÚNG THỨ TỰ với refPaths —
       // assignStartEndFrames dùng type này để xác định start/end (xem
       // docstring hàm đó), KHÔNG đoán qua tên file nữa.
-      const options: GenerateVideoOptions =
-        refPaths.length >= 3
+      const options: GenerateVideoOptions = {
+        duration,
+        ...(refPaths.length >= 3
           ? { omniReferencePaths: refPaths }
           : assignStartEndFrames(
               refs.map((r, i) => ({ type: r.type, path: refPaths[i] })),
-            );
+            )),
+      };
 
       // Check lại NGAY TRƯỚC khi gọi generateVideo (không chỉ ở đầu vòng for)
       // — resolveRefImagePath ở trên là async (đọc đĩa), Stop All có thể vừa

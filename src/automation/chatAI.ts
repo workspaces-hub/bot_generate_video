@@ -473,29 +473,45 @@ async function downloadAttachedFiles(
           // thao tác "chọn hết" thật của CodeMirror (chọn theo MODEL dữ liệu
           // đầy đủ, không phải theo DOM đang render), đọc lại từ clipboard
           // ra được TOÀN BỘ nội dung bất kể có ảo hoá hay không.
-          await page
+          const grantErr = await page
             .context()
             .grantPermissions(["clipboard-read", "clipboard-write"], {
               origin: config.chatAIBaseUrl,
             })
-            .catch(() => {});
-          await panelContent
+            .then(() => null)
+            .catch((err) => err);
+          const clickErr = await panelContent
             .first()
             .click()
-            .catch(() => {});
+            .then(() => null)
+            .catch((err) => err);
           await page.keyboard.press("ControlOrMeta+A");
           await page.keyboard.press("ControlOrMeta+C");
+          let clipboardErr: unknown = null;
           previewText = await page
             .evaluate(() => navigator.clipboard.readText())
-            .catch(() => null);
+            .catch((err) => {
+              clipboardErr = err;
+              return null;
+            });
+          console.log(
+            `[chatAI] downloadAttachedFiles preview panel (index ${i}): grantPermissions${grantErr ? ` lỗi=${grantErr}` : " ok"}, click panel${clickErr ? ` lỗi=${clickErr}` : " ok"}, clipboard đọc được ${previewText ? previewText.length : 0} ký tự${clipboardErr ? `, lỗi clipboard=${clipboardErr}` : ""}`,
+          );
           // Fallback cuối nếu clipboard đọc lỗi (vd bị chặn Permissions-Policy
           // — xem lý do tương tự ở sendMessage): dùng innerText(), chấp nhận
           // rủi ro thiếu nội dung nếu panel có ảo hoá, còn hơn không có gì.
           if (!previewText) {
+            let innerTextErr: unknown = null;
             previewText = await panelContent
               .first()
               .innerText({ timeout: 5000 })
-              .catch(() => null);
+              .catch((err) => {
+                innerTextErr = err;
+                return null;
+              });
+            console.log(
+              `[chatAI] downloadAttachedFiles preview panel (index ${i}): innerText fallback đọc được ${previewText ? previewText.length : 0} ký tự${innerTextErr ? `, lỗi=${innerTextErr}` : ""}`,
+            );
           }
         }
 

@@ -34,6 +34,8 @@ export interface VideoGenerationJob extends BaseJob {
   type: "video";
   resolution?: string;
   model?: string;
+  /** Thời lượng video (tuỳ chọn), nhãn khớp chip site — vd "6s"/"10s". Không truyền thì giữ nguyên mặc định của site. */
+  duration?: string;
   /** Ảnh start frame (tuỳ chọn) — nếu có nhiều ảnh gửi lên, lấy ảnh gần nhất. */
   startFramePath?: string;
   /** Ảnh tham chiếu (tuỳ chọn, tối đa 3, dùng trang riêng) — loại trừ lẫn nhau với startFramePath. */
@@ -1080,6 +1082,7 @@ async function processVideoQueue(): Promise<void> {
             {
               resolution: job.resolution,
               model: job.model,
+              duration: job.duration,
               startFramePath: job.startFramePath,
               referenceImagePaths: job.referenceImagePaths,
               characterImagePath: job.characterImagePath,

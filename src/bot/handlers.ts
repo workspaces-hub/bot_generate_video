@@ -496,7 +496,7 @@ async function submitVideoJob({
   characterImagePath,
   omniReferencePaths,
 }: SubmitVideoParams): Promise<void> {
-  const { text: prompt, resolution, model } = parsePromptMessage(rawText);
+  const { text: prompt, resolution, model, duration } = parsePromptMessage(rawText);
 
   if (!prompt) {
     await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
@@ -534,6 +534,7 @@ async function submitVideoJob({
     prompt,
     resolution,
     model: isAdmin(userId) ? model : DEFAULT_MODEL,
+    duration,
     startFramePath,
     referenceImagePaths,
     characterImagePath,
@@ -1259,7 +1260,10 @@ export function registerHandlers(bot: Telegraf): void {
           // với regex coi "$&"/"$1"/"$$"... trong chuỗi thay thế là cú pháp đặc
           // biệt, "$$" mới ra đúng 1 ký tự "$" — nếu formatOutputContent tình cờ
           // chứa "$" (vd giá tiền) sẽ bị thay sai mà không báo lỗi.
-          const escapedFormatOutput = formatOutputContent.replace(/\$/g, "$$$$");
+          const escapedFormatOutput = formatOutputContent.replace(
+            /\$/g,
+            "$$$$",
+          );
           await fs.writeFile(
             promptFilePath,
             promptFileContent.replace(

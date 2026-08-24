@@ -17,6 +17,9 @@ import {
   creditPaywallModalCandidates,
   deleteAllFailedButtonLocator,
   dropdownOptionCandidates,
+  durationChipCandidates,
+  durationOptionLocator,
+  durationSectionOptionsLocator,
   endFrameButtonCandidates,
   errorIndicatorCandidates,
   exactVideoInputModeChipCandidates,
@@ -48,6 +51,8 @@ export const MAX_OMNI_REFERENCE_ITEMS = 12;
 export interface GenerateVideoOptions {
   resolution?: string;
   model?: string;
+  /** Thời lượng video (tuỳ chọn), nhãn khớp chip site — vd "6s"/"10s". Không truyền thì giữ nguyên mặc định của site. */
+  duration?: string;
   /** Ảnh start frame (tuỳ chọn) — nếu không có, tạo video thuần từ text như bình thường. */
   startFramePath?: string;
   /** Ảnh end frame (tuỳ chọn, chỉ có tác dụng khi dùng cùng startFramePath — mode "Start/End Frame"). */
@@ -95,6 +100,7 @@ async function attemptGenerateVideo(
   {
     resolution,
     model,
+    duration,
     startFramePath,
     endFramePath,
     referenceImagePaths = [],
@@ -150,7 +156,7 @@ async function attemptGenerateVideo(
     // chưa kịp render dù chỉ trễ thêm 1-2s. Chờ mạng rảnh trước, rồi mới
     // tìm ô nhập prompt với timeout dài hơn để có biên độ an toàn.
     await page
-      .waitForLoadState("networkidle", { timeout: 120_000 })
+      .waitForLoadState("networkidle", { timeout: 45_000 })
       .catch(() => {});
 
     if (usingReferenceImages) {
@@ -228,7 +234,9 @@ async function attemptGenerateVideo(
     // if (resolution) {
     //   await selectChipOption(page, resolutionChipCandidates(page), resolution, "resolution");
     // }
-
+    if (duration) {
+      await selectDurationIfNeeded(page, duration);
+    }
     // await captureSnapshot(
     //   page,
     //   jobId + "-before-generate-click",
@@ -505,11 +513,6 @@ async function switchVideoInputMode(
           `Không tìm thấy chip đổi mode nào đang hiển thị trong viewport (lần thử ${attempt})`,
         );
       }
-      // await captureSnapshot(
-      //   page,
-      //   jobId + `-mode-before-click-${attempt}`,
-      //   `mode-before-click-${attempt}`,
-      // );
       // Log toạ độ thật của chip lúc click — nếu boundingBox null/lệch bất
       // thường (vd bị 0 width/height do 1 layout race chưa lộ ra trong
       // screenshot tĩnh chụp cùng lúc), đây là bằng chứng trực tiếp thay vì
@@ -537,15 +540,6 @@ async function switchVideoInputMode(
         await dismissBlockingOverlays(page);
       }
     }
-
-    // Chụp debug ngay khi popover vừa mở (TRƯỚC khi chọn option) — nếu bước
-    // sau vẫn lỗi, đây là bằng chứng trực tiếp để biết text option thật là
-    // gì, thay vì đoán mò.
-    // await captureSnapshot(
-    //   page,
-    //   jobId + "-mode-popover-open",
-    //   "mode-popover-open",
-    // );
 
     if (!popoverOpened) {
       throw new Error(
@@ -1003,6 +997,111 @@ export async function selectChipOption(
     //   `[aiVideo] Không chọn được ${label} "${targetText}", dùng mặc định của site:`,
     //   err,
     // );
+  }
+}
+
+/**
+ * Chọn thời lượng video (chip "Ns" trong toolbar). KHÔNG gọi lại
+ * selectChipOption trong vòng lặp retry — bug đã xác nhận qua debug thật
+ * (storage/debug/after-select-duration.html, 2 lần liên tiếp): DOM luôn xác
+ * nhận "10s" là phần tử DUY NHẤT khớp target, nằm trong đúng popover đang mở
+ * (không hề bị khớp nhầm sang bản popover ẩn nào khác), nhưng site vẫn không
+ * đổi lựa chọn sau khi click — VÀ vì selectChipOption luôn bấm lại CHÍNH cái
+ * chip để "mở" popover ở đầu mỗi lần gọi, nếu popover đang SẴN mở từ lần thử
+ * trước thì click đó thực ra TOGGLE-ĐÓNG nó lại (chip toggle open/close),
+ * khiến các lần retry sau tự phá lẫn nhau thay vì thử lại đúng bước chọn
+ * option. Ở đây chỉ bấm chip để mở popover MỘT LẦN, các lần thử lại sau chỉ
+ * bấm lại option (kiểm tra popover có tự đóng mất không thì mới mở lại).
+ * Chụp debug NGAY sau mỗi lần bấm option (không đợi tới cuối) để bắt được
+ * toast/phản hồi thoáng qua nếu site âm thầm từ chối chọn (vd "10s" không hỗ
+ * trợ với model/mode hiện tại) — bằng chứng trước đó luôn chụp quá trễ nên
+ * không thấy được phản hồi tức thời này.
+ */
+async function selectDurationIfNeeded(
+  page: Page,
+  duration: string,
+): Promise<void> {
+  const initialLabel = await firstVisible(durationChipCandidates(page), 3000)
+    .then((el) => el.innerText())
+    .catch(() => "");
+  if (initialLabel.trim().toLowerCase() === duration.toLowerCase()) return;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    // Kiểm tra popover đang mở qua chính khối option Duration (locator riêng,
+    // KHÔNG qua openPopoverLocator/".ant-popover-content" chung — class đó
+    // khớp CẢ 2 bản ant-popover ẨN khác của popover chọn MODEL đang mount sẵn
+    // trên trang, .first() luôn rơi trúng bản ẩn khiến check báo sai "chưa
+    // mở", bấm lại chip sẽ TOGGLE-ĐÓNG popover đang mở thật — xác nhận qua
+    // debug thật storage/debug/duration-attempt-*.html).
+    const popoverAlreadyOpen = await durationSectionOptionsLocator(page)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (!popoverAlreadyOpen) {
+      const chip = await firstVisible(durationChipCandidates(page), 3000).catch(
+        () => null,
+      );
+      if (!chip) return;
+      await clickDismissingModals(page, chip);
+      // Vừa mở popover xong — chờ 1 chút để tránh đua với thời điểm site vừa
+      // gắn xong event handler cho các option bên trong (cùng nguyên nhân đã
+      // xác nhận và sửa được ở switchVideoInputMode: bấm NGAY sau khi phần tử
+      // vừa render xong dễ bị "lỡ nhịp" dù DOM/toạ độ hoàn toàn đúng).
+      await page.waitForTimeout(500);
+    }
+
+    const option = await durationOptionLocator(page, duration)
+      .first()
+      .waitFor({ state: "visible", timeout: 5000 })
+      .then(() => durationOptionLocator(page, duration).first())
+      .catch((err) => {
+        console.warn(
+          `[aiVideo] selectDurationIfNeeded attempt ${attempt}: không tìm thấy option "${duration}" —`,
+          err instanceof Error ? err.message : err,
+        );
+        return null;
+      });
+    if (option) {
+      // Rê chuột qua trước rồi mới bấm, tách riêng bước hover — cùng lý do
+      // đã áp dụng cho chip đổi mode (1 số option chỉ "arm" sau mousemove/
+      // mouseenter thật).
+      await option.hover().catch(() => {});
+      await page.waitForTimeout(200);
+
+      // Log TRỰC TIẾP phần tử thật sự nằm TRÊN CÙNG tại đúng toạ độ sẽ click
+      // (document.elementFromPoint) — xác nhận/loại trừ khả năng có 1 lớp phủ
+      // vô hình đang chặn ngay phía trên option, khiến click "chạy không lỗi"
+      // nhưng thực ra rơi trúng phần tử khác (giải thích duy nhất còn lại nếu
+      // manual click chọn được nhưng automation không chọn được, dù đã xác
+      // nhận DOM target đúng/duy nhất và đã chờ đủ animation/hydration).
+      const box = await option.boundingBox().catch(() => null);
+      if (box) {
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+        const hitOuterHtml = await page
+          .evaluate(
+            ({ x, y }) => {
+              const el = document.elementFromPoint(x, y);
+              return el ? el.outerHTML.slice(0, 300) : null;
+            },
+            { x: cx, y: cy },
+          )
+          .catch((err) => `<lỗi elementFromPoint: ${err}>`);
+      }
+
+      await clickWithForceFallback(option);
+    }
+    await page.waitForTimeout(300);
+    await captureSnapshot(
+      page,
+      `duration-attempt-${attempt}`,
+      `duration-attempt-${attempt}`,
+    );
+
+    const newLabel = await firstVisible(durationChipCandidates(page), 3000)
+      .then((el) => el.innerText())
+      .catch(() => "");
+    if (newLabel.trim().toLowerCase() === duration.toLowerCase()) return;
   }
 }
 
