@@ -119,16 +119,31 @@ export const downloadFileLinkLocator = (message: Locator): Locator =>
  * đoạn văn trả lời — DOM thật xác nhận (job 4c746641):
  * `<button aria-label="📄 Tải file pip_mouse_..._full.json" class="behavior-btn ... entity-underline ...">`,
  * hoàn toàn KHÔNG khớp downloadFileLinkLocator (không bắt đầu bằng
- * "Download ") lẫn fileCardLocator (không có class "group/open-file") — nhận
- * diện qua aria-label kết thúc bằng ".json" (đủ đặc trưng, ChatAI luôn đặt
- * tên file JSON output theo đúng đuôi này). Bấm vào cũng kích hoạt download
- * thật (cùng cơ chế downloadFileLinkLocator), ưu tiên dùng trước
- * fileCardLocator.
+ * "Download "). Nhận diện qua aria-label kết thúc bằng ".json" (đủ đặc
+ * trưng, ChatAI luôn đặt tên file JSON output theo đúng đuôi này) — NHƯNG
+ * PHẢI loại trừ tường minh class "group/open-file" (thẻ card, xem
+ * fileCardLocator): DOM thật xác nhận (job 67b2f3fc) CÙNG 1 file có thể có
+ * CẢ HAI nút — 1 link-text trích dẫn (class "behavior-btn"/"entity-underline")
+ * VÀ 1 thẻ card (class "group/open-file") — CẢ HAI đều có aria-label giống
+ * hệt tên file, nếu không loại trừ sẽ khớp nhầm cả thẻ card vào đây. Cũng
+ * xác nhận qua thực tế (job 67b2f3fc, pip_boulangerie): bấm nút link-text
+ * trích dẫn KHÔNG có emoji "📄" (chỉ có tên file trần) KHÔNG mở ra được panel
+ * xem trước lẫn kích hoạt download — có vẻ chỉ là citation/tham chiếu, khác
+ * hẳn biến thể CÓ emoji "📄 Tải file" (job 4c746641, xác nhận tải được thật).
+ * Vì độ tin cậy không chắc chắn, dùng làm phương án CUỐI CÙNG, sau
+ * fileCardLocator (xem thứ tự ưu tiên trong downloadAttachedFiles).
  */
 export const inlineFileLinkLocator = (message: Locator): Locator =>
-  message.locator('button[aria-label$=".json"]');
+  message.locator(
+    'button[aria-label$=".json"]:not([class*="group/open-file"])',
+  );
 
-/** Thẻ "card" file (mở preview/canvas, không chắc tải thẳng) — chỉ dùng fallback khi downloadFileLinkLocator/inlineFileLinkLocator rỗng. */
+/**
+ * Thẻ "card" file (mở preview/canvas dạng "screen-threadFlyOut", xem
+ * downloadAttachedFiles) — DOM thật xác nhận đây là dạng ĐÁNG TIN CẬY NHẤT
+ * để mở được panel xem trước khi không có nút "Download <filename>" trực
+ * tiếp (job 38b68c7a, 67b2f3fc) — ưu tiên dùng TRƯỚC inlineFileLinkLocator.
+ */
 export const fileCardLocator = (message: Locator): Locator =>
   message.locator('button[class*="group/open-file"]');
 

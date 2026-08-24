@@ -342,9 +342,17 @@ async function sendMessage(page: Page, text: string): Promise<void> {
  * link-text THỨ BA — "📄 Tải file <filename>" (tiếng Việt, có emoji) — không
  * khớp cả downloadFileLinkLocator lẫn fileCardLocator, khiến trước đây
  * attachments.count() = 0 dù file JSON có thật trong tin nhắn, bot bỏ sót
- * hoàn toàn (không log gì vì vòng lặp for còn chưa kịp chạy). Thử thêm
- * inlineFileLinkLocator SAU downloadFileLinkLocator, TRƯỚC khi fallback
- * sang fileCardLocator.
+ * hoàn toàn (không log gì vì vòng lặp for còn chưa kịp chạy).
+ *
+ * Xác nhận qua debug thật (job 67b2f3fc): CÙNG 1 file có thể có CẢ nút
+ * link-text trích dẫn (không emoji, chỉ tên file trần) LẪN thẻ card
+ * "group/open-file" — nút trích dẫn KHÔNG kích hoạt được download/mở preview
+ * gì cả (khác hẳn biến thể CÓ emoji đã xác nhận tải được ở job 4c746641),
+ * trong khi thẻ card luôn mở được panel xem trước (fallback đáng tin cậy
+ * nhất). Vì vậy thứ tự ưu tiên PHẢI là: downloadFileLinkLocator →
+ * fileCardLocator → inlineFileLinkLocator (dùng SAU CÙNG, chỉ khi không có
+ * nút Download thật lẫn thẻ card nào) — inlineFileLinkLocator cũng đã tự
+ * loại trừ class "group/open-file" nên không còn trùng với fileCardLocator.
  *
  * Xác nhận qua debug thật (job pip_boulangerie, HTML): CÙNG 1 tên file có
  * thể xuất hiện dưới dạng NHIỀU nút trích dẫn (citation) rải rác trong cùng
@@ -362,10 +370,11 @@ async function downloadAttachedFiles(
   promptFileName?: string,
 ): Promise<string[]> {
   const downloadLinks = downloadFileLinkLocator(message);
+  const fileCards = fileCardLocator(message);
   const inlineLinks = inlineFileLinkLocator(message);
   let attachments = downloadLinks;
+  if ((await attachments.count()) === 0) attachments = fileCards;
   if ((await attachments.count()) === 0) attachments = inlineLinks;
-  if ((await attachments.count()) === 0) attachments = fileCardLocator(message);
   const totalMatched = await attachments.count();
 
   // Dedupe theo aria-label (với cả 3 locator trên, aria-label luôn LÀ tên
