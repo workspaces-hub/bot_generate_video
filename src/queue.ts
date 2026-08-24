@@ -1601,21 +1601,25 @@ async function notifyChatAISuccess(
   try {
     if (result.processedJsonCount === 0) {
       // ChatAI trả lời xong nhưng không có file JSON storyboard nào — không coi là lỗi.
-      await telegram.sendMessage(
-        job.chatId,
-        `✅ ChatAI đã trả lời xong" (không có file đính kèm).`,
-        {
-          reply_parameters: { message_id: job.promptMessageId },
-        },
-      );
+      try {
+        await telegram.sendMessage(
+          job.chatId,
+          `✅ ChatAI đã trả lời xong" (không có file đính kèm).`,
+          {
+            reply_parameters: { message_id: job.promptMessageId },
+          },
+        );
+      } catch (e) {}
     }
     // confirmPromptsSent > 0: nút "Tạo ảnh" đã gửi ở runStoryboardPipeline
     // rồi, không cần báo thêm ở đây.
   } catch (err) {
     console.error("[queue] Gửi kết quả ChatAI thất bại:", err);
-    await telegram.sendMessage(job.chatId, "404", {
-      reply_parameters: { message_id: job.promptMessageId },
-    });
+    try {
+      await telegram.sendMessage(job.chatId, "404", {
+        reply_parameters: { message_id: job.promptMessageId },
+      });
+    } catch (e) {}
     await notifyAdmins(err);
   }
   await deleteStatusMessage(job);
@@ -1629,11 +1633,14 @@ function jobTypeLabel(type: GenerationJob["type"]): string {
 
 async function notifyError(job: GenerationJob, err: unknown): Promise<void> {
   if (!telegram) return;
+
   console.error(`[queue] Tạo ${jobTypeLabel(job.type)} thất bại:`, err);
   await notifyAdmins(err);
-  await telegram.sendMessage(job.chatId, "404", {
-    reply_parameters: { message_id: job.promptMessageId },
-  });
+  try {
+    await telegram.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+  } catch (e) {}
   await deleteStatusMessage(job);
 }
 
@@ -1647,6 +1654,8 @@ async function deleteStatusMessage(job: GenerationJob): Promise<void> {
 
 async function notifyAdmins(err: unknown): Promise<void> {
   if (!config.adminsNotify) return;
-  const message = err instanceof Error ? err.message : String(err);
-  await telegram!.sendMessage(config.adminsNotify, message).catch(() => {});
+  try {
+    const message = err instanceof Error ? err.message : String(err);
+    await telegram!.sendMessage(config.adminsNotify, message).catch(() => {});
+  } catch (e) {}
 }
