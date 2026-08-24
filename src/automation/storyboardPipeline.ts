@@ -94,10 +94,27 @@ async function saveEntries(
   );
 }
 
-/** Thư mục generated/<tên file input, bỏ đuôi> — DÙNG CHUNG giữa bước tạo ảnh và tạo video của CÙNG 1 file input. */
+/**
+ * Thư mục generated/<tên file input, bỏ đuôi> — DÙNG CHUNG giữa bước tạo ảnh
+ * và tạo video của CÙNG 1 file input.
+ *
+ * Xác nhận qua báo cáo thật của người dùng: caption "6.0-test-TNCPA__CHAR_001_HO_VUONG"
+ * (xem tryReplaceGeneratedFile trong handlers.ts, và jsonFileName do user gõ
+ * tay trong continueFailedStoryboardJob ở queue.ts) ra folder SAI là
+ * "storage/generated/6" thay vì "storage/generated/6.0-test-TNCPA" — 2 nơi
+ * gọi này truyền vào 1 basename KHÔNG có đuôi file thật (không phải path.json
+ * đầy đủ), nhưng path.extname("6.0-test-TNCPA") lại hiểu NHẦM dấu "." trong
+ * "6.0" là bắt đầu phần đuôi, trả về ".0-test-TNCPA", khiến path.basename cắt
+ * mất gần hết tên, chỉ còn lại "6". Chỉ cắt đuôi khi ĐÚNG LÀ ".json" ở cuối
+ * chuỗi (không dùng path.extname() thô) — an toàn cho cả file path đầy đủ
+ * (vd "cay_khe_full.json") lẫn basename không có đuôi chứa dấu "." nội bộ
+ * (vd tên phiên bản "6.0-test-TNCPA").
+ */
 export function generatedDirFor(inputPath: string): string {
-  const baseName = path.basename(inputPath, path.extname(inputPath));
-  return path.resolve("./storage/generated", baseName);
+  const withoutJsonExt = /\.json$/i.test(inputPath)
+    ? inputPath.slice(0, -".json".length)
+    : inputPath;
+  return path.resolve("./storage/generated", path.basename(withoutJsonExt));
 }
 
 /**
