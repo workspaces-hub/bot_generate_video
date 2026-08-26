@@ -456,7 +456,17 @@ async function retryErrorCards(page: Page, entry: Locator): Promise<void> {
   for (let i = 0; i < count; i++) {
     try {
       await errorCardInfoTriggerLocator(cards.nth(i)).hover({ timeout: 3000 });
-      const retryButton = page.getByRole("button", { name: /^Retry$/i });
+      // DOM thật xác nhận (job "1.0-embe-prompt_SHOT_03_CLIP_01_END..."):
+      // "Retry" là `<div class="bg-hl_bg_05 ... cursor-pointer"><span>Retry</span></div>`
+      // BÊN TRONG popover ".ant-popover-content" — KHÔNG phải <button>/role
+      // "button" nào cả (giống hệt các option chip khác trong site này).
+      // getByRole("button", ...) cũ KHÔNG BAO GIỜ khớp được, khiến Retry luôn
+      // âm thầm bị bỏ qua. Scope trong popover + khớp theo text để tránh lẫn
+      // với chữ "Retry" ở nơi khác trên trang.
+      const retryButton = page
+        .locator(".ant-popover-content")
+        .filter({ hasText: /Retry/i })
+        .getByText(/^Retry$/i);
       const hasRetry = await retryButton
         .first()
         .isVisible({ timeout: 2000 })

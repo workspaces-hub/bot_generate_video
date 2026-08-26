@@ -10,10 +10,14 @@ import {
   assistantMessageLocator,
   downloadButtonCandidates,
   downloadFileLinkLocator,
+  effortLabelLocator,
+  effortSliderControlLocator,
+  effortSliderThumbLocator,
   fileAttachmentLocator,
   fileCardLocator,
   fileUploadInputLocator,
   inlineFileLinkLocator,
+  modelSelectorButtonCandidates,
   promptTextareaCandidates,
   regenerateErrorButtonCandidates,
   sendButtonCandidates,
@@ -734,7 +738,7 @@ async function readLatestAssistantMessage(
  * tài khoản không có tính năng này) và bỏ qua nếu đã ở đúng mode "work"
  * (aria-checked="true") để tránh click thừa.
  */
-async function selectWorkMode(page: Page): Promise<void> {
+export async function selectWorkMode(page: Page): Promise<void> {
   try {
     const workToggle = workModeToggleLocator(page).first();
     const alreadyOn =
@@ -745,6 +749,62 @@ async function selectWorkMode(page: Page): Promise<void> {
   } catch (err) {
     console.warn(
       "[chatAI] Không chọn được mode 'Work' (best-effort, bỏ qua):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Chọn mức "reasoning effort" CAO NHẤT (thanh trượt 5 nấc cạnh ô nhập, xem
+ * effortSliderControlLocator) — best-effort, không throw nếu không tìm thấy
+ * (site đổi giao diện/tài khoản không có tính năng này) và bỏ qua ngay nếu
+ * đã ở mức tối đa (đọc attribute "data-max-effort" trên nhãn nút, xem
+ * effortLabelLocator) để tránh mở popup thừa.
+ *
+ * Cơ chế: bấm nút mở popup thanh trượt, rồi bấm phím "ArrowRight" liên tục
+ * lên effortSliderControlLocator (phần tử THẬT nhận phím, role="menuitem"
+ * tabindex="0" — KHÔNG phải span role="slider" bên trong, phần tử đó chỉ là
+ * proxy hiển thị tabindex="-1") tới khi effortSliderThumbLocator báo
+ * aria-valuenow === aria-valuemax (đã ở nấc cao nhất), giới hạn tối đa 6 lần
+ * bấm phím để chặn vòng lặp vô hạn nếu site đổi cấu trúc.
+ */
+export async function selectMaxReasoningEffort(page: Page): Promise<void> {
+  try {
+    const alreadyMax =
+      (await effortLabelLocator(page)
+        .first()
+        .getAttribute("data-max-effort")
+        .catch(() => null)) === "true";
+    if (alreadyMax) return;
+
+    const button = await firstVisible(modelSelectorButtonCandidates(page), 5000);
+    await button.hover().catch(() => {});
+    await page.waitForTimeout(200);
+    await button.click();
+    await page.waitForTimeout(500);
+
+    const sliderControl = await firstVisible(
+      [() => effortSliderControlLocator(page)],
+      5000,
+    ).catch(() => null);
+    if (!sliderControl) {
+      await page.keyboard.press("Escape").catch(() => {});
+      return;
+    }
+
+    for (let i = 0; i < 6; i++) {
+      const thumb = effortSliderThumbLocator(page).first();
+      const valueNow = await thumb.getAttribute("aria-valuenow").catch(() => null);
+      const valueMax = await thumb.getAttribute("aria-valuemax").catch(() => null);
+      if (valueNow !== null && valueNow === valueMax) break;
+      await sliderControl.press("ArrowRight");
+      await page.waitForTimeout(150);
+    }
+
+    await page.keyboard.press("Escape").catch(() => {});
+  } catch (err) {
+    console.warn(
+      "[chatAI] Không chọn được mức hỗ trợ tối đa (best-effort, bỏ qua):",
       err instanceof Error ? err.message : err,
     );
   }
@@ -795,6 +855,9 @@ export async function askChatAI(
       .catch(() => {});
 
     await selectWorkMode(page);
+    if (config.chatAIMaxEffort) {
+      await selectMaxReasoningEffort(page);
+    }
     if (attachmentPath) {
       await uploadAttachment(page, attachmentPath);
     }

@@ -174,17 +174,58 @@ export const signInIndicatorCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
- * Nút chọn mức "reasoning effort" hiện ở toolbar cạnh ô nhập (vd "Medium" —
- * thấy lặp lại trong nhiều ảnh debug thật). CHỈ LÀ NHÃN HIỂN THỊ (mức độ suy
- * luận), KHÔNG PHẢI tên model đầy đủ — muốn biết CHÍNH XÁC model nào thực sự
- * xử lý 1 câu trả lời, đọc attribute data-message-model-slug trên tin nhắn
- * trả lời thật (xem assistantTextMessageLocator) thay vì dựa vào nút này.
- * CHƯA có DOM thật xác nhận data-testid cụ thể của nút — chỉ đoán qua text
- * hiển thị, có thể cần chỉnh lại qua debug snapshot.
+ * Nút chọn mức "reasoning effort" hiện ở toolbar cạnh ô nhập. CHỈ LÀ NHÃN
+ * HIỂN THỊ (mức độ suy luận), KHÔNG PHẢI tên model đầy đủ — muốn biết CHÍNH
+ * XÁC model nào thực sự xử lý 1 câu trả lời, đọc attribute
+ * data-message-model-slug trên tin nhắn trả lời thật (xem
+ * assistantTextMessageLocator) thay vì dựa vào nút này.
+ *
+ * DOM thật xác nhận (storage/debug/chatai-effort-menu.html): nhãn KHÔNG cố
+ * định theo 1 tập từ tiếng Anh cố định — tài khoản test thấy cả "Light"
+ * (English) LẪN "Vừa" (tiếng Việt, = Medium) tuỳ thời điểm, nên regex đoán
+ * text cũ (auto|fast|medium|thinking|extended thinking) SAI hoàn toàn, không
+ * bao giờ khớp được nút thật:
+ * `<button aria-haspopup="menu" aria-expanded="false" ...>
+ *   <span class="uFxlGa_SliderTriggerModelLabel">5.6 Sol</span>
+ *   <span class="uFxlGa_SliderTriggerEffortLabel" data-max-effort="false">Light</span>
+ * </button>`
+ * Attribute "data-max-effort" trên span nhãn mức là điểm neo ĐÁNG TIN CẬY
+ * DUY NHẤT (không phụ thuộc ngôn ngữ hiển thị) — "true" nghĩa là ĐÃ ở mức tối
+ * đa, dùng để biết có cần bấm chọn tiếp hay không. Giữ regex text cũ làm
+ * fallback phòng site đổi lại cấu trúc.
  */
 export const modelSelectorButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.locator("button:has(span[data-max-effort])"),
   () => page.getByRole("button", { name: /^(auto|fast|medium|thinking|extended thinking)$/i }),
 ];
+
+/** Span nhãn mức hỗ trợ hiện tại — đọc attribute "data-max-effort" để biết đã ở mức tối đa chưa. */
+export const effortLabelLocator = (page: Page): Locator =>
+  page.locator("span[data-max-effort]");
+
+/**
+ * Popup mở ra sau khi bấm modelSelectorButtonCandidates KHÔNG phải menu với
+ * các item bấm chọn — là 1 THANH TRƯỢT (Radix Slider) 5 nấc (aria-valuemin=0,
+ * aria-valuemax=4). DOM thật xác nhận (storage/debug/chatai-effort-menu.html,
+ * lúc đang ở nấc 2/5 "Light"):
+ * `<div role="menuitem" tabindex="0" class="... d1BZWq_SliderControl"
+ *   aria-keyshortcuts="ArrowLeft ArrowRight" aria-label="Power" ...>
+ *   ...<span role="slider" aria-valuemin="0" aria-valuemax="4" tabindex="-1"
+ *     aria-hidden="true" aria-valuenow="1" ...></span>
+ * </div>`
+ * — phần tử THẬT SỰ nhận focus/phím là div[role="menuitem"][aria-label="Power"]
+ * (tabindex="0", có aria-keyshortcuts) — span role="slider" bên trong chỉ là
+ * proxy hiển thị (tabindex="-1", aria-hidden="true"), KHÔNG focus/press phím
+ * trực tiếp lên đó được. Bấm phím "ArrowRight" lặp lại trên
+ * effortSliderControlLocator tới khi effortSliderThumbLocator có
+ * aria-valuenow === aria-valuemax (đã ở nấc cao nhất).
+ */
+export const effortSliderControlLocator = (page: Page): Locator =>
+  page.locator('[role="menuitem"][aria-label="Power"]');
+
+/** Proxy hiển thị giá trị hiện tại của thanh trượt mức hỗ trợ — chỉ đọc attribute, không thao tác trực tiếp lên đây. */
+export const effortSliderThumbLocator = (page: Page): Locator =>
+  page.locator('span[role="slider"]');
 
 /**
  * Tin nhắn trả lời TEXT thường (KHÔNG dùng cho phản hồi tạo ảnh — xem

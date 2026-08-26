@@ -101,6 +101,14 @@ export const config = {
   proxyPassword: process.env.PROXY_PASSWORD || undefined,
   formatOuput: "format_output.txt",
   defaultModelVideo: process.env.DEFAULT_MODEL_VIDEL || "Hailuo 2.0",
+
+  // Bật để askChatAI (chatAI.ts) tự chọn mức "reasoning effort" CAO NHẤT
+  // (thanh trượt cạnh ô nhập ChatAI, xem selectMaxReasoningEffort) trước khi
+  // gửi prompt — trả lời chất lượng hơn nhưng chậm/tốn quota hơn. Mặc định
+  // TẮT (giữ nguyên mức site đang để) để không đổi hành vi cũ khi chưa cấu
+  // hình gì.
+  chatAIMaxEffort:
+    (process.env.CHATAI_MAX_EFFORT ?? "false").toLowerCase() === "true",
 };
 
 // if (config.admins.length === 0) {
