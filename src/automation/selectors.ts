@@ -508,30 +508,40 @@ export const imageModeTabCandidates = (page: Page): Array<() => Locator> => [
 /**
  * Nút thêm ảnh tham chiếu ở chế độ tạo ảnh — cùng cơ chế "Upload Start/End
  * Frame" trước đây (div role="button" mở file picker hệ điều hành). Xác
- * nhận được DOM thật: aria-label="Upload Image Refs(N/16)" — số đếm N thay
- * đổi động sau mỗi lần upload, nên chỉ match phần PREFIX cố định, không
+ * nhận được DOM thật (cũ): aria-label="Upload Image Refs(N/16)" — số đếm N
+ * thay đổi động sau mỗi lần upload, nên chỉ match phần PREFIX cố định, không
  * match cả cụm (khớp cả số sẽ luôn fail sau lần upload đầu vì số đổi).
  *
- * Nhãn nút đổi theo MODEL đang chọn trên trang tạo ảnh — DOM thật xác nhận
- * (debug "<jobId>", job Bread_Mice_SCENE_01_START lúc model bị hạ về
- * "Image-1.0" do thiếu credit, xem selectChipOption trong generateImage):
- * `<div role="button" aria-label="Upload Character Refs" ...>` — model
- * "Image-1.0" dùng CHUNG nhãn/thuộc tính với nút Character Reference của
- * trang VIDEO (addCharacterRefButtonCandidates) thay vì "Upload Image Refs"
+ * Site đã đổi nhãn (xác nhận qua debug thật, job
+ * BEARCHEF_V3_SHOT_04_CLIP_01_END): giờ là `aria-label="Upload Image (6/16)"`
+ * — bỏ hẳn chữ "Refs", thêm khoảng trắng trước dấu ngoặc — regex cũ
+ * `/^Upload Image Refs/i` không còn khớp được nữa (thiếu chữ "Refs"), khiến
+ * KHÔNG TÌM THẤY nút dù trang vẫn bình thường (không phải do model đổi như
+ * lý do dưới). Regex mới chấp nhận CẢ 2 dạng (có/không có "Refs").
+ *
+ * Nhãn nút cũng có thể đổi theo MODEL đang chọn trên trang tạo ảnh — DOM
+ * thật xác nhận (debug "<jobId>", job Bread_Mice_SCENE_01_START lúc model bị
+ * hạ về "Image-1.0" do thiếu credit, xem selectChipOption trong
+ * generateImage): `<div role="button" aria-label="Upload Character Refs" ...>`
+ * — model "Image-1.0" dùng CHUNG nhãn/thuộc tính với nút Character Reference
+ * của trang VIDEO (addCharacterRefButtonCandidates) thay vì "Upload Image..."
  * như các model khác (vd "GPT Image 2"). Thêm làm fallback.
  */
 export const addReferenceImageButtonCandidates = (page: Page): Array<() => Locator> => [
-  () => page.getByRole("button", { name: /^Upload Image Refs/i }),
-  () => page.getByRole("button", { name: /^Upload Character Refs/i }),
+  () => page.getByRole("button", { name: /^Upload Image(\s+Refs)?\s*\(/i }),
+  () => page.getByRole("button", { name: /^Upload Character(\s+Refs)?/i }),
 ];
 
 /**
  * Nút upload ảnh nhân vật ở mode "Character Reference" — DOM thật xác nhận
- * aria-label="Upload Character Refs" (KHÔNG có số đếm (N/M) như Image Refs,
- * vì chỉ nhận đúng 1 ảnh).
+ * (cũ) aria-label="Upload Character Refs" (KHÔNG có số đếm (N/M) như Image
+ * Refs, vì chỉ nhận đúng 1 ảnh). Regex nới để chấp nhận cả khi site bỏ chữ
+ * "Refs" giống Image Refs (xem addReferenceImageButtonCandidates) — CHƯA có
+ * DOM thật xác nhận riêng cho nút này sau khi đổi, cần kiểm tra lại qua debug
+ * nếu vẫn lỗi.
  */
 export const addCharacterRefButtonCandidates = (page: Page): Array<() => Locator> => [
-  () => page.getByRole("button", { name: /^Upload Character Refs/i }),
+  () => page.getByRole("button", { name: /^Upload Character(\s+Refs)?/i }),
 ];
 
 /** Nút upload file tham chiếu (ảnh/video/audio) ở mode "Omni Reference". */
@@ -542,9 +552,11 @@ export const addOmniReferenceButtonCandidates = (page: Page): Array<() => Locato
   () => page.getByRole("button", { name: /^Upload Refs/i }),
 ];
 
-/** Đọc số ảnh tham chiếu hiện tại từ aria-label "Upload Image Refs(N/16)". */
+/** Đọc số ảnh tham chiếu hiện tại từ aria-label "Upload Image (N/16)" (hoặc "Upload Image Refs(N/16)" bản cũ). */
 export async function getReferenceImageCount(page: Page): Promise<number | null> {
-  const button = page.getByRole("button", { name: /^Upload Image Refs/i }).first();
+  const button = page
+    .getByRole("button", { name: /^Upload Image(\s+Refs)?\s*\(/i })
+    .first();
   const label = await button.getAttribute("aria-label").catch(() => null);
   const match = label?.match(/\((\d+)\/\d+\)/);
   return match ? Number(match[1]) : null;

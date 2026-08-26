@@ -1120,6 +1120,24 @@ export async function gotoWithRetry(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      // page.goto() KHÔNG throw khi Chrome tự hiện trang lỗi mạng/proxy nội
+      // bộ (vd "This page isn't working — HTTP ERROR 407") — về kỹ thuật
+      // navigation vẫn "thành công" (đã load xong đúng trang lỗi đó). Xác
+      // nhận qua debug thật (job BEARCHEF_V3_SHOT_04_CLIP_01_END, ảnh chụp
+      // đúng trang lỗi 407 của Chrome) — nếu không chủ động phát hiện, code
+      // cứ chạy tiếp rồi fail rất trễ/khó hiểu ở bước tìm phần tử trên trang
+      // (ensureLoggedIn, tìm ô nhập prompt...) thay vì báo đúng nguyên nhân
+      // gốc ngay từ đây.
+      const netErrorText = await page
+        .getByText(/^HTTP ERROR \d+$/i)
+        .first()
+        .innerText({ timeout: 1000 })
+        .catch(() => null);
+      if (netErrorText) {
+        throw new Error(
+          `Trang báo lỗi mạng/proxy: "${netErrorText.trim()}" — 407 nghĩa là proxy từ chối xác thực (kiểm tra PROXY_SERVER/PROXY_USERNAME/PROXY_PASSWORD hoặc tình trạng gói proxy), các mã khác thường là lỗi kết nối proxy/mạng tạm thời.`,
+        );
+      }
       return;
     } catch (err) {
       lastErr = err;
