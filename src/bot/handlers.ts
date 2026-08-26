@@ -263,6 +263,118 @@ async function markStoryboardEntrySuccess(
   return true;
 }
 
+/** type entry → đúng type job/hàng đợi cần đẩy lại (xem tryRegenerateStoryboardItem). */
+function storyboardJobTypeForEntryType(
+  entryType: string | undefined,
+):
+  | "storyboardImagesAIVideo"
+  | "storyboardSceneImagesAIVideo"
+  | "storyboardVideo"
+  | null {
+  if (entryType === "CHARACTER" || entryType === "LOCATION") {
+    return "storyboardImagesAIVideo";
+  }
+  if (
+    entryType === "SCENE_SETTING_START" ||
+    entryType === "SCENE_SETTING_END"
+  ) {
+    return "storyboardSceneImagesAIVideo";
+  }
+  if (entryType === "VIDEO") {
+    return "storyboardVideo";
+  }
+  return null;
+}
+
+/**
+ * User gõ tay (KHÔNG cần bấm nút, KHÔNG cần upload gì) tin nhắn dạng
+ * "<tên file json>__<id>" — cùng quy ước "__" với tryReplaceGeneratedFile,
+ * nhưng NGƯỢC LẠI: yêu cầu TẠO LẠI đúng 1 entry cụ thể (thay vì thay thế thủ
+ * công). Tra file storage/generated/<tên file>/<tên file>.json — không có
+ * file này thì BỎ QUA (trả về false, không phải lỗi — có thể user chỉ đang
+ * gõ 1 prompt bình thường trùng hợp chứa "__"), không tìm thấy entry đúng id
+ * trong file cũng BỎ QUA tương tự.
+ *
+ * Tìm thấy: đánh dấu entry đó "success": false (các hàm generate*ForFile
+ * resume theo field này, xem storyboardPipeline.ts — false = coi như CHƯA
+ * xong, generate lại) rồi đẩy job vào ĐÚNG hàng đợi theo type entry (xem
+ * storyboardJobTypeForEntryType): CHARACTER/LOCATION →
+ * "storyboardImagesAIVideo", SCENE_SETTING_START/SCENE_SETTING_END →
+ * "storyboardSceneImagesAIVideo", VIDEO → "storyboardVideo". Type không xác
+ * định được hàng đợi tương ứng thì vẫn đã đánh dấu "success": false nhưng
+ * KHÔNG đẩy job nào (báo rõ cho user biết).
+ */
+async function tryRegenerateStoryboardItem(
+  ctx: Context,
+  text: string,
+  promptMessageId: number,
+): Promise<boolean> {
+  const match = text.trim().match(REPLACEMENT_CAPTION_PATTERN);
+  if (!match) return false;
+
+  const fileBaseName = match[1].trim().replace(/ +/g, "_");
+  const targetId = match[2].trim();
+
+  const jsonPath = path.join(
+    generatedDirFor(fileBaseName),
+    `${fileBaseName}.json`,
+  );
+  const exists = await fs
+    .stat(jsonPath)
+    .then(() => true)
+    .catch(() => false);
+  if (!exists) return false;
+
+  const raw = await fs.readFile(jsonPath, "utf-8");
+  let entries: StoryboardEntry[];
+  try {
+    entries = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  const entry = entries.find((e) => e.id === targetId);
+  if (!entry) return false;
+
+  entry.success = false;
+  await fs.writeFile(jsonPath, JSON.stringify(entries, null, 2), "utf-8");
+
+  // Xoá file kết quả cũ (ảnh/video) của entry này trước khi generate lại —
+  // tên file luôn "<id>.<đuôi>" trong CHÍNH folder generated này (xem
+  // storyboardPipeline.ts) — không xoá thì file cũ vẫn còn lẫn sau khi
+  // generate lại xong.
+  const outputDir = path.dirname(jsonPath);
+  const filesInDir = await fs.readdir(outputDir).catch(() => [] as string[]);
+  const idFilePrefix = `${targetId}.`;
+  for (const fileName of filesInDir) {
+    if (fileName.startsWith(idFilePrefix)) {
+      await fs.unlink(path.join(outputDir, fileName)).catch(() => {});
+    }
+  }
+
+  const jobType = storyboardJobTypeForEntryType(entry.type);
+  if (!jobType) {
+    // await ctx.reply(
+    //   `⚠️ Đã đánh dấu entry "${targetId}" cần tạo lại, nhưng type "${entry.type}" không xác định được hàng đợi tương ứng nên chưa tự đẩy job.`,
+    //   { reply_parameters: { message_id: promptMessageId } },
+    // );
+    return false;
+  }
+
+  enqueueJob({
+    type: jobType,
+    chatId: ctx.chat!.id,
+    prompt: "",
+    promptMessageId,
+    jsonPath,
+  });
+
+  await ctx.reply(
+    `✅ Đã đánh dấu entry "${targetId}" (${entry.type}) cần tạo lại và đưa vào hàng đợi tương ứng.`,
+    { reply_parameters: { message_id: promptMessageId } },
+  );
+  return true;
+}
+
 /**
  * User gửi lại ảnh/video có TÊN FILE ĐÚNG format bot tự đặt tên khi gửi kết
  * quả — ưu tiên tên file thật (document/video: Telegram giữ nguyên tên file
@@ -496,7 +608,12 @@ async function submitVideoJob({
   characterImagePath,
   omniReferencePaths,
 }: SubmitVideoParams): Promise<void> {
-  const { text: prompt, resolution, model, duration } = parsePromptMessage(rawText);
+  const {
+    text: prompt,
+    resolution,
+    model,
+    duration,
+  } = parsePromptMessage(rawText);
 
   if (!prompt) {
     await ctx.reply("Prompt trống, đã huỷ.", promptMenu);
@@ -958,6 +1075,20 @@ export function registerHandlers(bot: Telegraf): void {
     }
 
     const userId = ctx.from.id;
+
+    // Gõ tay "<tên file json>__<id>" để yêu cầu tạo lại 1 entry cụ thể — kiểm
+    // tra TRƯỚC mọi luồng theo waitingMode khác, vì đây là lệnh độc lập,
+    // không cần bấm nút nào trước. Không khớp định dạng/không tìm thấy file
+    // hay entry khớp thì tự bỏ qua (rơi xuống xử lý bình thường bên dưới).
+    if (
+      await tryRegenerateStoryboardItem(
+        ctx,
+        ctx.message.text,
+        ctx.message.message_id,
+      )
+    ) {
+      return;
+    }
 
     // Có ảnh tham chiếu đang chờ (chưa có caption) — dùng tin nhắn text này
     // làm prompt cho batch ảnh đó, ưu tiên hơn "mode" thông thường.
