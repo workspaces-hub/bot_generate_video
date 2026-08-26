@@ -207,9 +207,9 @@ async function attemptGenerateVideo(
     if (startFramePath) {
       await uploadStartFrame(page, startFramePath);
     }
-    if (endFramePath) {
-      await uploadEndFrame(page, endFramePath);
-    }
+    // if (endFramePath) {
+    //   await uploadEndFrame(page, endFramePath);
+    // }
     // const [fee, credit] = await Promise.all([
     //   getGenerationFee(page),
     //   getAvailableCredit(page),
