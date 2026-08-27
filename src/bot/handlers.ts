@@ -23,6 +23,7 @@ import {
   continueFailedStoryboardImages,
   continueFailedStoryboardVideo,
   enqueueJob,
+  isStoryboardJobQueued,
   stopAll,
 } from "../queue";
 import {
@@ -287,30 +288,25 @@ function storyboardJobTypeForEntryType(
 }
 
 /**
- * User gõ tay (KHÔNG cần bấm nút, KHÔNG cần upload gì) tin nhắn dạng
- * "<tên file json>__<id>" — cùng quy ước "__" với tryReplaceGeneratedFile,
- * nhưng NGƯỢC LẠI: yêu cầu TẠO LẠI đúng 1 entry cụ thể (thay vì thay thế thủ
- * công). Tra file storage/generated/<tên file>/<tên file>.json — không có
- * file này thì BỎ QUA (trả về false, không phải lỗi — có thể user chỉ đang
- * gõ 1 prompt bình thường trùng hợp chứa "__"), không tìm thấy entry đúng id
- * trong file cũng BỎ QUA tương tự.
+ * Xử lý ĐÚNG 1 dòng "<tên file json>__<id>" — tách riêng khỏi
+ * tryRegenerateStoryboardItem để dùng lại cho nhiều dòng trong CÙNG 1 tin
+ * nhắn (user gõ nhiều dòng, mỗi dòng 1 entry muốn tạo lại). Trả về null nếu
+ * dòng này không khớp format/không tìm thấy file/entry (bỏ qua, không phải
+ * lỗi); trả về chuỗi mô tả kết quả (để gộp báo cáo 1 lần) nếu đã xử lý.
  *
- * Tìm thấy: đánh dấu entry đó "success": false (các hàm generate*ForFile
- * resume theo field này, xem storyboardPipeline.ts — false = coi như CHƯA
- * xong, generate lại) rồi đẩy job vào ĐÚNG hàng đợi theo type entry (xem
- * storyboardJobTypeForEntryType): CHARACTER/LOCATION →
- * "storyboardImagesAIVideo", SCENE_SETTING_START/SCENE_SETTING_END →
- * "storyboardSceneImagesAIVideo", VIDEO → "storyboardVideo". Type không xác
- * định được hàng đợi tương ứng thì vẫn đã đánh dấu "success": false nhưng
- * KHÔNG đẩy job nào (báo rõ cho user biết).
+ * KHÔNG enqueue job mới nếu hàng đợi đã có SẴN 1 job ĐÚNG type + jsonPath
+ * này (đang chờ hoặc đang xử lý, xem isStoryboardJobQueued) — job storyboard
+ * luôn quét lại TOÀN BỘ entry "success" chưa true trong file mỗi lần chạy
+ * (xem storyboardPipeline.ts), nên job đang có sẵn sẽ tự nhặt luôn entry vừa
+ * đánh dấu lại ở đây khi tới lượt — thêm job thứ 2 chỉ tổ chạy trùng lặp.
  */
-async function tryRegenerateStoryboardItem(
+async function regenerateStoryboardItemLine(
   ctx: Context,
-  text: string,
+  line: string,
   promptMessageId: number,
-): Promise<boolean> {
-  const match = text.trim().match(REPLACEMENT_CAPTION_PATTERN);
-  if (!match) return false;
+): Promise<string | null> {
+  const match = line.match(REPLACEMENT_CAPTION_PATTERN);
+  if (!match) return null;
 
   const fileBaseName = match[1].trim().replace(/ +/g, "_");
   const targetId = match[2].trim();
@@ -323,17 +319,17 @@ async function tryRegenerateStoryboardItem(
     .stat(jsonPath)
     .then(() => true)
     .catch(() => false);
-  if (!exists) return false;
+  if (!exists) return null;
 
   const raw = await fs.readFile(jsonPath, "utf-8");
   let entries: StoryboardEntry[];
   try {
     entries = JSON.parse(raw);
   } catch {
-    return false;
+    return null;
   }
   const entry = entries.find((e) => e.id === targetId);
-  if (!entry) return false;
+  if (!entry) return null;
 
   entry.success = false;
   await fs.writeFile(jsonPath, JSON.stringify(entries, null, 2), "utf-8");
@@ -353,26 +349,61 @@ async function tryRegenerateStoryboardItem(
 
   const jobType = storyboardJobTypeForEntryType(entry.type);
   if (!jobType) {
-    // await ctx.reply(
-    //   `⚠️ Đã đánh dấu entry "${targetId}" cần tạo lại, nhưng type "${entry.type}" không xác định được hàng đợi tương ứng nên chưa tự đẩy job.`,
-    //   { reply_parameters: { message_id: promptMessageId } },
-    // );
-    return false;
+    return `⚠️ "${line}": đã đánh dấu cần tạo lại nhưng type "${entry.type}" không xác định được hàng đợi tương ứng.`;
   }
 
-  enqueueJob({
-    type: jobType,
-    chatId: ctx.chat!.id,
-    userId: ctx.from!.id,
-    prompt: "",
-    promptMessageId,
-    jsonPath,
-  });
+  if (!isStoryboardJobQueued(jobType, jsonPath)) {
+    enqueueJob({
+      type: jobType,
+      chatId: ctx.chat!.id,
+      userId: ctx.from!.id,
+      prompt: "",
+      promptMessageId,
+      jsonPath,
+    });
+  }
+  return `✅ "${line}" (${entry.type}): đã đưa vào hàng đợi tạo lại.`;
+}
 
-  await ctx.reply(
-    `✅ Đã đánh dấu entry "${targetId}" (${entry.type}) cần tạo lại và đưa vào hàng đợi tương ứng.`,
-    { reply_parameters: { message_id: promptMessageId } },
-  );
+/**
+ * User gõ tay (KHÔNG cần bấm nút, KHÔNG cần upload gì) tin nhắn dạng
+ * "<tên file json>__<id>" — cùng quy ước "__" với tryReplaceGeneratedFile,
+ * nhưng NGƯỢC LẠI: yêu cầu TẠO LẠI đúng 1 entry cụ thể (thay vì thay thế thủ
+ * công). Chấp nhận NHIỀU dòng trong CÙNG 1 tin nhắn (mỗi dòng 1 entry) — xử
+ * lý TUẦN TỰ từng dòng qua regenerateStoryboardItemLine, gộp kết quả vào 1
+ * tin reply duy nhất thay vì spam nhiều tin riêng lẻ.
+ *
+ * Nếu KHÔNG dòng nào khớp format/tìm thấy file/entry, trả về false — coi như
+ * tin nhắn này không liên quan gì (có thể chỉ là 1 prompt bình thường trùng
+ * hợp chứa "__"), để caller rơi xuống xử lý luồng text thông thường. Chỉ CẦN
+ * ÍT NHẤT 1 dòng xử lý được thì coi cả tin nhắn này đã được xử lý (trả về
+ * true), các dòng còn lại không khớp/không tìm thấy sẽ bị bỏ qua âm thầm.
+ */
+async function tryRegenerateStoryboardItem(
+  ctx: Context,
+  text: string,
+  promptMessageId: number,
+): Promise<boolean> {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const results: string[] = [];
+  for (const line of lines) {
+    const result = await regenerateStoryboardItemLine(
+      ctx,
+      line,
+      promptMessageId,
+    );
+    if (result) results.push(result);
+  }
+
+  if (results.length === 0) return false;
+
+  await ctx.reply(results.join("\n"), {
+    reply_parameters: { message_id: promptMessageId },
+  });
   return true;
 }
 

@@ -426,6 +426,38 @@ function persistChatAIJobs(): void {
 }
 
 /**
+ * Kiểm tra hàng đợi ẢNH/VIDEO đã có job ĐÚNG type + jsonPath này chưa (đang
+ * CHỜ hoặc đang XỬ LÝ — job đang xử lý dở vẫn còn nằm trong mảng tới lúc
+ * finally mới bị xoá, xem processImageQueue/processVideoQueue) — dùng để
+ * tránh enqueue TRÙNG (xem tryRegenerateStoryboardItem trong handlers.ts):
+ * job storyboard luôn xử lý LẠI TOÀN BỘ entry "success" chưa true trong file
+ * (xem storyboardPipeline.ts), nên nếu đã có 1 job cùng type+jsonPath trong
+ * hàng đợi, job đó tự khắc nhặt luôn entry vừa đánh dấu lại khi tới lượt —
+ * không cần thêm job thứ 2 (chỉ tổ chạy trùng, tốn gấp đôi thời gian/credit).
+ * Resolve path trước khi so sánh — cùng 1 file có thể truyền vào dưới dạng
+ * path tương đối/tuyệt đối khác nhau tuỳ nơi gọi.
+ */
+export function isStoryboardJobQueued(
+  type:
+    | "storyboardImagesAIVideo"
+    | "storyboardSceneImagesAIVideo"
+    | "storyboardVideo",
+  jsonPath: string,
+): boolean {
+  const resolvedPath = path.resolve(jsonPath);
+  if (type === "storyboardVideo") {
+    return videoJobs.some(
+      (job) =>
+        job.type === "storyboardVideo" &&
+        path.resolve(job.jsonPath) === resolvedPath,
+    );
+  }
+  return imageJobs.some(
+    (job) => job.type === type && path.resolve(job.jsonPath) === resolvedPath,
+  );
+}
+
+/**
  * Đẩy job vào ĐÚNG hàng đợi theo loại — ảnh, video, ChatAI mỗi loại 1 hàng
  * đợi riêng (xem chú thích AIImageJob/AIVideoJob), chạy độc lập không phải
  * chờ nhau.
