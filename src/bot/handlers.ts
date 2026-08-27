@@ -363,6 +363,7 @@ async function tryRegenerateStoryboardItem(
   enqueueJob({
     type: jobType,
     chatId: ctx.chat!.id,
+    userId: ctx.from!.id,
     prompt: "",
     promptMessageId,
     jsonPath,
@@ -648,6 +649,7 @@ async function submitVideoJob({
   enqueueJob({
     type: "video",
     chatId: groupChatId,
+    userId,
     prompt,
     resolution,
     model: isAdmin(userId) ? model : DEFAULT_MODEL,
@@ -700,6 +702,7 @@ async function submitImageJob({
   enqueueJob({
     type: "image",
     chatId: groupChatId,
+    userId,
     prompt,
     model: isAdmin(userId) ? model : DEFAULT_MODEL,
     referenceImagePaths,
@@ -712,6 +715,7 @@ interface SubmitChatAIParams {
   ctx: Context;
   groupChatId: number;
   promptMessageId: number;
+  userId: number;
   rawText: string;
   /** Tên file .txt user upload làm prompt (nếu gửi qua file thay vì gõ text) — dùng đặt tên lại file JSON ChatAI trả về, xem queue.ts. */
   promptFileName?: string;
@@ -724,6 +728,7 @@ async function submitChatAIJob({
   ctx,
   groupChatId,
   promptMessageId,
+  userId,
   rawText,
   promptFileName,
   promptAttachmentPath,
@@ -742,6 +747,7 @@ async function submitChatAIJob({
   enqueueJob({
     type: "chatAI",
     chatId: groupChatId,
+    userId,
     prompt,
     promptMessageId,
     statusMessageId: statusMessage.message_id,
@@ -1035,8 +1041,8 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(STOP_ALL_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
-    stopAll();
-    await ctx.reply(`🛑 Đã dừng all job`);
+    stopAll(ctx.from.id);
+    await ctx.reply(`🛑 Đã dừng job của bạn`);
   });
 
   bot.hears(CONTINUE_VIDEO_BUTTON_LABEL, async (ctx) => {
@@ -1136,6 +1142,7 @@ export function registerHandlers(bot: Telegraf): void {
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
+        userId,
         rawText: ctx.message.text,
       });
     } else if (mode === "continueVideo" || mode === "continueSceneFrame") {
@@ -1416,6 +1423,7 @@ export function registerHandlers(bot: Telegraf): void {
         ctx,
         groupChatId: ctx.chat.id,
         promptMessageId: ctx.message.message_id,
+        userId,
         rawText: CHATAI_FILE_ATTACHMENT_PROMPT,
         promptFileName: originalFileName,
         promptAttachmentPath: promptFilePath,

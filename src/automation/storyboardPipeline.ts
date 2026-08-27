@@ -49,7 +49,7 @@ export function sleep(ms: number): Promise<void> {
 const REQUEST_THROTTLE_MS = 15000;
 
 /**
- * Cờ dừng SỚM toàn cục cho 3 vòng lặp generateReferenceImagesForFile/
+ * Cờ dừng SỚM cho 3 vòng lặp generateReferenceImagesForFile/
  * generateSceneImagesForFile/generateVideosForFile — dùng cho nút "Stop All"
  * (xem stopAll() trong queue.ts). Entry ĐANG generate dở (đã gọi
  * generateReferenceImage/generateVideo, còn đang chờ Playwright chạy xong)
@@ -57,24 +57,32 @@ const REQUEST_THROTTLE_MS = 15000;
  * CHƯA bắt đầu (lượt lặp KẾ TIẾP của vòng for) mới bị bỏ qua, giữ nguyên
  * "success" chưa xác định để lần chạy lại sau (resume) vẫn xử lý tiếp được.
  *
- * Cờ CHUNG cho mọi file/job (không phân biệt theo jobId) — đúng ý nghĩa
- * "Stop All" (dừng tất cả), đơn giản hơn nhiều so với theo dõi riêng từng
- * job. Phải gọi clearStopStoryboardRequest() SAU KHI job đang dừng đã thực
- * sự thoát hẳn (xem processChatAIQueue trong queue.ts), nếu không các job MỚI
- * sau đó sẽ bị chặn nhầm ngay từ đầu.
+ * Theo YÊU CẦU NGƯỜI DÙNG: "Stop All" chỉ được dừng job của ĐÚNG user đã bấm,
+ * không được dừng job của user khác — nên đổi từ 1 cờ boolean CHUNG (dừng mù
+ * quáng mọi job đang chạy, bất kể của ai) sang tập hợp CÁC jsonPath cụ thể
+ * đang bị yêu cầu dừng. stopAll(userId) chỉ thêm jsonPath của job ĐANG XỬ LÝ
+ * (index 0 hàng đợi ảnh / currentVideoJob hàng đợi video) NẾU job đó thuộc
+ * đúng userId — job của user khác đang chạy dở không hề bị đụng tới. Resolve
+ * qua path.resolve() trước khi dùng làm key — cùng 1 file có thể được truyền
+ * vào dưới dạng path tương đối/tuyệt đối khác nhau tuỳ nơi gọi.
+ *
+ * Phải gọi clearStopStoryboardRequest(jsonPath) SAU KHI job đang dừng đã thực
+ * sự thoát hẳn (xem processImageQueue/processVideoQueue trong queue.ts), nếu
+ * không job MỚI sau đó dùng LẠI đúng jsonPath này (vd bấm "Tiếp tục...") sẽ bị
+ * chặn nhầm ngay từ đầu.
  */
-let stopStoryboardRequested = false;
+const stopStoryboardRequestedPaths = new Set<string>();
 
-export function requestStopStoryboardPipeline(): void {
-  stopStoryboardRequested = true;
+export function requestStopStoryboardPipeline(jsonPath: string): void {
+  stopStoryboardRequestedPaths.add(path.resolve(jsonPath));
 }
 
-export function clearStopStoryboardRequest(): void {
-  stopStoryboardRequested = false;
+export function clearStopStoryboardRequest(jsonPath: string): void {
+  stopStoryboardRequestedPaths.delete(path.resolve(jsonPath));
 }
 
-export function isStopStoryboardRequested(): boolean {
-  return stopStoryboardRequested;
+export function isStopStoryboardRequested(jsonPath: string): boolean {
+  return stopStoryboardRequestedPaths.has(path.resolve(jsonPath));
 }
 
 /**
@@ -214,7 +222,7 @@ export async function generateReferenceImagesForFile(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   for (const entry of targets) {
-    if (isStopStoryboardRequested()) break;
+    if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
     const jobId = randomUUID();
     console.log(
@@ -316,7 +324,7 @@ export async function generateReferenceImagesForFileViaAIVideo(
   const failedEntries: FailedEntry[] = [];
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
   for (const entry of targets) {
-    if (isStopStoryboardRequested()) break;
+    if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
 
     // Cùng lý do đã sửa cho generateSceneImagesForFileViaAIVideo: ảnh id này
@@ -557,7 +565,7 @@ export async function generateVideosForFile(
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
 
   for (const entry of targets) {
-    if (isStopStoryboardRequested()) break;
+    if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video...`);
@@ -602,7 +610,7 @@ export async function generateVideosForFile(
       // được bấm đúng lúc đang chờ đoạn đó. Entry CHƯA gọi generateVideo (chưa
       // tốn credit AIVideo) nên bỏ qua an toàn — giữ "success" chưa xác
       // định để resume sau, đúng ý "chưa gen thì ko gen nữa".
-      if (isStopStoryboardRequested()) break;
+      if (isStopStoryboardRequested(inputPath)) break;
 
       const tempFilePath = await generateVideo(entry.prompt, options, jobId);
 
@@ -696,7 +704,7 @@ export async function generateSceneImagesForFile(
   const failedEntries: FailedEntry[] = [];
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
   for (const entry of targets) {
-    if (isStopStoryboardRequested()) break;
+    if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     try {
@@ -816,7 +824,7 @@ export async function generateSceneImagesForFileViaAIVideo(
   // }
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
   for (const entry of targets) {
-    if (isStopStoryboardRequested()) break;
+    if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
 
     // Ảnh id này đã tồn tại sẵn trong folder generated/ (vd user tự upload

@@ -23,6 +23,8 @@ import {
 
 interface BaseJob {
   chatId: number;
+  /** Telegram user id của người bấm/gõ tạo ra job này — dùng để "Stop All" chỉ dừng ĐÚNG job của user đã bấm, xem stopAll(). */
+  userId: number;
   prompt: string;
   /** Tin nhắn prompt gốc — dùng để reply kết quả/404 vào đúng chỗ. */
   promptMessageId: number;
@@ -463,33 +465,61 @@ export interface StopAllResult {
  * job "storyboardImagesAIVideo"/"storyboardVideo" (từ nút "Tạo ảnh"/"Tạo
  * video" xác nhận — cả 2 chế độ ChatAI giờ dùng chung luồng xác nhận này).
  *
- * 1. requestStopStoryboardPipeline(): báo hiệu vòng lặp generateReferenceImagesForFile/
- *    generateReferenceImagesForFileViaAIVideo/generateSceneImagesForFile/
- *    generateVideosForFile ĐANG CHẠY (nếu có, từ 1 job "storyboardImagesAIVideo"
- *    hoặc 1 job "storyboardVideo") dừng SAU KHI entry đang generate dở xong
- *    (không abort giữa chừng) — xem docstring hàm này trong
- *    storyboardPipeline.ts.
- * 2. Xoá TOÀN BỘ job ChatAI còn đang CHỜ trong hàng đợi (chưa tới lượt xử lý) —
- *    job ChatAI ĐANG xử lý dở (index 0, nếu chatAIProcessing) không thể huỷ giữa
- *    chừng askChatAI, chỉ dừng sớm được các vòng lặp gen ảnh/video bên trong
- *    nó qua bước 1.
- * 3. Xoá job "storyboardImagesAIVideo" còn đang CHỜ trong hàng đợi ẢNH — job
- *    ĐANG xử lý dở (index 0, nếu imageProcessing) không thể huỷ giữa chừng
- *    generateImage trên AIVideo, để chạy xong/lỗi tự nhiên (vòng lặp gen
- *    nhiều entry bên trong nó vẫn dừng sớm được qua bước 1 ở trên).
+ * Theo YÊU CẦU NGƯỜI DÙNG: CHỈ dừng job của ĐÚNG userId đã bấm nút — job của
+ * user khác (dù đang chờ hay đang xử lý dở, kể cả đang ở index 0/
+ * currentVideoJob) hoàn toàn KHÔNG bị đụng tới. Lọc theo `job.userId` ở MỌI
+ * bước dưới đây thay vì xoá/dừng mù quáng toàn bộ hàng đợi như trước.
+ *
+ * 1. Nếu job ĐANG xử lý dở (index 0 hàng đợi ảnh / currentVideoJob hàng đợi
+ *    video) là job storyboard (có jsonPath) VÀ thuộc đúng userId: gọi
+ *    requestStopStoryboardPipeline(jsonPath) — báo hiệu ĐÚNG vòng lặp
+ *    generateReferenceImagesForFileViaAIVideo/generateSceneImagesForFileViaAIVideo/
+ *    generateVideosForFile của job đó dừng SAU KHI entry đang generate dở
+ *    xong (không abort giữa chừng) — xem docstring hàm này trong
+ *    storyboardPipeline.ts. Job storyboard đang chạy của user KHÁC không bị
+ *    gọi hàm này nên không hề bị ảnh hưởng.
+ * 2. Xoá các job ChatAI ĐÚNG userId còn đang CHỜ trong hàng đợi (chưa tới lượt
+ *    xử lý) — job ChatAI ĐANG xử lý dở (index 0, nếu chatAIProcessing) không
+ *    thể huỷ giữa chừng askChatAI dù có đúng userId hay không.
+ * 3. Xoá job "storyboardImagesAIVideo"/"storyboardSceneImagesAIVideo" ĐÚNG
+ *    userId còn đang CHỜ trong hàng đợi ẢNH — job ĐANG xử lý dở (index 0, nếu
+ *    imageProcessing) không thể huỷ giữa chừng generateImage trên AIVideo, để
+ *    chạy xong/lỗi tự nhiên (vòng lặp gen nhiều entry bên trong nó vẫn dừng
+ *    sớm được qua bước 1 ở trên NẾU đúng userId).
  * 4. Xoá job "video" có characterImagePath (từ CHARACTER_REF_BUTTON_LABEL) VÀ
- *    "storyboardVideo" còn đang CHỜ trong hàng đợi VIDEO — job ĐANG xử lý dở
- *    (currentVideoJob, KHÔNG CHẮC ở index 0 vì hàng đợi video dùng cơ chế
- *    quét/bỏ qua, xem processVideoQueue) không thể huỷ giữa chừng, để chạy
- *    xong/lỗi tự nhiên.
+ *    "storyboardVideo" ĐÚNG userId còn đang CHỜ trong hàng đợi VIDEO — job
+ *    ĐANG xử lý dở (currentVideoJob, KHÔNG CHẮC ở index 0 vì hàng đợi video
+ *    dùng cơ chế quét/bỏ qua, xem processVideoQueue) không thể huỷ giữa
+ *    chừng, để chạy xong/lỗi tự nhiên.
  *
  * Báo cho từng user có job bị huỷ biết (reply đúng tin nhắn prompt gốc).
  */
-export function stopAll(): StopAllResult {
-  requestStopStoryboardPipeline();
+export function stopAll(userId: number): StopAllResult {
+  const currentImageJob = imageProcessing ? imageJobs[0] : undefined;
+  if (
+    currentImageJob &&
+    currentImageJob.userId === userId &&
+    (currentImageJob.type === "storyboardImagesAIVideo" ||
+      currentImageJob.type === "storyboardSceneImagesAIVideo")
+  ) {
+    requestStopStoryboardPipeline(currentImageJob.jsonPath);
+  }
+  if (
+    currentVideoJob &&
+    currentVideoJob.userId === userId &&
+    currentVideoJob.type === "storyboardVideo"
+  ) {
+    requestStopStoryboardPipeline(currentVideoJob.jsonPath);
+  }
 
+  const cancelledChatAIJobs: ChatAIJob[] = [];
   const chatAIStartIndex = chatAIProcessing ? 1 : 0;
-  const cancelledChatAIJobs = chatAIJobs.splice(chatAIStartIndex);
+  for (let i = chatAIJobs.length - 1; i >= chatAIStartIndex; i--) {
+    if (chatAIJobs[i].userId === userId) {
+      cancelledChatAIJobs.push(chatAIJobs[i]);
+      chatAIJobs.splice(i, 1);
+    }
+  }
   if (cancelledChatAIJobs.length > 0) persistChatAIJobs();
 
   const cancelledOtherJobs: (AIImageJob | AIVideoJob)[] = [];
@@ -498,8 +528,9 @@ export function stopAll(): StopAllResult {
   for (let i = imageJobs.length - 1; i >= imageStartIndex; i--) {
     const job = imageJobs[i];
     if (
-      job.type === "storyboardImagesAIVideo" ||
-      job.type === "storyboardSceneImagesAIVideo"
+      (job.type === "storyboardImagesAIVideo" ||
+        job.type === "storyboardSceneImagesAIVideo") &&
+      job.userId === userId
     ) {
       cancelledOtherJobs.push(job);
       imageJobs.splice(i, 1);
@@ -511,8 +542,9 @@ export function stopAll(): StopAllResult {
     const job = videoJobs[i];
     if (job === currentVideoJob) continue;
     if (
-      (job.type === "video" && job.characterImagePath) ||
-      job.type === "storyboardVideo"
+      ((job.type === "video" && job.characterImagePath) ||
+        job.type === "storyboardVideo") &&
+      job.userId === userId
     ) {
       cancelledOtherJobs.push(job);
       videoJobs.splice(i, 1);
@@ -543,6 +575,7 @@ async function notifyJobCancelled(job: GenerationJob): Promise<void> {
 interface PendingVideoConfirmation {
   jsonPath: string;
   chatId: number;
+  userId: number;
   promptMessageId: number;
 }
 
@@ -595,6 +628,7 @@ function persistPendingVideoConfirmations(): void {
 /** Tạo 1 lượt chờ xác nhận "Tạo video" cho jsonPath, trả về id ngắn dùng làm callback_data của nút (xem handlers.ts). */
 export function createVideoConfirmation(
   chatId: number,
+  userId: number,
   promptMessageId: number,
   jsonPath: string,
 ): string {
@@ -602,6 +636,7 @@ export function createVideoConfirmation(
   pendingVideoConfirmations.set(confirmId, {
     jsonPath,
     chatId,
+    userId,
     promptMessageId,
   });
   persistPendingVideoConfirmations();
@@ -622,6 +657,7 @@ export function confirmVideoGeneration(confirmId: string): boolean {
   enqueueJob({
     type: "storyboardVideo",
     chatId: pending.chatId,
+    userId: pending.userId,
     prompt: "",
     promptMessageId: pending.promptMessageId,
     jsonPath: pending.jsonPath,
@@ -632,6 +668,7 @@ export function confirmVideoGeneration(confirmId: string): boolean {
 interface PendingImageConfirmation {
   jsonPath: string;
   chatId: number;
+  userId: number;
   promptMessageId: number;
 }
 
@@ -682,6 +719,7 @@ function persistPendingImageConfirmations(): void {
 /** Tạo 1 lượt chờ xác nhận "Tạo ảnh" cho jsonPath, trả về id ngắn dùng làm callback_data của nút (xem handlers.ts). */
 export function createImageConfirmation(
   chatId: number,
+  userId: number,
   promptMessageId: number,
   jsonPath: string,
 ): string {
@@ -689,6 +727,7 @@ export function createImageConfirmation(
   pendingImageConfirmations.set(confirmId, {
     jsonPath,
     chatId,
+    userId,
     promptMessageId,
   });
   persistPendingImageConfirmations();
@@ -709,6 +748,7 @@ export function confirmImageGeneration(confirmId: string): boolean {
   enqueueJob({
     type: "storyboardImagesAIVideo",
     chatId: pending.chatId,
+    userId: pending.userId,
     prompt: "",
     promptMessageId: pending.promptMessageId,
     jsonPath: pending.jsonPath,
@@ -719,6 +759,7 @@ export function confirmImageGeneration(confirmId: string): boolean {
 interface PendingSceneConfirmation {
   jsonPath: string;
   chatId: number;
+  userId: number;
   promptMessageId: number;
 }
 
@@ -769,6 +810,7 @@ function persistPendingSceneConfirmations(): void {
 /** Tạo 1 lượt chờ xác nhận "Tạo ảnh scene" cho jsonPath, trả về id ngắn dùng làm callback_data của nút (xem handlers.ts). */
 export function createSceneConfirmation(
   chatId: number,
+  userId: number,
   promptMessageId: number,
   jsonPath: string,
 ): string {
@@ -776,6 +818,7 @@ export function createSceneConfirmation(
   pendingSceneConfirmations.set(confirmId, {
     jsonPath,
     chatId,
+    userId,
     promptMessageId,
   });
   persistPendingSceneConfirmations();
@@ -796,6 +839,7 @@ export function confirmSceneGeneration(confirmId: string): boolean {
   enqueueJob({
     type: "storyboardSceneImagesAIVideo",
     chatId: pending.chatId,
+    userId: pending.userId,
     prompt: "",
     promptMessageId: pending.promptMessageId,
     jsonPath: pending.jsonPath,
@@ -919,6 +963,7 @@ async function processImageQueue(): Promise<void> {
           if (readyForScene) {
             const confirmId = createSceneConfirmation(
               job.chatId,
+              job.userId,
               job.promptMessageId,
               job.jsonPath,
             );
@@ -986,6 +1031,7 @@ async function processImageQueue(): Promise<void> {
           if (readyForVideo) {
             const confirmId = createVideoConfirmation(
               job.chatId,
+              job.userId,
               job.promptMessageId,
               job.jsonPath,
             );
@@ -1036,13 +1082,11 @@ async function processImageQueue(): Promise<void> {
           job.type === "storyboardImagesAIVideo" ||
           job.type === "storyboardSceneImagesAIVideo"
         ) {
-          // Reset cờ "Stop All" SAU KHI job này (có thể đang bị dừng sớm) đã
-          // thực sự thoát hẳn — không reset thì job storyboardImagesAIVideo/
-          // storyboardSceneImagesAIVideo/storyboardVideo/ChatAI MỚI sau đó sẽ
-          // bị chặn nhầm ngay từ đầu (xem stopAll()/
-          // requestStopStoryboardPipeline, cùng lý do đã xử lý ở
-          // processChatAIQueue).
-          clearStopStoryboardRequest();
+          // Reset cờ "Stop All" của ĐÚNG jsonPath này SAU KHI job (có thể
+          // đang bị dừng sớm) đã thực sự thoát hẳn — không reset thì job MỚI
+          // sau đó dùng LẠI đúng jsonPath này (vd bấm "Tiếp tục...") sẽ bị
+          // chặn nhầm ngay từ đầu (xem stopAll()/requestStopStoryboardPipeline).
+          clearStopStoryboardRequest(job.jsonPath);
         }
         imageJobs.shift();
         persistImageJobs();
@@ -1137,8 +1181,8 @@ async function processVideoQueue(): Promise<void> {
             await fsp.unlink(p).catch(() => {});
           }
         } else if (job.type === "storyboardVideo") {
-          // Reset cờ "Stop All" — cùng lý do đã giải thích ở processImageQueue.
-          clearStopStoryboardRequest();
+          // Reset cờ "Stop All" của ĐÚNG jsonPath — cùng lý do đã giải thích ở processImageQueue.
+          clearStopStoryboardRequest(job.jsonPath);
         }
         currentVideoJob = null;
         videoJobs.splice(index, 1);
@@ -1192,10 +1236,13 @@ async function processChatAIQueue(): Promise<void> {
         }
         chatAIJobs.shift();
         persistChatAIJobs();
-        // Reset cờ "Stop All" SAU KHI job này (có thể đang bị dừng sớm) đã
-        // thực sự thoát hẳn — không reset thì job ChatAI MỚI sau đó sẽ bị chặn
-        // nhầm ngay từ đầu (xem stopAll()/requestStopStoryboardPipeline).
-        clearStopStoryboardRequest();
+        // KHÔNG cần clearStopStoryboardRequest() ở đây — job "chatAI" (chỉ
+        // gọi askChatAI) không có jsonPath và không hề tự gọi
+        // generateReferenceImagesForFileViaAIVideo/generateSceneImagesForFileViaAIVideo/
+        // generateVideosForFile (những hàm đó chỉ chạy ở job
+        // "storyboardImagesAIVideo"/"storyboardSceneImagesAIVideo"/
+        // "storyboardVideo", xem processImageQueue/processVideoQueue) — cờ
+        // "Stop All" theo jsonPath không áp dụng cho job này.
         // Chờ giữa các lần gọi gen json (askChatAI) liên tiếp — tránh gửi
         // request quá nhanh lên ChatAI (theo yêu cầu người dùng). Chỉ
         // chờ khi còn job kế tiếp, tránh delay vô ích lúc hàng đợi đã hết.
@@ -1260,6 +1307,7 @@ async function runStoryboardPipeline(
 
     const confirmId = createImageConfirmation(
       job.chatId,
+      job.userId,
       job.promptMessageId,
       generatedFilePath,
     );
