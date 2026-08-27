@@ -70,15 +70,69 @@ const REQUEST_THROTTLE_MS = 15000;
  * sự thoát hẳn (xem processImageQueue/processVideoQueue trong queue.ts), nếu
  * không job MỚI sau đó dùng LẠI đúng jsonPath này (vd bấm "Tiếp tục...") sẽ bị
  * chặn nhầm ngay từ đầu.
+ *
+ * Ghi ra file (STOP_STORYBOARD_REQUESTS_FILE) SAU MỖI lần thêm/xoá — cùng cơ
+ * chế/lý do với imageJobs/videoJobs/chatAIJobs trong queue.ts: sống sót qua
+ * restart/crash. Quan trọng vì job đang xử lý dở lúc bị yêu cầu dừng có thể
+ * VẪN còn nguyên trong file hàng đợi (chỉ xoá ở "finally" sau khi thực sự
+ * xong) — nếu bot restart ngay sau đó mà không nhớ lại yêu cầu dừng này, job
+ * đó sẽ chạy tiếp như chưa hề bị yêu cầu dừng.
  */
+const STOP_STORYBOARD_REQUESTS_FILE = path.resolve(
+  "./storage/stop-storyboard-requests.json",
+);
+
 const stopStoryboardRequestedPaths = new Set<string>();
+
+function persistStopStoryboardRequests(): void {
+  try {
+    fs.mkdirSync(path.dirname(STOP_STORYBOARD_REQUESTS_FILE), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      STOP_STORYBOARD_REQUESTS_FILE,
+      JSON.stringify(Array.from(stopStoryboardRequestedPaths), null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error(
+      "[storyboardPipeline] Không ghi được file yêu cầu dừng storyboard:",
+      err,
+    );
+  }
+}
+
+/** Gọi 1 lần lúc khởi động bot (xem initQueue trong queue.ts), TRƯỚC khi các hàng đợi bắt đầu xử lý lại. */
+export function loadPersistedStopStoryboardRequests(): void {
+  try {
+    if (!fs.existsSync(STOP_STORYBOARD_REQUESTS_FILE)) return;
+    const restored: string[] = JSON.parse(
+      fs.readFileSync(STOP_STORYBOARD_REQUESTS_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      for (const jsonPath of restored) {
+        stopStoryboardRequestedPaths.add(jsonPath);
+      }
+      console.log(
+        `[storyboardPipeline] Khôi phục ${restored.length} yêu cầu dừng storyboard từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[storyboardPipeline] Không đọc được file yêu cầu dừng storyboard đã lưu, bỏ qua:",
+      err,
+    );
+  }
+}
 
 export function requestStopStoryboardPipeline(jsonPath: string): void {
   stopStoryboardRequestedPaths.add(path.resolve(jsonPath));
+  persistStopStoryboardRequests();
 }
 
 export function clearStopStoryboardRequest(jsonPath: string): void {
   stopStoryboardRequestedPaths.delete(path.resolve(jsonPath));
+  persistStopStoryboardRequests();
 }
 
 export function isStopStoryboardRequested(jsonPath: string): boolean {

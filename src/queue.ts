@@ -14,6 +14,7 @@ import {
   generateReferenceImagesForFileViaAIVideo,
   generateSceneImagesForFileViaAIVideo,
   generateVideosForFile,
+  loadPersistedStopStoryboardRequests,
   requestStopStoryboardPipeline,
   sleep,
   type FailedEntry,
@@ -321,6 +322,7 @@ export function initQueue(botTelegram: Telegram): void {
   loadPersistedPendingImageConfirmations();
   loadPersistedPendingSceneConfirmations();
   loadPersistedFailedStoryboardJobs();
+  loadPersistedStopStoryboardRequests();
   void processImageQueue();
   void processVideoQueue();
   void processChatAIQueue();
