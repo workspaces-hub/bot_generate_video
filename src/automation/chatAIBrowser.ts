@@ -19,6 +19,19 @@ export const getChatAIBrowserContext = createBrowserContextManager(
 );
 
 /**
+ * BrowserContext RIÊNG (tài khoản KHÁC hẳn getChatAIBrowserContext ở trên)
+ * chỉ dùng cho reviseGenerationPrompt (chatAI.ts) — xem
+ * config.chatAIReviseStorageStatePath để biết lý do tách riêng (tránh 2 tab
+ * thao tác song song trên CÙNG 1 tài khoản khi reviseGenerationPrompt chạy
+ * cùng lúc với askChatAI).
+ */
+export const getChatAIReviseBrowserContext = createBrowserContextManager(
+  config.chatAIReviseStorageStatePath,
+  "chatAI-revise-browser",
+  'Chạy "npm run login-chatai -- revise" trước khi dùng tính năng sửa prompt vi phạm nội dung.',
+);
+
+/**
  * Nhận diện trang Cloudflare challenge — DOM thật xác nhận (job afd3c6d8,
  * 30520119): <title>Just a moment...</title> + 1 <script
  * src="https://challenges.cloudflare.com/turnstile/...">. QUAN TRỌNG: chữ

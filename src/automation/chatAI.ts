@@ -5,6 +5,7 @@ import { config } from "../config";
 import {
   dismissCloudflareChallengeIfPresent,
   getChatAIBrowserContext,
+  getChatAIReviseBrowserContext,
 } from "./chatAIBrowser";
 import {
   assistantMessageLocator,
@@ -1023,7 +1024,7 @@ export async function reviseGenerationPrompt(
   violationReason: string,
   jobId: string,
 ): Promise<string> {
-  const context = await getChatAIBrowserContext();
+  const context = await getChatAIReviseBrowserContext();
   const page = await context.newPage();
   try {
     await page.goto(config.chatAIBaseUrl, {
@@ -1037,7 +1038,7 @@ export async function reviseGenerationPrompt(
       .catch(() => false);
     if (signedOut) {
       throw new ChatAIError(
-        "Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai",
+        "Chưa đăng nhập session ChatAI (revise) hoặc session đã hết hạn. Chạy: npm run login-chatai -- revise",
       );
     }
 

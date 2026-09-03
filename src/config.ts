@@ -65,6 +65,18 @@ export const config = {
   chatAIStorageStatePath: path.resolve(
     process.env.CHATAI_STORAGE_STATE_PATH ?? "./storage/chatai-session.json",
   ),
+  // Session RIÊNG (tài khoản KHÁC hẳn chatAIStorageStatePath ở trên) chỉ
+  // dùng cho reviseGenerationPrompt (chatAI.ts) — nhờ ChatAI viết lại prompt
+  // bị AIVideo từ chối vì vi phạm chính sách nội dung. Tách riêng vì
+  // reviseGenerationPrompt có thể chạy CÙNG LÚC với askChatAI (2 hàng đợi độc
+  // lập, xem queue.ts) — dùng chung 1 session sẽ khiến 2 tab thao tác song
+  // song trên CÙNG 1 tài khoản (dễ đụng clipboard, trông "máy" hơn với
+  // ChatGPT, tăng rủi ro bị rate-limit/chặn). Đăng nhập bằng
+  // `npm run login-chatai -- revise` (xem scripts/login-chatai.ts).
+  chatAIReviseStorageStatePath: path.resolve(
+    process.env.CHATAI_REVISE_STORAGE_STATE_PATH ??
+      "./storage/chatai-revise-session.json",
+  ),
   chatAIResultsDir: path.resolve(
     process.env.CHATAI_RESULTS_DIR ?? "./storage/chatai-results",
   ),
