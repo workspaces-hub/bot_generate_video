@@ -64,21 +64,33 @@ export interface ChatAIJob extends BaseJob {
 }
 
 /**
- * Job "tạo video" cho 1 file JSON storyboard — chỉ được tạo SAU KHI user bấm
- * nút "Tạo video" xác nhận (xem createVideoConfirmation/
- * confirmVideoGeneration), tránh tự động tốn credit AIVideo/ChatAI khi ảnh
- * chưa được user duyệt. Nằm trong hàng đợi VIDEO riêng (videoJobs) — KHÔNG
- * tự gen ảnh SCENE_SETTING nữa (việc đó thuộc về job
- * "storyboardImagesAIVideo" trong hàng đợi ẢNH, xem docstring job đó), job
- * này CHỈ gọi generateVideosForFile. Trước khi thực sự xử lý, hàng đợi video
- * LUÔN kiểm tra jsonPath: TOÀN BỘ entry type SCENE_SETTING phải đã
- * "success": true thì mới lấy ra xử lý — nếu chưa, bỏ qua (giữ nguyên vị trí
- * trong hàng đợi) và xét job tiếp theo, xem processVideoQueue.
+ * Job "tạo video" cho 1 file JSON storyboard — tạo qua 2 đường:
+ * (1) User bấm nút "Tạo video" xác nhận (xem createVideoConfirmation/
+ *     confirmVideoGeneration) — job CẢ FILE, "entryIds" để trống, xử lý HẾT
+ *     entry VIDEO chưa "success" trong file. Trước khi thực sự xử lý, hàng
+ *     đợi video LUÔN kiểm tra jsonPath: TOÀN BỘ entry type SCENE_SETTING
+ *     phải đã "success": true thì mới lấy ra xử lý — nếu chưa, bỏ qua (giữ
+ *     nguyên vị trí trong hàng đợi) và xét job tiếp theo, xem
+ *     processVideoQueue/isJsonSceneSettingReady.
+ * (2) Tự động đẩy NGAY khi 1 entry SCENE_SETTING_END vừa xong VÀ video entry
+ *     tương ứng đã đủ ref (xem findVideoEntriesReadyAfterEnd trong
+ *     storyboardPipeline.ts, gọi từ processImageQueue) — job CHỈ 1 CLIP,
+ *     "entryIds" = [id entry VIDEO đó]. Đã tự xác nhận đủ ref TRƯỚC khi
+ *     enqueue nên KHÔNG cần chờ isJsonSceneSettingReady của CẢ FILE (job loại
+ *     này luôn coi là sẵn sàng ngay, xem findNextReadyVideoJobIndex) — cho
+ *     phép nhiều clip trong CÙNG 1 file tạo video song song với lúc ảnh
+ *     scene của các clip sau vẫn đang generate, thay vì phải đợi xong hết.
+ *
+ * Nằm trong hàng đợi VIDEO riêng (videoJobs) — KHÔNG tự gen ảnh SCENE_SETTING
+ * (việc đó thuộc về job "storyboardImagesAIVideo"/"storyboardSceneImagesAIVideo"
+ * trong hàng đợi ẢNH), job này CHỈ gọi generateVideosForFile.
  */
 export interface StoryboardVideoJob extends BaseJob {
   type: "storyboardVideo";
   /** Path file JSON storyboard (ảnh CHARACTER/LOCATION/SCENE_SETTING phải đã xong) — truyền cho generateVideosForFile. */
   jsonPath: string;
+  /** Không truyền = xử lý HẾT entry VIDEO chưa "success" trong file (nút "Tạo video" thủ công). Có truyền = job per-clip, CHỈ xử lý đúng (các) entry VIDEO này (xem generateVideosForFile onlyEntryIds). */
+  entryIds?: string[];
 }
 
 /**
@@ -431,13 +443,21 @@ function persistChatAIJobs(): void {
  * Kiểm tra hàng đợi ẢNH/VIDEO đã có job ĐÚNG type + jsonPath này chưa (đang
  * CHỜ hoặc đang XỬ LÝ — job đang xử lý dở vẫn còn nằm trong mảng tới lúc
  * finally mới bị xoá, xem processImageQueue/processVideoQueue) — dùng để
- * tránh enqueue TRÙNG (xem tryRegenerateStoryboardItem trong handlers.ts):
- * job storyboard luôn xử lý LẠI TOÀN BỘ entry "success" chưa true trong file
- * (xem storyboardPipeline.ts), nên nếu đã có 1 job cùng type+jsonPath trong
- * hàng đợi, job đó tự khắc nhặt luôn entry vừa đánh dấu lại khi tới lượt —
- * không cần thêm job thứ 2 (chỉ tổ chạy trùng, tốn gấp đôi thời gian/credit).
+ * tránh enqueue TRÙNG (xem tryRegenerateStoryboardItem trong handlers.ts VÀ
+ * onVideoEntriesReady trong processImageQueue): job storyboard "cả file"
+ * luôn xử lý LẠI TOÀN BỘ entry "success" chưa true trong file (xem
+ * storyboardPipeline.ts), nên nếu đã có 1 job cùng type+jsonPath trong hàng
+ * đợi, job đó tự khắc nhặt luôn entry vừa đánh dấu lại khi tới lượt — không
+ * cần thêm job thứ 2 (chỉ tổ chạy trùng, tốn gấp đôi thời gian/credit).
  * Resolve path trước khi so sánh — cùng 1 file có thể truyền vào dưới dạng
  * path tương đối/tuyệt đối khác nhau tuỳ nơi gọi.
+ *
+ * entryId (chỉ áp dụng cho type "storyboardVideo", job per-clip — xem
+ * StoryboardVideoJob.entryIds): nếu truyền, so khớp CHÍNH XÁC entry đó thay
+ * vì chỉ so type+jsonPath — 2 clip khác nhau CÙNG file phải được coi là 2
+ * job KHÁC NHAU (không job nào "bao phủ" job kia), trừ khi gặp 1 job "cả
+ * file" (entryIds rỗng/không có) đang chờ/xử lý — job đó chắc chắn sẽ xử lý
+ * TỚI entry này nên coi như đã trùng, không cần thêm job per-clip nữa.
  */
 export function isStoryboardJobQueued(
   type:
@@ -445,14 +465,17 @@ export function isStoryboardJobQueued(
     | "storyboardSceneImagesAIVideo"
     | "storyboardVideo",
   jsonPath: string,
+  entryId?: string,
 ): boolean {
   const resolvedPath = path.resolve(jsonPath);
   if (type === "storyboardVideo") {
-    return videoJobs.some(
-      (job) =>
-        job.type === "storyboardVideo" &&
-        path.resolve(job.jsonPath) === resolvedPath,
-    );
+    return videoJobs.some((job) => {
+      if (job.type !== "storyboardVideo") return false;
+      if (path.resolve(job.jsonPath) !== resolvedPath) return false;
+      if (!entryId) return true;
+      if (!job.entryIds || job.entryIds.length === 0) return true;
+      return job.entryIds.includes(entryId);
+    });
   }
   return imageJobs.some(
     (job) => job.type === type && path.resolve(job.jsonPath) === resolvedPath,
@@ -921,18 +944,31 @@ function isJsonSceneSettingReady(jsonPath: string): boolean {
 
 /**
  * Quét videoJobs theo đúng thứ tự FIFO (từ đầu mảng), trả về index đầu tiên
- * SẴN SÀNG xử lý: job "video" thường luôn sẵn sàng; job "storyboardVideo"
- * chỉ sẵn sàng khi isJsonSceneSettingReady(jsonPath) — tức job
- * "storyboardImagesAIVideo" tương ứng (ở hàng đợi ẢNH) đã gen xong SCENE_
- * SETTING. Job CHƯA sẵn sàng bị BỎ QUA (không xoá/không đổi thứ tự trong
- * mảng) để xét job kế tiếp — theo đúng yêu cầu người dùng. Trả về -1 nếu
- * không có job nào sẵn sàng (hàng đợi rỗng, hoặc mọi job storyboardVideo còn
- * lại đều đang chờ ảnh SCENE_SETTING xong).
+ * SẴN SÀNG xử lý:
+ * - job "video" thường: luôn sẵn sàng.
+ * - job "storyboardVideo" PER-CLIP (có "entryIds", xem StoryboardVideoJob):
+ *   luôn sẵn sàng — đã tự xác nhận đủ ref TRƯỚC khi enqueue (xem
+ *   findVideoEntriesReadyAfterEnd), không cần chờ isJsonSceneSettingReady của
+ *   CẢ FILE (clip khác trong CÙNG file có thể vẫn đang gen ảnh scene dở).
+ * - job "storyboardVideo" CẢ FILE (không có "entryIds", từ nút "Tạo video"
+ *   thủ công): chỉ sẵn sàng khi isJsonSceneSettingReady(jsonPath) — tức job
+ *   "storyboardImagesAIVideo"/"storyboardSceneImagesAIVideo" tương ứng (ở
+ *   hàng đợi ẢNH) đã gen xong HẾT SCENE_SETTING.
+ * Job CHƯA sẵn sàng bị BỎ QUA (không xoá/không đổi thứ tự trong mảng) để xét
+ * job kế tiếp — theo đúng yêu cầu người dùng. Trả về -1 nếu không có job nào
+ * sẵn sàng (hàng đợi rỗng, hoặc mọi job storyboardVideo cả-file còn lại đều
+ * đang chờ ảnh SCENE_SETTING xong).
  */
 function findNextReadyVideoJobIndex(): number {
   for (let i = 0; i < videoJobs.length; i++) {
     const job = videoJobs[i];
-    if (job.type === "video" || isJsonSceneSettingReady(job.jsonPath)) {
+    if (
+      job.type === "video" ||
+      (job.type === "storyboardVideo" &&
+        job.entryIds &&
+        job.entryIds.length > 0) ||
+      isJsonSceneSettingReady(job.jsonPath)
+    ) {
       return i;
     }
   }
@@ -972,10 +1008,14 @@ async function processImageQueue(): Promise<void> {
               `${caption}${path.extname(imagePath)}`,
             );
           };
-          const notifyImageError = async (id: string): Promise<void> => {
+          const notifyImageError = async (
+            id: string,
+            errorMessage: string,
+          ): Promise<void> => {
             try {
-              const message = buildResultCaption(jsonBaseName, id) + " 404";
-              await notifyAdmins(message);
+              const itemId = buildResultCaption(jsonBaseName, id);
+              const message = itemId + " 404";
+              await notifyAdmins(itemId + ": " + errorMessage);
               await telegram!.sendMessage(job.chatId, message, {
                 reply_parameters: { message_id: job.promptMessageId },
               });
@@ -1048,41 +1088,68 @@ async function processImageQueue(): Promise<void> {
             } catch (err) {}
           };
 
-          // SCENE_SETTING qua AIVideo — hàng đợi VIDEO (processVideoQueue)
-          // chờ ĐÚNG field "success" của các entry SCENE_SETTING này để biết
-          // job "storyboardVideo" tương ứng đã sẵn sàng xử lý chưa.
+          // Ngay khi 1 entry SCENE_SETTING_END vừa xong VÀ (các) entry VIDEO
+          // tương ứng đã đủ ref (xem findVideoEntriesReadyAfterEnd trong
+          // storyboardPipeline.ts), tự đẩy NGAY job "storyboardVideo"
+          // PER-CLIP cho đúng entry đó — không cần chờ hết cả file (xem
+          // docstring StoryboardVideoJob). isStoryboardJobQueued tránh đẩy
+          // trùng nếu clip này đã có job (per-clip hoặc cả-file) đang
+          // chờ/xử lý rồi.
+          const onVideoEntriesReady = async (
+            readyEntryIds: string[],
+          ): Promise<void> => {
+            for (const entryId of readyEntryIds) {
+              if (
+                isStoryboardJobQueued("storyboardVideo", job.jsonPath, entryId)
+              ) {
+                continue;
+              }
+              enqueueJob({
+                type: "storyboardVideo",
+                chatId: job.chatId,
+                userId: job.userId,
+                prompt: "",
+                promptMessageId: job.promptMessageId,
+                jsonPath: job.jsonPath,
+                entryIds: [entryId],
+              });
+            }
+          };
+
           const sceneResult = await generateSceneImagesForFileViaAIVideo(
             job.jsonPath,
             sendImageNow,
             notifyImageError,
+            onVideoEntriesReady,
           );
-          const readyForVideo = sceneResult.failed === 0;
+          const readyForVideo =
+            sceneResult.failed === 0 && sceneResult.succeeded > 0;
 
           // Ảnh xong không lỗi — LUÔN hỏi xác nhận qua nút "Tạo video" (2 chế
           // độ ChatAI giờ xác nhận giống nhau, xem docstring
           // StoryboardSceneImagesAIVideoJob) — KHÔNG tự động đẩy job
           // "storyboardVideo".
-          if (readyForVideo) {
-            const confirmId = createVideoConfirmation(
-              job.chatId,
-              job.userId,
-              job.promptMessageId,
-              job.jsonPath,
-            );
-            await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
-              reply_parameters: { message_id: job.promptMessageId },
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "Tạo video",
-                      callback_data: `confirmVideo:${confirmId}`,
-                    },
-                  ],
-                ],
-              },
-            });
-          }
+          // if (readyForVideo) {
+          //   const confirmId = createVideoConfirmation(
+          //     job.chatId,
+          //     job.userId,
+          //     job.promptMessageId,
+          //     job.jsonPath,
+          //   );
+          //   await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
+          //     reply_parameters: { message_id: job.promptMessageId },
+          //     reply_markup: {
+          //       inline_keyboard: [
+          //         [
+          //           {
+          //             text: "Tạo video",
+          //             callback_data: `confirmVideo:${confirmId}`,
+          //           },
+          //         ],
+          //       ],
+          //     },
+          //   });
+          // }
 
           if (sceneResult.failed > 0) {
             recordFailedStoryboardJob(job);
@@ -1187,15 +1254,17 @@ async function processVideoQueue(): Promise<void> {
                 `${caption}${path.extname(videoPath)}`,
               );
             },
-            async (id: string): Promise<void> => {
+            async (id: string, errorMessage: string): Promise<void> => {
               try {
-                const message = buildResultCaption(jsonBaseName, id) + " 404";
-                await notifyAdmins(message);
+                const itemId = buildResultCaption(jsonBaseName, id);
+                const message = itemId + " 404";
+                await notifyAdmins(itemId + ": " + errorMessage);
                 await telegram!.sendMessage(job.chatId, message, {
                   reply_parameters: { message_id: job.promptMessageId },
                 });
               } catch (err) {}
             },
+            job.entryIds,
           );
 
           await notifyStoryboardVideoResult(job, videoResult);

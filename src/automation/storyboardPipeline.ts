@@ -345,7 +345,7 @@ export async function generateReferenceImagesForFile(
 export async function generateReferenceImagesForFileViaAIVideo(
   inputPath: string,
   onEntryDone?: (filePath: string) => Promise<void>,
-  onEntryError?: (id: string) => Promise<void>,
+  onEntryError?: (id: string, errorMessage: string) => Promise<void>,
 ): Promise<GenerateImagesResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
@@ -446,7 +446,7 @@ export async function generateReferenceImagesForFileViaAIVideo(
       failed++;
       failedEntries.push({ id: entry.id, type: entry.type });
       if (onEntryError) {
-        await onEntryError(entry.id).catch((err) => {
+        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {
           console.error(
             `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
             err,
@@ -497,6 +497,60 @@ async function resolveRefImagePath(dir: string, id: string): Promise<string> {
   throw new Error(
     `Không tìm thấy file ảnh tham chiếu cho id "${id}" trong ${dir}`,
   );
+}
+
+/**
+ * Sau khi 1 entry SCENE_SETTING_END vừa xong (generate mới hoặc phát hiện đã
+ * có sẵn file, xem generateSceneImagesForFileViaAIVideo), tìm các entry VIDEO
+ * đã ĐỦ ĐIỀU KIỆN tạo video NGAY — dùng để queue.ts tự đẩy job
+ * "storyboardVideo" riêng cho từng clip ngay khi sẵn sàng, không cần chờ hết
+ * toàn bộ file (xem generateVideosForFile, tham số onlyEntryIds).
+ *
+ * 1 entry VIDEO đủ điều kiện khi: (a) type "VIDEO", (b) CHƯA "success": true
+ * (chưa tạo xong — tránh đẩy lại job cho clip đã xong), (c) ref có chứa ĐÚNG
+ * id vừa xong (finishedEndId), và (d) TẤT CẢ ref khác của nó cũng đã có file
+ * trên đĩa — check bằng findExistingImageById (CÙNG hàm generateVideosForFile
+ * dùng để resolve ref thật khi tạo video, không đoán qua field "success" của
+ * ref vì có thể lệch với file thật, xem tryRegenerateStoryboardItem/
+ * markStoryboardEntrySuccess trong handlers.ts).
+ *
+ * 1 entry SCENE_SETTING_END có thể được tối đa 2 entry VIDEO tham chiếu (làm
+ * end của chính clip đó, VÀ làm start "kế thừa" của clip kế tiếp — xem
+ * assignStartEndFrames) — nhưng clip kế tiếp chắc chắn còn thiếu END của
+ * chính nó (chưa generate tới) nên tự động không lọt qua điều kiện (d), không
+ * cần xử lý đặc biệt gì thêm cho trường hợp này.
+ */
+async function findVideoEntriesReadyAfterEnd(
+  entries: StoryboardEntry[],
+  outputDir: string,
+  finishedEndId: string,
+): Promise<string[]> {
+  const candidates = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id">> & StoryboardEntry =>
+      e.type === "VIDEO" &&
+      Boolean(e.id) &&
+      e.success !== true &&
+      (e.ref ?? []).some((r) => r.id === finishedEndId),
+  );
+
+  const readyIds: string[] = [];
+  for (const entry of candidates) {
+    const refs = (entry.ref ?? []).filter((r): r is Required<StoryboardRefItem> =>
+      Boolean(r.id),
+    );
+    let allReady = true;
+    for (const ref of refs) {
+      const found = await findExistingImageById(outputDir, sanitizeId(ref.id));
+      if (!found) {
+        allReady = false;
+        break;
+      }
+    }
+    if (allReady) readyIds.push(entry.id);
+  }
+  return readyIds;
 }
 
 export interface GenerateVideosResult {
@@ -576,11 +630,20 @@ function assignStartEndFrames(
  *
  * onEntryDone (tuỳ chọn): gọi NGAY sau MỖI video tạo THÀNH CÔNG (path video
  * vừa lưu) — cùng cơ chế/lý do với generateReferenceImagesForFile.
+ *
+ * onlyEntryIds (tuỳ chọn): CHỈ xử lý đúng các entry VIDEO có id nằm trong
+ * danh sách này (bỏ qua mọi entry VIDEO khác trong file, kể cả entry chưa
+ * "success"), dùng cho job "storyboardVideo" per-clip tự đẩy ngay khi 1 clip
+ * đủ ref (xem findVideoEntriesReadyAfterEnd/StoryboardVideoJob.entryIds
+ * trong queue.ts) — KHÔNG truyền (mặc định) = xử lý HẾT entry VIDEO chưa
+ * "success" trong file, giữ nguyên hành vi cũ (nút "Tạo video" thủ công/CLI
+ * script).
  */
 export async function generateVideosForFile(
   inputPath: string,
   onEntryDone?: (filePath: string) => Promise<void>,
-  onEntryError?: (filePath: string) => Promise<void>,
+  onEntryError?: (filePath: string, errorMessage: string) => Promise<void>,
+  onlyEntryIds?: string[],
 ): Promise<GenerateVideosResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
@@ -606,6 +669,7 @@ export async function generateVideosForFile(
         // console.warn(`[storyboardPipeline] Bỏ qua entry thiếu "id"/"prompt" hợp lệ:`, e);
         return false;
       }
+      if (onlyEntryIds && !onlyEntryIds.includes(e.id)) return false;
       return true;
     },
   );
@@ -688,8 +752,8 @@ export async function generateVideosForFile(
         err instanceof Error ? err.message : err,
       );
       if (onEntryError) {
-        await onEntryError(entry.id).catch((err) => {});
-        await sleep(1000)
+        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {});
+        await sleep(1000);
       }
       entry.success = false;
       failed++;
@@ -833,11 +897,19 @@ export async function generateSceneImagesForFile(
  * generateImage() trả về CẢ CỤM ảnh — chỉ lấy ảnh ĐẦU TIÊN đặt tên
  * "<id>.<đuôi>", các ảnh còn lại trong cụm bị xoá luôn — cùng lý do đã giải
  * thích ở generateReferenceImagesForFileViaAIVideo.
+ *
+ * onVideoEntriesReady (tuỳ chọn): gọi NGAY sau MỖI entry "SCENE_SETTING_END"
+ * vừa xong (generate mới hoặc phát hiện đã có sẵn file) VỚI danh sách id các
+ * entry VIDEO vừa đủ điều kiện tạo video (xem findVideoEntriesReadyAfterEnd)
+ * — cho phép caller (queue.ts) tự đẩy job "storyboardVideo" riêng cho từng
+ * clip ngay khi sẵn sàng, không cần chờ hết cả file. Mảng rỗng = chưa có clip
+ * nào vừa đủ điều kiện, KHÔNG gọi callback (đỡ 1 lượt gọi thừa).
  */
 export async function generateSceneImagesForFileViaAIVideo(
   inputPath: string,
   onEntryDone?: (filePath: string) => Promise<void>,
   onEntryError?: (filePath: string) => Promise<void>,
+  onVideoEntriesReady?: (readyEntryIds: string[]) => Promise<void>,
 ): Promise<GenerateImagesResult> {
   const raw = await fs.promises.readFile(inputPath, "utf-8");
   const entries: StoryboardEntry[] = JSON.parse(raw);
@@ -877,6 +949,32 @@ export async function generateSceneImagesForFileViaAIVideo(
   //   return { outputDir, succeeded, failed, failedEntries };
   // }
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+
+  // Gọi onVideoEntriesReady (nếu có) NGAY sau khi 1 entry SCENE_SETTING_END
+  // vừa xong — best-effort, lỗi ở callback (vd enqueue job thất bại phía
+  // queue.ts) KHÔNG tính là lỗi generate ảnh (ảnh đã lưu thành công thật).
+  const notifyVideoEntriesReadyIfEnd = async (
+    doneEntry: StoryboardEntry,
+  ): Promise<void> => {
+    if (doneEntry.type !== "SCENE_SETTING_END" || !onVideoEntriesReady) return;
+    if (!doneEntry.id || doneEntry.success !== true) return;
+    try {
+      const readyEntryIds = await findVideoEntriesReadyAfterEnd(
+        entries,
+        outputDir,
+        doneEntry.id,
+      );
+      if (readyEntryIds.length > 0) {
+        await onVideoEntriesReady(readyEntryIds);
+      }
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] onVideoEntriesReady thất bại cho "${doneEntry.id}" (không tính là lỗi generate):`,
+        err,
+      );
+    }
+  };
+
   for (const entry of targets) {
     if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
@@ -892,6 +990,7 @@ export async function generateSceneImagesForFileViaAIVideo(
       entry.success = true;
       succeeded++;
       await saveEntries(inputPath, entries);
+      await notifyVideoEntriesReadyIfEnd(entry);
       continue;
     }
 
@@ -968,6 +1067,7 @@ export async function generateSceneImagesForFileViaAIVideo(
       }
     }
     await saveEntries(inputPath, entries);
+    await notifyVideoEntriesReadyIfEnd(entry);
   }
 
   return { outputDir, succeeded, failed, failedEntries };

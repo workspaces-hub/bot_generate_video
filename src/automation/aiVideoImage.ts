@@ -61,7 +61,6 @@ async function selectImageCount(
   page: Page,
   imageCount: 1 | 2 | 3 | 4,
 ): Promise<void> {
-  console.log("🚀 ~ selectImageCount ~ imageCount:", imageCount);
   const chip = await firstVisible(imageCountChipCandidates(page), 3000).catch(
     () => null,
   );
@@ -147,9 +146,10 @@ export async function generateImage(
     // tham chiếu đã upload trước đó (xem confirmModelSwitchIfPresent trong
     // aiVideo.ts) — tránh gọi khi không cần thiết.
     if (model) {
-      const modelChip = await firstVisible(modelChipCandidates(page), 3000).catch(
-        () => null,
-      );
+      const modelChip = await firstVisible(
+        modelChipCandidates(page),
+        3000,
+      ).catch(() => null);
       const currentModelLabel = modelChip
         ? (await modelChip.innerText().catch(() => "")).trim()
         : "";
@@ -472,7 +472,10 @@ async function retryErrorCards(page: Page, entry: Locator): Promise<void> {
         .isVisible({ timeout: 2000 })
         .catch(() => false);
       if (hasRetry) {
-        await retryButton.first().click({ timeout: 2000 }).catch(() => {});
+        await retryButton
+          .first()
+          .click({ timeout: 2000 })
+          .catch(() => {});
       }
     } catch (err) {
       console.warn(
@@ -524,22 +527,22 @@ async function waitForEntryImagesToSettle(
 
   let lastCount = await images.count();
   let stableSince = Date.now();
-  let hasRetried = false;
+  // let hasRetried = false;
 
   while (Date.now() - start < timeoutMs) {
     const total = await totalCards.count();
     const errored = await errorCards.count();
     if (total > 0 && errored === total) {
-      if (!hasRetried) {
-        hasRetried = true;
-        await retryErrorCards(page, entry);
-        // Cho card vừa Retry đủ thời gian bắt đầu xử lý lại trước khi kiểm
-        // tra tiếp — reset mốc ổn định vì trạng thái card vừa thay đổi.
-        stableSince = Date.now();
-        lastCount = await images.count();
-        await page.waitForTimeout(pollIntervalMs);
-        continue;
-      }
+      // if (!hasRetried) {
+      //   hasRetried = true;
+      //   await retryErrorCards(page, entry);
+      //   // Cho card vừa Retry đủ thời gian bắt đầu xử lý lại trước khi kiểm
+      //   // tra tiếp — reset mốc ổn định vì trạng thái card vừa thay đổi.
+      //   stableSince = Date.now();
+      //   lastCount = await images.count();
+      //   await page.waitForTimeout(pollIntervalMs);
+      //   continue;
+      // }
       throw new GenerationError(
         `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi (đã thử Retry nhưng vẫn lỗi)`,
       );
