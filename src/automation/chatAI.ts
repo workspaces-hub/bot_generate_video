@@ -993,3 +993,90 @@ export async function askChatAI(
     await page.close();
   }
 }
+
+/** Bỏ dấu ngoặc kép/backtick bọc ngoài và khối ```code fence``` (nếu ChatAI lỡ trả lời kèm định dạng) khỏi prompt đã viết lại. */
+function cleanRevisedPrompt(text: string): string {
+  return text
+    .trim()
+    .replace(/^```[a-zA-Z]*\n?/, "")
+    .replace(/```$/, "")
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+}
+
+/**
+ * Nhờ ChatAI viết lại 1 prompt tạo ảnh/video đã bị AIVideo từ chối vì vi phạm
+ * chính sách nội dung (vd "content violated Community Guidelines... sensitive
+ * terms or copyrighted IP") — giữ nguyên ý tưởng/bối cảnh/hành động, chỉ loại
+ * bỏ/thay thế tên riêng, thương hiệu, nhân vật có bản quyền hoặc từ ngữ nhạy
+ * cảm. Dùng cho generateReferenceImagesForFileViaAIVideo/
+ * generateSceneImagesForFileViaAIVideo/generateVideosForFile (storyboardPipeline.ts)
+ * để tự động retry lại 1 lần với prompt mới thay vì báo lỗi luôn.
+ *
+ * Nhẹ hơn askChatAI (không cần vòng lặp chờ file đính kèm/audit — chỉ cần 1
+ * câu trả lời text), tái dùng sendMessage() (đã tự chờ ChatAI trả lời xong
+ * thật, kể cả retry khi ChatAI báo lỗi tạm thời).
+ */
+export async function reviseGenerationPrompt(
+  prompt: string,
+  violationReason: string,
+  jobId: string,
+): Promise<string> {
+  const context = await getChatAIBrowserContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(config.chatAIBaseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await dismissCloudflareChallengeIfPresent(page);
+
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+      .then(() => true)
+      .catch(() => false);
+    if (signedOut) {
+      throw new ChatAIError(
+        "Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai",
+      );
+    }
+
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
+
+    await selectWorkMode(page);
+    if (config.chatAIMaxEffort) {
+      await selectMaxReasoningEffort(page);
+    }
+
+    const message = `Prompt sau đây bị công cụ tạo ảnh/video (Hailuo) từ chối vì vi phạm chính sách nội dung (nhạy cảm hoặc chứa IP có bản quyền như tên/hình ảnh nhân vật nổi tiếng):
+
+Lý do bị từ chối: ${violationReason}
+
+Prompt gốc:
+${prompt}
+
+Hãy viết lại ĐÚNG prompt này để mô tả lại y hệt ý tưởng, bối cảnh, hành động, bố cục — nhưng thay thế hoặc loại bỏ mọi tên riêng, thương hiệu, nhân vật có bản quyền hoặc từ ngữ nhạy cảm có thể khiến công cụ kiểm duyệt nội dung từ chối. Chỉ trả lời DUY NHẤT prompt mới, không thêm giải thích, không dùng dấu ngoặc kép hay markdown.`;
+
+    await sendMessage(page, message);
+
+    const latest = assistantMessageLocator(page).last();
+    const text = await latest.innerText().catch(() => "");
+    const revisedPrompt = cleanRevisedPrompt(text);
+    console.log("🚀 ~ reviseGenerationPrompt ~ revisedPrompt:", revisedPrompt)
+    if (!revisedPrompt) {
+      throw new ChatAIError("ChatAI không trả về prompt viết lại nào");
+    }
+
+    await captureSnapshot(page, jobId, "revise-prompt-result");
+    return revisedPrompt;
+  } catch (err) {
+    await captureErrorSnapshot(page, jobId, err);
+    throw err instanceof ChatAIError
+      ? err
+      : new ChatAIError(err instanceof Error ? err.message : String(err));
+  } finally {
+    await page.close();
+  }
+}

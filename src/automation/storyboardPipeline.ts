@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { generateReferenceImage } from "./chatAIImage";
 import { generateVideo, type GenerateVideoOptions } from "./aiVideo";
 import { generateImage } from "./aiVideoImage";
+import { reviseGenerationPrompt } from "./chatAI";
 
 /**
  * Logic dùng CHUNG cho cả 2 nơi gọi: script CLI (scripts/generate-reference-images.ts,
@@ -44,6 +45,90 @@ export function sanitizeId(id: string): string {
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Site AIVideo từ chối vì vi phạm chính sách nội dung — nguyên văn xác nhận
+ * qua log lỗi thật: "Generation failed because content violated Community
+ * Guidelines. Your prompt or image may contain sensitive terms or
+ * copyrighted IP (e.g. character names or likenesses). Please revise and
+ * retry." Match rộng theo cụm từ đặc trưng thay vì nguyên câu, phòng site đổi
+ * chữ nhưng vẫn cùng ý (vd rút gọn câu sau).
+ */
+const CONTENT_VIOLATION_PATTERN =
+  /community guidelines|sensitive terms|copyrighted ip/i;
+
+function isContentViolationError(errorMessage: string): boolean {
+  return CONTENT_VIOLATION_PATTERN.test(errorMessage);
+}
+
+/**
+ * Khi generate thất bại vì vi phạm chính sách nội dung (xem
+ * CONTENT_VIOLATION_PATTERN), nhờ ChatAI viết lại prompt của entry (loại bỏ
+ * tên riêng/IP có bản quyền/từ ngữ nhạy cảm — xem reviseGenerationPrompt
+ * trong chatAI.ts) rồi ghi đè "entry.prompt" ngay để lần retry (gọi ngay sau
+ * đây) VÀ mọi lần chạy lại sau (kể cả job khác, hoặc resume sau restart) đều
+ * dùng luôn bản mới — trả về true nếu đã viết lại được (nên thử generate lại
+ * ngay 1 lần), false nếu không áp dụng được (không phải lỗi vi phạm nội dung,
+ * hoặc bản thân việc nhờ ChatAI viết lại cũng thất bại) — false thì giữ
+ * nguyên lỗi gốc, không retry.
+ */
+async function reviseEntryPromptIfContentViolation(
+  entry: StoryboardEntry,
+  errorMessage: string,
+  jobId: string,
+): Promise<boolean> {
+  if (!isContentViolationError(errorMessage)) return false;
+  if (typeof entry.prompt !== "string" || !entry.prompt) return false;
+  try {
+    console.log(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — prompt bị site từ chối (vi phạm chính sách nội dung), nhờ ChatAI viết lại rồi thử tạo lại...`,
+    );
+    const revisedPrompt = await reviseGenerationPrompt(
+      entry.prompt,
+      errorMessage,
+      jobId,
+    );
+    if (!revisedPrompt || revisedPrompt === entry.prompt) return false;
+    console.log(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — đã có prompt mới từ ChatAI, thử tạo lại.`,
+    );
+    entry.prompt = revisedPrompt;
+    return true;
+  } catch (err) {
+    console.error(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — nhờ ChatAI viết lại prompt thất bại:`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
+/**
+ * Chạy attempt() 1 lần — nếu lỗi VÀ là lỗi vi phạm chính sách nội dung (xem
+ * reviseEntryPromptIfContentViolation), thử ĐÚNG 1 LẦN NỮA sau khi đã viết
+ * lại entry.prompt (attempt() phải tự đọc entry.prompt lúc gọi, không được
+ * chốt sẵn giá trị cũ, để lần thử lại dùng đúng prompt mới). Lỗi ở lần thử
+ * lại (dù cùng lý do hay khác) đều ném thẳng ra ngoài — chỉ retry 1 lần/entry,
+ * tránh vòng lặp vô hạn nếu ChatAI viết lại vẫn bị site từ chối.
+ */
+async function generateWithContentViolationRetry<T>(
+  entry: StoryboardEntry,
+  jobId: string,
+  attempt: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await attempt();
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const revised = await reviseEntryPromptIfContentViolation(
+      entry,
+      errorMessage,
+      jobId,
+    );
+    if (!revised) throw err;
+    return await attempt();
+  }
 }
 
 const REQUEST_THROTTLE_MS = 15000;
@@ -402,10 +487,10 @@ export async function generateReferenceImagesForFileViaAIVideo(
     );
     let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
     try {
-      const imagePaths = await generateImage(
-        entry.prompt,
-        { imageCount: 1 },
+      const imagePaths = await generateWithContentViolationRetry(
+        entry,
         jobId,
+        () => generateImage(entry.prompt!, { imageCount: 1 }, jobId),
       );
       if (imagePaths.length === 0) {
         throw new Error("Không tạo được ảnh nào");
@@ -730,7 +815,11 @@ export async function generateVideosForFile(
       // định để resume sau, đúng ý "chưa gen thì ko gen nữa".
       if (isStopStoryboardRequested(inputPath)) break;
 
-      const tempFilePath = await generateVideo(entry.prompt, options, jobId);
+      const tempFilePath = await generateWithContentViolationRetry(
+        entry,
+        jobId,
+        () => generateVideo(entry.prompt!, options, jobId),
+      );
 
       const destPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
       try {
@@ -1013,10 +1102,15 @@ export async function generateSceneImagesForFileViaAIVideo(
         refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
       }
 
-      const imagePaths = await generateImage(
-        entry.prompt,
-        { referenceImagePaths: refPaths, imageCount: 1 },
+      const imagePaths = await generateWithContentViolationRetry(
+        entry,
         jobId,
+        () =>
+          generateImage(
+            entry.prompt!,
+            { referenceImagePaths: refPaths, imageCount: 1 },
+            jobId,
+          ),
       );
       if (imagePaths.length === 0) {
         throw new Error("Không tạo được ảnh nào");

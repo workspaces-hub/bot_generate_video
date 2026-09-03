@@ -1532,18 +1532,39 @@ async function waitForNewVideo(
       );
     }
 
-    const failed = await firstVisible(errorIndicatorCandidates(page), 1000)
-      .then(() => true)
-      .catch(() => false);
-    if (failed) {
-      throw new GenerationError("Website báo lỗi khi tạo video");
+    const failedLocator = await firstVisible(
+      errorIndicatorCandidates(page),
+      1000,
+    ).catch(() => null);
+    if (failedLocator) {
+      // Đọc nguyên văn text lỗi (vd toast "Generation failed because content
+      // violated Community Guidelines...") thay vì chỉ báo chung chung — cần
+      // giữ nguyên văn để reviseEntryPromptIfContentViolation (storyboardPipeline.ts)
+      // nhận diện đúng lỗi vi phạm chính sách nội dung và nhờ ChatAI viết lại
+      // prompt.
+      const errorText = await failedLocator.innerText().catch(() => "");
+      throw new GenerationError(
+        errorText
+          ? `Website báo lỗi khi tạo video: ${errorText.trim()}`
+          : "Website báo lỗi khi tạo video",
+      );
     }
 
     const currentFailedMarkerCount =
       await deleteAllFailedButtonLocator(page).count();
     if (currentFailedMarkerCount > baseline.failedMarkerCount) {
+      // Toast lý do lỗi (vd "content violated Community Guidelines...") có
+      // thể đã tự ẩn trước khi kịp bắt được ở nhánh "failedLocator" phía trên
+      // (poll cách nhau tới 5s) — thử đọc lại 1 lần nữa (best-effort, timeout
+      // ngắn) ngay lúc phát hiện marker "Delete All Failed" mới, phòng toast
+      // vẫn còn kịp lúc này.
+      const violationText = await firstVisible(errorIndicatorCandidates(page), 500)
+        .then((l) => l.innerText())
+        .catch(() => "");
       throw new GenerationError(
-        'Website báo lỗi khi tạo video (card mới xuất hiện với nút "Delete All Failed") — không cần đợi hết timeout',
+        violationText
+          ? `Website báo lỗi khi tạo video: ${violationText.trim()}`
+          : 'Website báo lỗi khi tạo video (card mới xuất hiện với nút "Delete All Failed") — không cần đợi hết timeout',
       );
     }
 

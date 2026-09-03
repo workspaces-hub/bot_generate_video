@@ -399,11 +399,20 @@ async function waitForNewImageEntry(
       );
     }
 
-    const failed = await firstVisible(errorIndicatorCandidates(page), 1000)
-      .then(() => true)
-      .catch(() => false);
-    if (failed) {
-      throw new GenerationError("Website báo lỗi khi tạo ảnh");
+    const failedLocator = await firstVisible(
+      errorIndicatorCandidates(page),
+      1000,
+    ).catch(() => null);
+    if (failedLocator) {
+      // Đọc nguyên văn text lỗi (vd toast "Generation failed because content
+      // violated Community Guidelines...") — cùng lý do đã sửa cho video, xem
+      // waitForNewVideo trong aiVideo.ts.
+      const errorText = await failedLocator.innerText().catch(() => "");
+      throw new GenerationError(
+        errorText
+          ? `Website báo lỗi khi tạo ảnh: ${errorText.trim()}`
+          : "Website báo lỗi khi tạo ảnh",
+      );
     }
 
     await page.waitForTimeout(pollIntervalMs);
@@ -543,8 +552,21 @@ async function waitForEntryImagesToSettle(
       //   await page.waitForTimeout(pollIntervalMs);
       //   continue;
       // }
+      // Entry lỗi xuất hiện gần như NGAY khi entryCount tăng (xem
+      // waitForNewImageEntry) — nhánh "failedLocator" ở đó thường không kịp
+      // bắt được toast lý do lỗi (vd "content violated Community
+      // Guidelines...") vì hàm trả về entry NGAY khi count tăng, bất kể toàn
+      // bộ card là lỗi hay không, KHÔNG đi qua nhánh kiểm tra đó nữa. Thử đọc
+      // lại đây (best-effort, timeout ngắn) — nếu toast vẫn còn, giữ nguyên
+      // văn để reviseEntryPromptIfContentViolation (storyboardPipeline.ts)
+      // nhận diện đúng lỗi vi phạm chính sách nội dung.
+      const violationText = await firstVisible(errorIndicatorCandidates(page), 500)
+        .then((l) => l.innerText())
+        .catch(() => "");
       throw new GenerationError(
-        `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi (đã thử Retry nhưng vẫn lỗi)`,
+        violationText
+          ? `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi: ${violationText.trim()}`
+          : `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi (đã thử Retry nhưng vẫn lỗi)`,
       );
     }
 
