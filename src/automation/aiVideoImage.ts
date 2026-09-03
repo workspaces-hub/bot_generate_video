@@ -15,6 +15,7 @@ import {
   extractDownloadUrlWithoutWatermark,
   fetchWithRetry,
   getAvailableCredit,
+  getFeedErrorMessage,
   getFlightDataText,
   getGenerationFee,
   gotoWithRetry,
@@ -552,20 +553,19 @@ async function waitForEntryImagesToSettle(
       //   await page.waitForTimeout(pollIntervalMs);
       //   continue;
       // }
-      // Entry lỗi xuất hiện gần như NGAY khi entryCount tăng (xem
-      // waitForNewImageEntry) — nhánh "failedLocator" ở đó thường không kịp
-      // bắt được toast lý do lỗi (vd "content violated Community
-      // Guidelines...") vì hàm trả về entry NGAY khi count tăng, bất kể toàn
-      // bộ card là lỗi hay không, KHÔNG đi qua nhánh kiểm tra đó nữa. Thử đọc
-      // lại đây (best-effort, timeout ngắn) — nếu toast vẫn còn, giữ nguyên
-      // văn để reviseEntryPromptIfContentViolation (storyboardPipeline.ts)
-      // nhận diện đúng lỗi vi phạm chính sách nội dung.
-      const violationText = await firstVisible(errorIndicatorCandidates(page), 500)
-        .then((l) => l.innerText())
-        .catch(() => "");
+      // Xác nhận qua debug thật (job xuyenkhongquaivat_CHAR_FATHER_...): lý
+      // do lỗi THẬT ("Generation failed because content violated Community
+      // Guidelines...") KHÔNG BAO GIỜ render thành text nhìn thấy được trên
+      // trang — card lỗi chỉ có icon ảnh vỡ, không toast/text nào cả. Nó chỉ
+      // tồn tại dưới dạng field feedMessage nhúng trong flight data của
+      // entry (xem getFeedErrorMessage/extractFeedErrorMessage trong
+      // aiVideo.ts) — đọc từ đó thay vì page.getByText (không bao giờ khớp
+      // được với lỗi dạng này).
+      const feedId = await getEntryFeedId(entry);
+      const violationMessage = await getFeedErrorMessage(page, feedId);
       throw new GenerationError(
-        violationText
-          ? `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi: ${violationText.trim()}`
+        violationMessage
+          ? `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi: ${violationMessage}`
           : `Không tạo được ảnh nào — cả ${total} ảnh trong lần generate này đều lỗi (đã thử Retry nhưng vẫn lỗi)`,
       );
     }

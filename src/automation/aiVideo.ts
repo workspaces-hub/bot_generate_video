@@ -1523,6 +1523,15 @@ async function waitForNewVideo(
       return videos.last();
     }
 
+    // Xác định SỚM (trước mọi check lỗi bên dưới) — cần feedId này ngay để
+    // tra feedMessage thật (xem getFeedErrorMessage) tại đúng lúc phát hiện
+    // lỗi, thay vì chỉ có nó ở cuối vòng lặp như trước.
+    if (!trackedFeedId) {
+      const currentFeedIds = await getHistoryFeedIds(page);
+      trackedFeedId =
+        currentFeedIds.find((id) => !baseline.feedIds.has(id)) ?? null;
+    }
+
     const paywall = await firstVisible(creditPaywallModalCandidates(page), 1000)
       .then(() => true)
       .catch(() => false);
@@ -1532,46 +1541,34 @@ async function waitForNewVideo(
       );
     }
 
+    const currentFailedMarkerCount =
+      await deleteAllFailedButtonLocator(page).count();
+    if (currentFailedMarkerCount > baseline.failedMarkerCount) {
+      // Lý do lỗi THẬT (vd "content violated Community Guidelines...") không
+      // hiện thành text nhìn thấy được nào — chỉ nhúng trong flight data của
+      // entry (xem getFeedErrorMessage/extractFeedErrorMessage) — đọc từ đó
+      // thay vì trông chờ 1 toast không tồn tại.
+      const violationMessage = await getFeedErrorMessage(page, trackedFeedId);
+      throw new GenerationError(
+        violationMessage
+          ? `Website báo lỗi khi tạo video: ${violationMessage}`
+          : 'Website báo lỗi khi tạo video (card mới xuất hiện với nút "Delete All Failed") — không cần đợi hết timeout',
+      );
+    }
+
+    // Giữ lại làm lớp phòng vệ thứ 2 (best-effort) — phòng trường hợp site
+    // hiện toast lỗi KHÁC (không phải feedMessage) thật sự render ra DOM.
     const failedLocator = await firstVisible(
       errorIndicatorCandidates(page),
       1000,
     ).catch(() => null);
     if (failedLocator) {
-      // Đọc nguyên văn text lỗi (vd toast "Generation failed because content
-      // violated Community Guidelines...") thay vì chỉ báo chung chung — cần
-      // giữ nguyên văn để reviseEntryPromptIfContentViolation (storyboardPipeline.ts)
-      // nhận diện đúng lỗi vi phạm chính sách nội dung và nhờ ChatAI viết lại
-      // prompt.
       const errorText = await failedLocator.innerText().catch(() => "");
       throw new GenerationError(
         errorText
           ? `Website báo lỗi khi tạo video: ${errorText.trim()}`
           : "Website báo lỗi khi tạo video",
       );
-    }
-
-    const currentFailedMarkerCount =
-      await deleteAllFailedButtonLocator(page).count();
-    if (currentFailedMarkerCount > baseline.failedMarkerCount) {
-      // Toast lý do lỗi (vd "content violated Community Guidelines...") có
-      // thể đã tự ẩn trước khi kịp bắt được ở nhánh "failedLocator" phía trên
-      // (poll cách nhau tới 5s) — thử đọc lại 1 lần nữa (best-effort, timeout
-      // ngắn) ngay lúc phát hiện marker "Delete All Failed" mới, phòng toast
-      // vẫn còn kịp lúc này.
-      const violationText = await firstVisible(errorIndicatorCandidates(page), 500)
-        .then((l) => l.innerText())
-        .catch(() => "");
-      throw new GenerationError(
-        violationText
-          ? `Website báo lỗi khi tạo video: ${violationText.trim()}`
-          : 'Website báo lỗi khi tạo video (card mới xuất hiện với nút "Delete All Failed") — không cần đợi hết timeout',
-      );
-    }
-
-    if (!trackedFeedId) {
-      const currentFeedIds = await getHistoryFeedIds(page);
-      trackedFeedId =
-        currentFeedIds.find((id) => !baseline.feedIds.has(id)) ?? null;
     }
 
     if (trackedFeedId) {
@@ -1608,8 +1605,11 @@ async function waitForNewVideo(
             return trackedVideo;
           }
         }
+        const violationMessage = await getFeedErrorMessage(page, trackedFeedId);
         throw new GenerationError(
-          `Thẻ "Generating..." của video này (id ${trackedFeedId}) đã biến mất nhưng không thấy video mới lẫn dấu hiệu lỗi rõ ràng nào — job có thể đã fail âm thầm, kiểm tra lại trên hailuoai.video`,
+          violationMessage
+            ? `Website báo lỗi khi tạo video: ${violationMessage}`
+            : `Thẻ "Generating..." của video này (id ${trackedFeedId}) đã biến mất nhưng không thấy video mới lẫn dấu hiệu lỗi rõ ràng nào — job có thể đã fail âm thầm, kiểm tra lại trên hailuoai.video`,
         );
       }
     }
@@ -1769,6 +1769,74 @@ export function extractDownloadUrlWithoutWatermark(
   }
 
   return matches[matches.length - 1].url;
+}
+
+/**
+ * Trích lý do lỗi THẬT của 1 entry lỗi (feedMessage.message +
+ * messageDetail) — xác nhận qua debug thật (job
+ * xuyenkhongquaivat_CHAR_FATHER_2026-09-03T06:04:35.248Z): reviseGenerationPrompt
+ * KHÔNG được kích hoạt dù site đúng là từ chối vì vi phạm chính sách nội dung,
+ * vì "Generation failed because content violated Community Guidelines..."
+ * KHÔNG BAO GIỜ render thành text nhìn thấy được trên trang tạo ảnh/video (dù
+ * debug HTML xác nhận có mặt) — nó chỉ tồn tại dưới dạng field
+ * `"feedMessage":{"message":"...","messageDetail":"..."}` nhúng trong Next.js
+ * flight data của TỪNG entry (giống downloadURLWithoutWatermark ở trên), nên
+ * errorIndicatorCandidates (page.getByText — chỉ khớp text HIỂN THỊ THẬT
+ * trong DOM) không bao giờ bắt được. Card lỗi chỉ hiện icon ảnh vỡ, KHÔNG có
+ * toast/text nào cả.
+ *
+ * Cùng kỹ thuật "chọn khớp gần feedId nhất" với extractDownloadUrlWithoutWatermark
+ * ở trên (1 trang có thể nhúng feedMessage của NHIỀU entry lỗi cũ khác trong
+ * lịch sử) — feedId ở đây LÀ chính id đó (khác hệ ID với
+ * downloadURLWithoutWatermark), nên tìm được ngay bằng indexOf.
+ *
+ * message/messageDetail thực tế đều là câu tiếng Anh thường, không chứa dấu
+ * ngoặc kép/backslash — [^"\\]* đủ dùng, không cần xử lý escape phức tạp hơn.
+ * "\\?\"" khớp ĐƯỢC CẢ 2 dạng: dấu ngoặc kép thường (đọc từ __next_f đã join,
+ * hoặc DOM text) LẪN dạng có backslash đứng trước (page.content() — HTML
+ * nguồn thô giữ nguyên chuỗi JS chưa unescape).
+ */
+export function extractFeedErrorMessage(
+  html: string,
+  feedId: string,
+): string | null {
+  const pattern =
+    /\\?"feedMessage\\?"\s*:\s*\{\\?"message\\?"\s*:\s*\\?"([^"\\]*)\\?"\s*,\s*\\?"messageDetail\\?"\s*:\s*\\?"([^"\\]*)\\?"\s*\}/g;
+  const matches = [...html.matchAll(pattern)].map((m) => ({
+    index: m.index ?? -1,
+    message: m[1],
+    messageDetail: m[2],
+  }));
+  if (matches.length === 0) return null;
+
+  const combine = (m: { message: string; messageDetail: string }): string =>
+    m.messageDetail ? `${m.message} ${m.messageDetail}` : m.message;
+
+  const feedIdIndex = html.indexOf(feedId);
+  if (feedIdIndex !== -1) {
+    const closest = matches.reduce((best, current) =>
+      Math.abs(current.index - feedIdIndex) < Math.abs(best.index - feedIdIndex)
+        ? current
+        : best,
+    );
+    return combine(closest);
+  }
+
+  return combine(matches[matches.length - 1]);
+}
+
+/** Best-effort đọc feedErrorMessage của feedId (nếu có) trực tiếp từ page.content() hiện tại — dùng ngay lúc phát hiện lỗi, KHÔNG throw nếu đọc hụt (feedId chưa xác định/site đổi cấu trúc). */
+export async function getFeedErrorMessage(
+  page: Page,
+  feedId: string | null,
+): Promise<string | null> {
+  if (!feedId) return null;
+  try {
+    const html = await page.content();
+    return extractFeedErrorMessage(html, feedId);
+  } catch {
+    return null;
+  }
 }
 
 async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
