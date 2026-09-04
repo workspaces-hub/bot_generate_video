@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { APIResponse, Locator, Page } from "playwright";
 import { config } from "../config";
 import { getPolloBrowserContext } from "./polloBrowser";
 import {
@@ -30,6 +30,53 @@ import {
   videoLengthOptionLocator,
   videoLengthSliderInputLocator,
 } from "./polloSelectors";
+
+/**
+ * Map Content-Type → đuôi file — dùng cho resolveDownloadExtension bên dưới,
+ * chỉ cần khớp các định dạng ảnh mà uploadDialogFileInputLocator chấp nhận
+ * (accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.tiff,.tif", xem polloSelectors.ts)
+ * cộng video/mp4.
+ */
+const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/bmp": ".bmp",
+  "image/tiff": ".tiff",
+  "video/mp4": ".mp4",
+};
+
+/**
+ * Xác định đuôi file khi tải kết quả (ảnh/video) từ pollo.ai — xác nhận qua
+ * lỗi thật (job microdrama_co_dau_phan_boi_twist_prompt, TẤT CẢ 8 entry VIDEO
+ * đầu tiên đều treo ở bước upload ảnh tham chiếu): file LOC_LUXURY_HOTEL_
+ * HALLWAY.png tải về trước đó THỰC RA là JPEG (xác nhận qua magic bytes
+ * FF D8 FF, không phải PNG 89 50 4E 47) nhưng bị đặt tên ".png" — do URL ảnh
+ * kết quả lúc đó KHÔNG có đuôi rõ trong path, code cũ (path.extname(...) ||
+ * ".png") mặc định nhầm sang ".png". Ảnh sai đuôi này lại là 1 location xuất
+ * hiện lặp lại ở MỌI shot của storyboard, nên upload nó lên lại pollo.ai
+ * (MIME khai báo "image/png" nhưng bytes thật là JPEG) khiến site xử lý
+ * không ra, treo mãi ở "Uploading" — pollo.ai không báo lỗi rõ ràng.
+ *
+ * SỬA: ưu tiên đọc Content-Type THẬT từ response (phản ánh đúng định dạng
+ * server trả về, không phụ thuộc URL có đuôi hay không) — chỉ dùng lại cách
+ * đoán qua URL khi header thiếu/không nhận diện được.
+ */
+export function resolveDownloadExtension(
+  response: APIResponse,
+  src: string,
+  fallbackExt = ".png",
+): string {
+  const contentType = response.headers()["content-type"]
+    ?.split(";")[0]
+    .trim()
+    .toLowerCase();
+  if (contentType && CONTENT_TYPE_EXTENSIONS[contentType]) {
+    return CONTENT_TYPE_EXTENSIONS[contentType];
+  }
+  return path.extname(new URL(src).pathname) || fallbackExt;
+}
 
 /**
  * Đóng popup che composer (chặn click, vd "... subtree intercepts pointer
@@ -606,7 +653,7 @@ async function downloadResultVideo(page: Page, src: string, jobId: string): Prom
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
 
   const response = await fetchWithRetry(page, src);
-  const ext = path.extname(new URL(src).pathname) || ".mp4";
+  const ext = resolveDownloadExtension(response, src, ".mp4");
   const filePath = path.join(config.downloadDir, `${jobId}${ext}`);
   await fs.promises.writeFile(filePath, await response.body());
   return filePath;

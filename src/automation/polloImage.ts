@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { getPolloImageBrowserContext } from "./polloBrowser";
-import { dismissBlockingOverlays, submitAssetUpload } from "./pollo";
+import { dismissBlockingOverlays, resolveDownloadExtension, submitAssetUpload } from "./pollo";
 import {
   GenerationError,
   captureErrorSnapshot,
@@ -154,7 +154,7 @@ async function downloadResultImages(
     const src = await images.nth(i).getAttribute("src");
     if (!src) continue;
     const response = await fetchWithRetry(page, src);
-    const ext = path.extname(new URL(src).pathname) || ".png";
+    const ext = resolveDownloadExtension(response, src);
     const filePath = path.join(
       config.downloadDir,
       count > 1 ? `${jobId}-${i + 1}${ext}` : `${jobId}${ext}`,
