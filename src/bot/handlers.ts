@@ -24,6 +24,7 @@ import {
   confirmVideoGenerationPollo,
   continueFailedStoryboardImages,
   continueFailedStoryboardVideo,
+  continueFailedStoryboardVideoPollo,
   enqueueJob,
   isStoryboardJobQueued,
   stopAll,
@@ -1184,8 +1185,16 @@ export function registerHandlers(bot: Telegraf): void {
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
       const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
       const isVideo = mode === "continueVideo";
+      // Job video lỗi có thể thuộc AIVideo (storyboardVideo) HOẶC Pollo
+      // (storyboardVideoPollo, mảng failedStoryboardJobsPollo RIÊNG, xem
+      // continueFailedStoryboardVideoPollo trong queue.ts) — user gõ tên file,
+      // không biết/không cần biết job lỗi thuộc provider nào, nên thử AIVideo
+      // trước rồi mới thử Pollo. Nhánh "gen scene frame" KHÔNG có bản Pollo
+      // tương ứng (pipeline Pollo bỏ hẳn bước scene, xem storyboardPipeline.ts)
+      // nên giữ nguyên chỉ AIVideo.
       const ok = isVideo
-        ? continueFailedStoryboardVideo(jsonFileName)
+        ? continueFailedStoryboardVideo(jsonFileName) ||
+          continueFailedStoryboardVideoPollo(jsonFileName)
         : continueFailedStoryboardImages(jsonFileName);
       const actionLabel = isVideo ? "tạo video" : "gen scene frame";
       if (ok) {

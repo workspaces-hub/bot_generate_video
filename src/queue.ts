@@ -466,6 +466,39 @@ export function continueFailedStoryboardImages(jsonFileName: string): boolean {
   );
 }
 
+/**
+ * GIỐNG continueFailedStoryboardJob HỆT (cùng 2 điều kiện: folder generated/
+ * tồn tại + có job ĐÚNG type khớp tên trong danh sách lỗi) nhưng thao tác
+ * trên failedStoryboardJobsPollo/persistFailedStoryboardJobsPollo (mảng
+ * RIÊNG của Pollo, không dùng chung failedStoryboardJobs) — theo đúng quy
+ * ước "clone riêng, không share" đã áp dụng xuyên suốt cho toàn bộ pipeline
+ * Pollo trong file này. enqueueJob đã tự biết route "storyboardVideoPollo"
+ * vào đúng polloVideoJobs (xem enqueueJob).
+ */
+function continueFailedStoryboardJobPollo(
+  jsonFileName: string,
+  type: FailableStoryboardJobPollo["type"],
+): boolean {
+  const folderExists = fs.existsSync(generatedDirFor(jsonFileName));
+  const failedIndex = failedStoryboardJobsPollo.findIndex(
+    (j) => j.type === type && j.jsonPath.includes(jsonFileName),
+  );
+  if (!folderExists || failedIndex === -1) {
+    return false;
+  }
+
+  const [failedJob] = failedStoryboardJobsPollo.splice(failedIndex, 1);
+  persistFailedStoryboardJobsPollo();
+
+  enqueueJob(failedJob);
+  return true;
+}
+
+/** Bản Pollo của continueFailedStoryboardVideo — chỉ retry job "storyboardVideoPollo" lỗi (mảng failedStoryboardJobsPollo riêng). */
+export function continueFailedStoryboardVideoPollo(jsonFileName: string): boolean {
+  return continueFailedStoryboardJobPollo(jsonFileName, "storyboardVideoPollo");
+}
+
 /** Gọi 1 lần lúc khởi động bot, trước khi có prompt nào được gửi. */
 export function initQueue(botTelegram: Telegram): void {
   telegram = botTelegram;
