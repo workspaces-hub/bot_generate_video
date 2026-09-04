@@ -481,7 +481,7 @@ function continueFailedStoryboardJobPollo(
 ): boolean {
   const folderExists = fs.existsSync(generatedDirFor(jsonFileName));
   const failedIndex = failedStoryboardJobsPollo.findIndex(
-    (j) => j.type === type && j.jsonPath.includes(jsonFileName),
+    (j) => j.jsonPath.includes(jsonFileName),
   );
   if (!folderExists || failedIndex === -1) {
     return false;
