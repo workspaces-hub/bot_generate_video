@@ -97,16 +97,29 @@ export function resolveDownloadExtension(
  * phòng riêng cho popup Trustpilot, phòng khi nút X đổi/không hiện.
  */
 export async function dismissBlockingOverlays(page: Page): Promise<void> {
-  const closeButton = page.locator('button[aria-label="Close"]').first();
-  if (await closeButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await closeButton.click().catch(() => {});
-    await page.waitForTimeout(300);
+  // .first() KHÔNG đủ — xác nhận qua lỗi thật (job microdrama_co_dau_phan_
+  // boi_twist_prompt_SHOT_01_CLIP_01_VIDEO): trang thật có TỚI 3 nút khớp
+  // button[aria-label="Close"] cùng lúc (drawer mobile ẩn/pointer-events-none
+  // đứng TRƯỚC trong DOM, popup Trustpilot, popup "announcement_popup" mới —
+  // xem docstring hàm này). .first() luôn trỏ đúng 1 phần tử cố định theo
+  // thứ tự DOM; nếu ĐÚNG phần tử đó lại không visible (vd drawer ẩn), code cũ
+  // dừng luôn, KHÔNG thử các nút Close khác — nên popup thật đang chặn click
+  // (đứng sau trong DOM) không bao giờ được bấm. Duyệt HẾT các nút khớp, bấm
+  // MỌI nút đang visible thay vì chỉ nút đầu tiên.
+  const closeButtons = await page.locator('button[aria-label="Close"]').all();
+  for (const closeButton of closeButtons) {
+    if (await closeButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await closeButton.click().catch(() => {});
+      await page.waitForTimeout(300);
+    }
   }
 
-  const maybeLaterButton = page.locator('button[data-button-name="next_time"]').first();
-  if (await maybeLaterButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await maybeLaterButton.click().catch(() => {});
-    await page.waitForTimeout(300);
+  const maybeLaterButtons = await page.locator('button[data-button-name="next_time"]').all();
+  for (const maybeLaterButton of maybeLaterButtons) {
+    if (await maybeLaterButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await maybeLaterButton.click().catch(() => {});
+      await page.waitForTimeout(300);
+    }
   }
 
   await page.keyboard.press("Escape").catch(() => {});
