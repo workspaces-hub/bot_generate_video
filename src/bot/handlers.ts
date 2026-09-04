@@ -1607,3 +1607,4 @@ export function registerHandlers(bot: Telegraf): void {
       .catch(() => {});
   });
 }
+
