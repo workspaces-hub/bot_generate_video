@@ -14,7 +14,6 @@ import {
   creditPaywallLocator,
   generateButtonLocator,
   mentionPickerItemByUrlLocator,
-  modalCloseButtonLocator,
   modeChipLocator,
   modeMenuOptionLocator,
   modelChipLocator,
@@ -33,18 +32,36 @@ import {
 } from "./polloSelectors";
 
 /**
- * Đóng popup quảng cáo/promo (vd "Unlock Unlimited MiniMax H3" kèm video nền
- * tự phát) đè lên composer — xác nhận qua lỗi thật (job inspect-pollo-
- * reference-upload): popup này chặn hẳn mọi click vào mode chip/model chip
- * bên dưới ("... subtree intercepts pointer events"). Best-effort, không
- * throw nếu không có gì để đóng.
+ * Đóng popup che composer (chặn click, vd "... subtree intercepts pointer
+ * events") — best-effort, không throw nếu không có gì để đóng.
+ *
+ * Xác nhận qua DOM thật từ 2 loại popup KHÁC HẲN NHAU về khung: popup promo
+ * "Unlock Unlimited MiniMax H3" (bọc trong .coco-modal-wrap, hệ thống modal
+ * riêng của pollo.ai) và popup xin đánh giá Trustpilot "Enjoying Pollo.ai?"
+ * (bọc trong div.portal-wrapper, hệ thống popup khác hẳn — không phải
+ * coco-modal, .coco-modal-close cũ không khớp được) — dù khung khác nhau,
+ * CẢ HAI đều render nút đóng theo ĐÚNG 1 mẫu chung của design system:
+ * <button aria-label="Close"><span class="i-cus--pol-close">...</span></button>.
+ * Dùng thẳng button[aria-label="Close"] để tự đóng được MỌI popup theo mẫu
+ * này — kể cả các popup MỚI phát sinh sau này chưa từng gặp — thay vì phải
+ * vá thêm 1 selector riêng mỗi lần pollo.ai thêm popup mới.
+ *
+ * Giữ thêm nút "Maybe later" (button[data-button-name="next_time"]) làm dự
+ * phòng riêng cho popup Trustpilot, phòng khi nút X đổi/không hiện.
  */
 export async function dismissBlockingOverlays(page: Page): Promise<void> {
-  const closeButton = modalCloseButtonLocator(page).first();
+  const closeButton = page.locator('button[aria-label="Close"]').first();
   if (await closeButton.isVisible({ timeout: 1000 }).catch(() => false)) {
     await closeButton.click().catch(() => {});
     await page.waitForTimeout(300);
   }
+
+  const maybeLaterButton = page.locator('button[data-button-name="next_time"]').first();
+  if (await maybeLaterButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await maybeLaterButton.click().catch(() => {});
+    await page.waitForTimeout(300);
+  }
+
   await page.keyboard.press("Escape").catch(() => {});
 }
 
