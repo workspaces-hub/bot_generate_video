@@ -113,6 +113,36 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
 }
 
 /**
+ * Bấm 1 locator, nếu bị popup che chặn (Playwright báo "... subtree
+ * intercepts pointer events") thì gọi dismissBlockingOverlays rồi thử lại —
+ * xác nhận qua lỗi thật LẶP LẠI NHIỀU LẦN (nhiều job
+ * microdrama_co_dau_phan_boi_twist_prompt, cùng nút "Upload Media"): gọi
+ * dismissBlockingOverlays 1 LẦN duy nhất TRƯỚC KHI bắt đầu click là KHÔNG
+ * đủ, vì popup coco-modal-wrap có thể bật lên NGAY GIỮA LÚC Playwright đang
+ * tự retry click (Playwright chỉ tự retry đúng thao tác click trong lúc
+ * chờ actionability, KHÔNG tự chạy lại dismissBlockingOverlays của mình) —
+ * nếu popup xuất hiện SAU thời điểm dismiss ban đầu, click cứ treo tới hết
+ * timeout dù đã gọi dismiss trước đó. Chủ động lặp: thử click (timeout
+ * ngắn) → lỗi thì dismissBlockingOverlays → thử lại, tối đa vài lần.
+ */
+export async function clickWithOverlayDismiss(
+  page: Page,
+  locator: Locator,
+  timeoutPerAttemptMs = 4000,
+  maxAttempts = 5,
+): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await locator.click({ timeout: timeoutPerAttemptMs });
+      return;
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      await dismissBlockingOverlays(page);
+    }
+  }
+}
+
+/**
  * Xác nhận qua test thật (job inspect-pollo-deeplink, theo phát hiện của
  * user): pollo.ai hỗ trợ deep-link set sẵn CẢ mode lẫn model ngay qua URL —
  * vd https://pollo.ai/reference-to-video?target=reference-to-video&modelName=minimax-hailuo-03
@@ -448,7 +478,7 @@ async function uploadFrameImage(
   label: "Start" | "End",
   imagePath: string,
 ): Promise<void> {
-  await uploadCardButtonByLabel(page, label).first().click({ timeout: 10_000 });
+  await clickWithOverlayDismiss(page, uploadCardButtonByLabel(page, label).first());
   await submitAssetUpload(page, imagePath);
 }
 
@@ -461,7 +491,7 @@ async function uploadFrameImage(
  * "Character Library" của họ, không phải luôn theo tên file đã upload).
  */
 async function uploadReferenceVideoImage(page: Page, imagePath: string): Promise<string> {
-  await uploadCardButtonForImage(page).first().click({ timeout: 10_000 });
+  await clickWithOverlayDismiss(page, uploadCardButtonForImage(page).first());
   return submitAssetUpload(page, imagePath);
 }
 
@@ -749,7 +779,7 @@ export async function generateVideo(
     const baseline = await captureResultBaseline(page);
 
     const generateButton = generateButtonLocator(page).first();
-    await generateButton.click({ timeout: 10_000 });
+    await clickWithOverlayDismiss(page, generateButton);
     const generateClickedAtMs = Date.now();
 
     const videoSrc = await waitForNewResult(

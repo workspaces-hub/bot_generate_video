@@ -3,7 +3,12 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { getPolloImageBrowserContext } from "./polloBrowser";
-import { dismissBlockingOverlays, resolveDownloadExtension, submitAssetUpload } from "./pollo";
+import {
+  clickWithOverlayDismiss,
+  dismissBlockingOverlays,
+  resolveDownloadExtension,
+  submitAssetUpload,
+} from "./pollo";
 import {
   GenerationError,
   captureErrorSnapshot,
@@ -51,7 +56,7 @@ export interface PolloGenerateImageOptions {
  * lưới khi đã có sẵn nhiều file khác).
  */
 async function uploadReferenceImage(page: Page, imagePath: string): Promise<void> {
-  await uploadCardButtonLocator(page).first().click({ timeout: 10_000 });
+  await clickWithOverlayDismiss(page, uploadCardButtonLocator(page).first());
   await submitAssetUpload(page, imagePath);
 }
 
@@ -211,7 +216,7 @@ export async function generateImage(
     await captureSnapshot(page, jobId, "before-click-generate");
     await dismissBlockingOverlays(page);
     const generateButton = generateButtonLocator(page).first();
-    await generateButton.click({ timeout: 10_000 });
+    await clickWithOverlayDismiss(page, generateButton);
     await captureSnapshot(page, jobId, "after-click-generate");
 
     const newCard = await waitForNewResult(page, baseline, config.generationTimeoutMs);
