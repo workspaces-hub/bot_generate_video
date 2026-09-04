@@ -5,6 +5,8 @@ import { generateReferenceImage } from "./chatAIImage";
 import { generateVideo, type GenerateVideoOptions } from "./aiVideo";
 import { generateImage } from "./aiVideoImage";
 import { reviseGenerationPrompt } from "./chatAI";
+import { generateVideo as generateVideoPollo } from "./pollo";
+import { generateImage as generateImagePollo } from "./polloImage";
 
 /**
  * Logic dùng CHUNG cho cả 2 nơi gọi: script CLI (scripts/generate-reference-images.ts,
@@ -552,6 +554,138 @@ export async function generateReferenceImagesForFileViaAIVideo(
 }
 
 /**
+ * GIỐNG generateReferenceImagesForFileViaAIVideo HỆT (cùng lọc CHARACTER/
+ * LOCATION, cùng quy ước lưu file/success/onEntryDone/onEntryError/resume)
+ * nhưng tạo ảnh qua pollo.ai (generateImage trong polloImage.ts) THAY VÌ
+ * AIVideo — provider SONG SONG (xem chú thích đầu pollo.ts/polloImage.ts),
+ * KHÔNG thay thế hàm trên, người dùng tự chọn qua nút bấm riêng (xem
+ * StoryboardImagesPolloJob trong queue.ts). generateImage của polloImage.ts
+ * LUÔN trả về mảng ĐÚNG 1 ảnh (không có khái niệm "imageCount" nhiều ảnh/lần
+ * như AIVideo) nên đoạn "ảnh đầu + xoá ảnh thừa" bên dưới gần như no-op (mảng
+ * extra luôn rỗng) — giữ nguyên cấu trúc để đồng nhất/dễ so sánh với hàm
+ * AIVideo.
+ */
+export async function generateReferenceImagesForFileViaPollo(
+  inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
+  onEntryError?: (id: string, errorMessage: string) => Promise<void>,
+): Promise<GenerateImagesResult> {
+  const raw = await fs.promises.readFile(inputPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const outputDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        return false;
+      }
+      return true;
+    },
+  );
+
+  let succeeded = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+  for (const entry of targets) {
+    if (isStopStoryboardRequested(inputPath)) break;
+    if (entry?.success) continue;
+
+    const existingImagePath = await findExistingImageById(
+      outputDir,
+      sanitizeId(entry.id),
+    );
+    if (existingImagePath) {
+      entry.success = true;
+      succeeded++;
+      await saveEntries(inputPath, entries);
+      continue;
+    }
+
+    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
+    console.log(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (pollo)...`,
+    );
+    let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
+    try {
+      const imagePaths = await generateWithContentViolationRetry(
+        entry,
+        jobId,
+        () => generateImagePollo(entry.prompt!, {}, jobId),
+      );
+      if (imagePaths.length === 0) {
+        throw new Error("Không tạo được ảnh nào");
+      }
+      const [firstImage, ...extraImages] = imagePaths;
+      destPath = path.join(
+        outputDir,
+        `${sanitizeId(entry.id)}${path.extname(firstImage)}`,
+      );
+      try {
+        await fs.promises.rename(firstImage, destPath);
+      } catch {
+        await fs.promises.copyFile(firstImage, destPath);
+        await fs.promises.unlink(firstImage).catch(() => {});
+      }
+      for (const extra of extraImages) {
+        await fs.promises.unlink(extra).catch(() => {});
+      }
+      console.log(
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${destPath}`,
+      );
+      entry.success = true;
+      succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(destPath).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      entry.success = false;
+      failed++;
+      failedEntries.push({ id: entry.id, type: entry.type });
+      if (onEntryError) {
+        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+        await sleep(1000);
+      }
+    }
+    await saveEntries(inputPath, entries);
+  }
+
+  return {
+    outputDir,
+    succeeded,
+    failed,
+    failedEntries,
+  };
+}
+
+/**
  * Tìm file ảnh ref theo id trong 1 folder — ưu tiên đúng "<id>.png", fallback
  * dò bất kỳ đuôi nào khác nếu không có (generate-reference-images lưu theo
  * đuôi THẬT của ảnh ChatAI trả về, có thể không phải .png — xem
@@ -830,6 +964,139 @@ export async function generateVideosForFile(
       }
 
       // console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — đã lưu: ${destPath}`);
+      entry.success = true;
+      succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(destPath).catch((err) => {});
+      }
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [VIDEO] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      if (onEntryError) {
+        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {});
+        await sleep(1000);
+      }
+      entry.success = false;
+      failed++;
+      failedEntries.push({ id: entry.id, type: "VIDEO" });
+    }
+    await saveEntries(inputPath, entries);
+  }
+
+  return { outputDir, succeeded, failed, failedEntries };
+}
+
+/**
+ * GIỐNG generateVideosForFile (cùng đọc file, lọc entry "VIDEO", cùng quy
+ * ước success/onEntryDone/onEntryError/resume/onlyEntryIds/duration) nhưng
+ * tạo video qua pollo.ai (generateVideo trong pollo.ts) THAY VÌ AIVideo —
+ * provider SONG SONG, KHÔNG thay thế hàm trên.
+ *
+ * KHÁC BIỆT so với generateVideosForFile:
+ * 1. KHÔNG dùng assignStartEndFrames/nhánh Omni Reference theo số ảnh ref
+ *    (đặc thù AIVideo) — LUÔN đưa TẤT CẢ refPaths vào referenceImagePaths,
+ *    dùng mode "Reference to Video" + model "MiniMax H3" cố định. Đây là lựa
+ *    chọn CHỦ Ý theo yêu cầu người dùng (mode/model duy nhất đã test kỹ cho
+ *    video storyboard qua pollo, xem docstring đầu pollo.ts) — không tái tạo
+ *    phân nhánh 1-2-3+ ảnh của AIVideo vì pollo.ai xử lý số lượng ref khác
+ *    hẳn (mention từng ảnh vào prompt, không có khái niệm "start/end frame"
+ *    cố định cho mode này).
+ * 2. CHỈ lấy ref type "CHARACTER"/"LOCATION" — KHÔNG lấy "SCENE_SETTING_START"/
+ *    "SCENE_SETTING_END" như generateVideosForFile — theo yêu cầu người
+ *    dùng: pipeline Pollo bỏ hẳn bước "Tạo ảnh scene" (xem
+ *    generateSceneImagesForFileViaPollo đã bị xoá, processPolloImageQueue
+ *    trong queue.ts giờ đi thẳng từ "Tạo ảnh" (CHARACTER/LOCATION) sang xác
+ *    nhận "Tạo video"), nên ảnh SCENE_SETTING KHÔNG BAO GIỜ tồn tại trong
+ *    outputDir cho các file dùng Pollo — resolveRefImagePath sẽ throw "Không
+ *    tìm thấy file" nếu vẫn cố lấy ref loại này.
+ */
+export async function generateVideosForFilePollo(
+  inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
+  onEntryError?: (filePath: string, errorMessage: string) => Promise<void>,
+  onlyEntryIds?: string[],
+): Promise<GenerateVideosResult> {
+  const raw = await fs.promises.readFile(inputPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const outputDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "VIDEO") return false;
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        return false;
+      }
+      if (onlyEntryIds && !onlyEntryIds.includes(e.id)) return false;
+      return true;
+    },
+  );
+
+  let succeeded = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+
+  for (const entry of targets) {
+    if (isStopStoryboardRequested(inputPath)) break;
+    if (entry?.success) continue;
+    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
+    try {
+      // CHỈ lấy CHARACTER/LOCATION — xem docstring hàm này (KHÔNG có
+      // SCENE_SETTING_START/END nữa, pipeline Pollo bỏ hẳn bước "Tạo ảnh
+      // scene").
+      const refs = (entry.ref ?? []).filter(
+        (r): r is Required<StoryboardRefItem> =>
+          Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
+      );
+
+      const refPaths: string[] = [];
+      for (const ref of refs) {
+        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+      }
+
+      const duration =
+        typeof entry.duration === "number" && entry.duration > 0
+          ? `${Math.round(entry.duration)}s`
+          : undefined;
+
+      if (isStopStoryboardRequested(inputPath)) break;
+
+      console.log(
+        `[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video (pollo)...`,
+      );
+      const tempFilePath = await generateWithContentViolationRetry(
+        entry,
+        jobId,
+        () =>
+          generateVideoPollo(
+            entry.prompt!,
+            { referenceImagePaths: refPaths, model: "MiniMax H3", duration },
+            jobId,
+          ),
+      );
+
+      const destPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
+      try {
+        await fs.promises.rename(tempFilePath, destPath);
+      } catch {
+        await fs.promises.copyFile(tempFilePath, destPath);
+        await fs.promises.unlink(tempFilePath).catch(() => {});
+      }
+
       entry.success = true;
       succeeded++;
       if (onEntryDone) {
@@ -1166,3 +1433,4 @@ export async function generateSceneImagesForFileViaAIVideo(
 
   return { outputDir, succeeded, failed, failedEntries };
 }
+

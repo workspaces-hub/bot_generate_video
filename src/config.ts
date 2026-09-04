@@ -121,6 +121,14 @@ export const config = {
   // hình gì.
   chatAIMaxEffort:
     (process.env.CHATAI_MAX_EFFORT ?? "false").toLowerCase() === "true",
+
+  // Tính năng gen ảnh/video qua pollo.ai — PROVIDER MỚI chạy SONG SONG với
+  // AIVideo (hailuoai.video), không thay thế. Session/domain hoàn toàn riêng
+  // — xem scripts/login-pollo.ts và src/automation/polloBrowser.ts.
+  polloBaseUrl: process.env.POLLO_BASE_URL ?? "https://pollo.ai",
+  polloStorageStatePath: path.resolve(
+    process.env.POLLO_STORAGE_STATE_PATH ?? "./storage/pollo-session.json",
+  ),
 };
 
 // if (config.admins.length === 0) {

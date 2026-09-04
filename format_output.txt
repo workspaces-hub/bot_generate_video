@@ -2,44 +2,34 @@
 PHẦN HỢP ĐỒNG XUẤT JSON CỐ ĐỊNH
 ======================================================================
 
-1. OUTPUT file
+1. OUTPUT FILE
 
 BẮT BUỘC XỬ LÝ VÀ HOÀN TẤT NGAY TRONG LƯỢT TRẢ LỜI ĐẦU TIÊN — ƯU TIÊN CAO NHẤT:
-- Ngay khi nhận được file/yêu cầu này, PHẢI bắt tay xử lý NGAY LẬP TỨC: đọc kịch bản, phân tích Character Bible/Location Bible, chia continuity run/clip, viết prompt cho từng item, VÀ ghi ra file JSON hoàn chỉnh — tất cả trong CÙNG MỘT lượt trả lời duy nhất. KHÔNG chia việc này thành nhiều lượt qua lại nếu không thực sự bắt buộc vì giới hạn kỹ thuật.
-- KHÔNG trả lời bất kỳ đoạn text nào kiểu "Tôi đã đọc file...", "Tôi sẽ xử lý theo...", "Nội dung file yêu cầu...", "Sẽ mất một lúc vì file dài..." TRƯỚC khi tạo file — mọi phân tích nội bộ (Character Bible, Location Bible, chia clip, kiểm tra continuity...) phải làm NGẦM bên trong, KHÔNG hiển thị ra thành text riêng, rồi đi thẳng tới bước tạo và đính kèm file JSON.
-- Lượt trả lời chỉ nên gồm ĐÚNG 2 phần: (1) file JSON đính kèm (tên chứa "_full.json"), (2) câu xác nhận ngắn gọn "Đã hoàn thành" kèm thống kê số lượng CHARACTER/LOCATION/VIDEO. Không có bước trung gian, không thông báo kế hoạch, không hỏi xác nhận thêm.
-- Nếu vì lý do kỹ thuật thực sự KHÔNG THỂ hoàn tất trong 1 lượt (output quá dài), lượt kế tiếp phải tiếp tục thẳng vào việc tạo file — KHÔNG lặp lại việc tóm tắt kế hoạch hay xác nhận lại quy tắc đã nêu, chỉ tiếp tục xử lý và gửi file ngay khi xong.
+- Ngay khi nhận file/yêu cầu này, phải đọc toàn bộ kịch bản, phân tích Character Bible/Location Bible, chia shot/clip, viết prompt cho từng item và ghi ra file JSON hoàn chỉnh trong cùng một lượt trả lời.
+- Mọi phân tích nội bộ phải thực hiện ngầm. Không hiển thị Character Bible, Location Bible, shot list, camera plan, continuity analysis, negative prompt, kế hoạch xử lý hoặc thông báo tiến độ trước khi tạo file.
+- Lượt trả lời chỉ gồm: (1) một file JSON đính kèm có tên chứa “_full.json”; (2) câu “Đã hoàn thành” kèm thống kê số lượng CHARACTER, LOCATION và VIDEO.
+- Nếu JSON dài, vẫn phải tiếp tục ghi vào đúng cùng một file cho tới khi toàn bộ kịch bản được chuyển đổi đầy đủ. Không rút gọn, chia thành nhiều file, bỏ item, dừng chờ xác nhận hoặc tuyên bố hoàn thành khi chưa có file đầy đủ.
 
-QUY TẮC KHI JSON QUÁ DÀI ĐỂ XUẤT TRONG 1 LƯỢT — BẮT BUỘC:
-- Nếu storyboard đầy đủ tạo ra một JSON quá dài để hoàn tất trong một lượt trả lời, đó KHÔNG phải lý do để dừng lại, rút gọn, tóm tắt hay bỏ bớt item — vẫn phải tiếp tục xử lý/ghi file cho tới khi TOÀN BỘ kịch bản đã được chuyển thành JSON đầy đủ.
-- Được phép mất NHIỀU lượt/nhiều lần thao tác với công cụ tạo file để hoàn tất — mỗi lượt tiếp tục ghi thêm vào ĐÚNG CÙNG 1 file cho tới khi xong, không tạo nhiều file rời rạc theo từng phần.
-- CHỈ được coi là ĐÃ HOÀN THÀNH khi file JSON hoàn chỉnh (tên chứa "_full.json") đã THỰC SỰ được tạo và đính kèm NGAY TRONG chính lượt trả lời đó, chứa TRỌN VẸN toàn bộ storyboard (không phải bản rút gọn/một phần).
-- Nếu lượt trả lời hiện tại CHƯA đính kèm file JSON đầy đủ đó — bất kể đã nói "sẽ tiếp tục xử lý", "sẽ gửi sau khi hoàn tất", "file quá dài nên sẽ xuất riêng", đã tóm tắt kế hoạch, hay bất kỳ lý do nào khác — lượt trả lời đó PHẢI được coi là CÒN ĐANG TRẢ LỜI DỞ DANG, KHÔNG được dùng các cụm như "Đã hoàn thành", không được thống kê số lượng CHARACTER/LOCATION/VIDEO như thể đã xong.
-- Không được dừng giữa chừng để chờ xác nhận/chờ lượt sau rồi mới tiếp tục — nếu output quá dài không thể xong trong 1 lượt, vẫn phải tiếp tục xử lý và ghi file NGAY, không tạm dừng lại chỉ để thông báo kế hoạch hoặc lý do vì sao file dài.
-- Việc phân tích/lên kế hoạch nội bộ (Character Bible, Location Bible, chia clip...) KHÔNG được tính là dấu hiệu hoàn thành — chỉ file JSON đính kèm ĐẦY ĐỦ, THỰC TẾ mới tính.
-
+YÊU CẦU FILE:
 - Tạo đúng một file JSON hoàn chỉnh; tên file phải chứa “_full.json”.
 - Root của file phải là một JSON array.
-- Không in nội dung JSON storyboard trong chat.
-- Không xuất Character Bible, Location Bible, shot list, camera plan, continuity analysis hoặc negative prompt thành section/item riêng nhưng được diễn đạt tự nhiên ở prompt dùng trực tiếp gen ảnh và video.
-- Không được nhét nhiều loại prompt vào cùng một field prompt.
-- Các thông tin quan trọng như hành động, nhân vật, bối cảnh, camera, lens, ánh sáng, motion, cinematic style... phải được diễn đạt tự nhiên ngay trong VIDEO PROMPT.
-- Chỉ sau khi hoàn thành toàn bộ phân tích của toàn bộ kịch bản và đã kiểm tra toàn bộ storyboard, mới được phép serialize dữ liệu thành một file JSON duy nhất.
+- Không in nội dung JSON trong chat.
+- Không có comment, markdown fence hoặc văn bản ngoài array trong file.
 - Không tạo ảnh hoặc video.
-
+- Chỉ serialize sau khi đã phân tích và kiểm tra độ bao phủ của toàn bộ kịch bản.
 
 2. SCHEMA CỐ ĐỊNH
 
-Mỗi item phải có đúng 5 field, đúng tên sau:
+Mỗi item phải có đúng 5 field, đúng tên và đúng cấu trúc sau:
 
 [
   {
     "id": "string",
-    "type": "CHARACTER | LOCATION | VIDEO | SCENE_SETTING_START | SCENE_SETTING_END",
+    "type": "CHARACTER | LOCATION | VIDEO",
     "ref": [
       {
         "id": "string",
-        "type": "CHARACTER | LOCATION | SCENE_SETTING_START | SCENE_SETTING_END"
+        "type": "CHARACTER | LOCATION"
       }
     ],
     "prompt": "string",
@@ -47,270 +37,166 @@ Mỗi item phải có đúng 5 field, đúng tên sau:
   }
 ]
 
-Không thêm field khác. File phải là JSON hợp lệ, không có comment, markdown fence hoặc văn bản ngoài array.
+Không thêm field khác.
 
+TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
+- SCENE_SETTING_START
+- SCENE_SETTING_END
+- START FRAME item
+- END FRAME item
+- Temporal boundary item dưới bất kỳ tên hoặc alias nào
 
-3. NGUYÊN TẮC BOUNDARY LIÊN TIẾP — BẮT BUỘC
+3. NGUYÊN TẮC CHIA SHOT VÀ CLIP
 
-Mỗi continuity run chỉ có một SCENE_SETTING_START riêng tại clip đầu tiên. Từ clip thứ hai trở đi trong cùng run, không tạo item SCENE_SETTING_START mới; 
-
-Trong cùng một shot / continuity run:
-
-- Clip đầu tiên bắt đầu từ START_01 và kết thúc tại END_01.
-- Clip thứ hai bắt đầu trực tiếp từ END_01 và kết thúc tại END_02.
-- Clip thứ ba bắt đầu trực tiếp từ END_02 và kết thúc tại END_03.
-- Tiếp tục cùng quy tắc cho mọi clip sau.
-
-Chuỗi bắt buộc:
-
-START_01 → VIDEO_01 → END_01
-→ VIDEO_02 (bắt đầu trực tiếp từ END_01) → END_02
-→ VIDEO_03 (bắt đầu trực tiếp từ END_02) → END_03.
-
-Theo thứ tự item trong file, chuỗi trên được xuất thành:
-
-START_01 → END_01 → VIDEO_01
-→ END_02 → VIDEO_02
-→ END_03 → VIDEO_03.
-
-END_N là trạng thái vật lý cuối của VIDEO_N và đồng thời là first-frame boundary trực tiếp của VIDEO_N+1.
-
-Về execution:
-
-- Chỉ START_01 của một continuity run mới được phép tạo từ CHARACTER + LOCATION assets.
-- Từ clip 2 trở đi, không tạo, image-generate, repaint, regenerate, restage hoặc reinterpret START frame mới.
-- First-frame asset thực tế của VIDEO_N với N từ 2 trở đi phải là end frame (type SCENE_SETTING_END) VIDEO_N-1.
-
+- Chia toàn bộ timeline thành các VIDEO clip có thời lượng phù hợp với cấu hình ở PHẦN trên.
+- Mỗi VIDEO phải đại diện cho một nhịp hành động cụ thể, rõ ràng và có thể thực hiện tự nhiên trong thời lượng đã chọn.
+- Nếu một hành động dài hơn giới hạn một clip, chia thành nhiều VIDEO liên tiếp theo thứ tự thời gian.
+- Clip sau phải tiếp nối hợp lý trạng thái kết thúc của clip trước bằng mô tả trực tiếp trong VIDEO prompt; không tạo item trung gian để biểu diễn frame đầu/cuối.
+- Prompt của clip N từ 2 trở đi trong cùng continuity run phải nêu rõ trạng thái được kế thừa từ clip trước khi cần thiết: vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, ánh sáng, môi trường và motion phase.
+- Không yêu cầu tạo, repaint, regenerate, restage hoặc reinterpret một START/END frame riêng.
+- Mọi thông tin continuity phải nằm tự nhiên ngay trong VIDEO prompt.
 
 4. QUY TẮC THEO TYPE
 
 CHARACTER
 
-- id: ID nhất quán, duy nhất.
+- id: ID nhất quán và duy nhất.
 - ref: [].
-- prompt: chỉ chứa CHARACTER PROMPT hoàn chỉnh dùng trực tiếp để gen video.
+- prompt: chỉ chứa CHARACTER PROMPT hoàn chỉnh, bằng tiếng Anh, dùng trực tiếp để tạo asset tham chiếu nhân vật.
+- Prompt phải mô tả đủ nhận diện ổn định: loài/giới tính/độ tuổi biểu kiến, chiều cao và vóc dáng tương đối, khuôn mặt, mắt, da/lông/tóc, đặc điểm nhận diện riêng, trang phục, phụ kiện, tỷ lệ cơ thể, tính cách biểu hiện qua posture và phong cách hình ảnh.
+- Không đưa hành động riêng của một VIDEO, camera plan hoặc bối cảnh riêng của một shot vào CHARACTER prompt.
 - duration: 0.
 
 LOCATION
 
-- id: ID nhất quán, duy nhất.
+- id: ID nhất quán và duy nhất.
 - ref: [].
-- prompt: chỉ chứa LOCATION PROMPT hoàn chỉnh dùng trực tiếp để gen video.
+- prompt: chỉ chứa LOCATION PROMPT hoàn chỉnh, bằng tiếng Anh, dùng trực tiếp để tạo asset tham chiếu bối cảnh.
+- Prompt phải mô tả đủ kiến trúc/địa hình, bố cục không gian, lối vào, mốc định hướng, vật thể cố định, vật liệu, thời điểm/ánh sáng nền phù hợp và phong cách hình ảnh.
+- Không đưa nhân vật hoặc hành động riêng của một VIDEO vào LOCATION prompt.
 - duration: 0.
 
-SCENE_SETTING_START của clip đầu continuity run
+VIDEO
 
-- Mỗi continuity run có đúng một item SCENE_SETTING_START.
-- id theo mẫu SHOT_XX_CLIP_01_START.
-- ref: đúng CHARACTER thực sự xuất hiện trong frame, sau đó LOCATION của frame.
-- Không đưa nhân vật không xuất hiện vào ref.
-- prompt: chỉ chứa START FRAME image prompt.
-- prompt phải bắt đầu bằng “START FRAME cinematic still for this exact [duration]-second shot...”.
-- prompt BẮT BUỘC phải nêu đủ, bằng tiếng Anh, ngay trong cùng field (không được thiếu bất kỳ mục nào dưới đây):
-  1. Mô tả CỤ THỂ khoảnh khắc mở đầu của CHÍNH run này: nhân vật đang ở đâu, tư thế/pose gì, biểu cảm gì, đang cầm/tương tác với đạo cụ nào — lấy trực tiếp từ timeline câu chuyện ở PHẦN trên, KHÔNG được là mô tả chung chung có thể áp dụng cho bất kỳ cảnh nào khác.
-  2. Bối cảnh/môi trường cụ thể khớp đúng LOCATION được ref: thời điểm trong ngày, thời tiết, ánh sáng.
-  3. Camera cụ thể cho khung hình tĩnh này: loại lens/focal length, góc máy, khung hình (vd "medium shot", "eye level").
-- CẤM TUYỆT ĐỐI: dùng lại nguyên văn hoặc gần giống nguyên văn phần mô tả khoảnh khắc/tư thế cho từ 2 SCENE_SETTING_START trở lên trong cùng file — mỗi START phải phản ánh đúng khoảnh khắc mở đầu RIÊNG của run đó.
-- duration: 0.
+- id theo mẫu SHOT_XX_CLIP_YY_VIDEO.
+- ref chỉ được chứa CHARACTER và LOCATION thực sự xuất hiện trong chính VIDEO đó.
+- Thứ tự ref bắt buộc: toàn bộ CHARACTER xuất hiện trong clip trước, sau đó LOCATION tương ứng của clip.
+- Không đưa nhân vật chỉ được nhắc đến nhưng không hiện diện vào ref.
+- Không đưa location ngoài khung hình hoặc không phải bối cảnh thực tế của clip vào ref.
+- Không tham chiếu VIDEO khác.
+- Không tham chiếu START, END, SCENE_SETTING hoặc temporal boundary dưới bất kỳ hình thức nào.
+- Nếu clip không có nhân vật, ref chỉ chứa LOCATION thực sự xuất hiện.
+- Mỗi ref.id phải trỏ tới đúng một CHARACTER hoặc LOCATION item tồn tại trong cùng file.
+- prompt: chỉ chứa VIDEO PROMPT hoàn chỉnh bằng tiếng Anh, dùng trực tiếp để gen video.
+- duration: số giây hợp lệ của clip theo cấu hình ở PHẦN trên.
 
-Clip N từ 2 trở đi trong cùng run
+Mỗi VIDEO prompt bắt buộc phải nêu đủ:
 
-- Không tạo item SCENE_SETTING_START cho clip N.
-- Không có id SHOT_XX_CLIP_N_START.
-- First-frame boundary của clip N là SHOT_XX_CLIP_N-1_END được dùng trực tiếp với alias type SCENE_SETTING_START.
+1. Khoảnh khắc mở đầu cụ thể của clip: ai đang ở đâu, pose, gaze, biểu cảm, trạng thái đạo cụ và motion phase ban đầu. Với clip nối tiếp, mô tả đây là sự tiếp diễn trực tiếp từ trạng thái cuối của clip trước, nhưng không tham chiếu tới một START/END item.
+2. Hành động cụ thể của chính clip: ai làm gì, tương tác với ai/đạo cụ/bối cảnh nào, diễn biến theo thứ tự trong đúng duration, cùng một kết quả ngắn dễ đọc ở cuối clip.
+3. Camera cụ thể: focal length/lens, shot size, angle, framing và chuyển động máy phù hợp với hành động. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
+4. Ánh sáng, thời điểm trong ngày và thời tiết cụ thể, phù hợp LOCATION và continuity.
+5. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, screen direction, time, weather, lighting direction, camera continuity và natural physics.
+6. Trạng thái kết thúc cụ thể đạt được tự nhiên trong duration để clip tiếp theo có thể tiếp nối: vị trí, pose, gaze, biểu cảm, đạo cụ và camera motion phase sau hành động.
+7. Câu cấm chính xác: “No jump cuts, no hidden scene change, no extra events, no modern elements.”
 
-SCENE_SETTING_END của mọi clip
+Không bắt buộc dùng câu mở đầu chung giống nhau cho mọi VIDEO. Hãy bắt đầu bằng mô tả trực tiếp, riêng biệt và phù hợp với hành động của clip.
 
-- id theo mẫu SHOT_XX_CLIP_N_END.
-- ref[0]:
-  - Nếu là clip đầu continuity run: SHOT_XX_CLIP_01_START, type SCENE_SETTING_START.
-  - Nếu là clip N từ 2 trở đi: SHOT_XX_CLIP_N-1_END, type SCENE_SETTING_START.
-- Các ref tiếp theo: đúng CHARACTER thực sự xuất hiện trong END, sau đó cùng LOCATION.
-- prompt: chỉ chứa END FRAME image prompt của cùng shot, dùng START FRAME làm primary visual continuity anchor và tập trung mô tả delta.
-- prompt phải bắt đầu bằng “END FRAME cinematic still of the same continuous [duration]-second shot. Use the referenced START FRAME as the primary visual continuity anchor...”.
-- prompt BẮT BUỘC phải nêu đủ, bằng tiếng Anh, ngay trong cùng field (không được thiếu bất kỳ mục nào dưới đây):
-  1. Mô tả CỤ THỂ delta của CHÍNH clip này: nhân vật/đạo cụ đã thay đổi vị trí/tư thế/biểu cảm gì SAU hành động của clip đó, so với boundary trước — lấy trực tiếp từ timeline câu chuyện ở PHẦN trên, KHÔNG được là mô tả chung chung có thể áp dụng cho bất kỳ clip nào khác.
-  2. Xác nhận rõ những gì GIỮ NGUYÊN từ boundary trước (identity, costume, prop state, location, lighting) và chỉ nêu phần THAY ĐỔI.
-  3. Camera cụ thể cho khung hình tĩnh này, nhất quán với camera của VIDEO cùng clip.
-- CẤM TUYỆT ĐỐI: dùng lại nguyên văn hoặc gần giống nguyên văn phần mô tả delta cho từ 2 SCENE_SETTING_END trở lên trong cùng file — mỗi END phải phản ánh đúng thay đổi RIÊNG của clip đó.
-- duration: 0.
-
-VIDEO của clip đầu continuity run
-
-- id theo mẫu SHOT_XX_CLIP_01_VIDEO.
-- ref phải có ĐÚNG HAI item, không hơn không kém, và đúng thứ tự:
-  1. SHOT_XX_CLIP_01_START, type SCENE_SETTING_START.
-  2. SHOT_XX_CLIP_01_END, type SCENE_SETTING_END.
-- CẤM TUYỆT ĐỐI: KHÔNG được thêm CHARACTER hoặc LOCATION vào ref của VIDEO, dù nhân vật/bối cảnh có xuất hiện trong clip — ref của VIDEO CHỈ chứa đúng 2 boundary ở trên, không thêm bất kỳ item nào khác. Nhân vật/bối cảnh xuất hiện trong clip đã được thể hiện qua ref của SCENE_SETTING_START/SCENE_SETTING_END tương ứng, không cần (và không được) lặp lại ở ref của VIDEO.
-- prompt:  dùng START FRAME làm primary visual continuity anchor và tập trung mô tả delta từ start đến end frame.
-- prompt phải bắt đầu bằng “Continuous six-second cinematic shot bounded exactly by the referenced START FRAME and END FRAME."
-- prompt BẮT BUỘC phải nêu đủ, bằng tiếng Anh, ngay trong cùng field (không được thiếu bất kỳ mục nào dưới đây, kể cả khi prompt đã dài):
-  1. Mô tả HÀNH ĐỘNG CỤ THỂ của CHÍNH clip này (ai làm gì, với đạo cụ/bối cảnh nào, diễn biến ra sao trong đúng khoảng thời gian của clip) — lấy trực tiếp từ timeline câu chuyện đã phân tích ở PHẦN trên, viết CỤ THỂ cho riêng clip này, KHÔNG được là câu mô tả chung chung/rút gọn kiểu "natural human motion, cinematic camera movement" thay cho hành động thật.
-  2. Camera cụ thể: loại lens/focal length (vd "35mm"), khung hình (vd "medium-wide"), kiểu chuyển động máy (vd "dolly-in", "static", "handheld pan") — chọn phù hợp với chính hành động ở mục 1, không dùng cụm chung chung như "cinematic camera movement".
-  3. Lighting/thời điểm trong ngày cụ thể (vd "overcast morning", "warm late-afternoon sun").
-  4. Câu xác nhận khớp boundary: "The opening frame must match START exactly and the final stable frame must match END exactly."
-  5. Danh sách continuity bắt buộc giữ nguyên xuyên suốt: character identity, costume, location layout, prop state, time, weather, lighting direction, camera continuity, natural physics.
-  6. Câu cấm: "No jump cuts, no hidden scene change, no extra events, no modern elements."
-- CẤM TUYỆT ĐỐI: dùng lại nguyên văn hoặc gần giống nguyên văn cùng 1 đoạn mô tả hành động/camera cho từ 2 VIDEO prompt trở lên trong cùng file — mỗi VIDEO phải có mục 1 và 2 RIÊNG, khớp đúng hành động thật của clip đó. Nếu 2 VIDEO prompt bất kỳ giống nhau quá mức (chỉ khác id), coi là lỗi phải viết lại.
-- duration: số giây của clip do PHẦN trên quyết định.
-
-VIDEO của clip N từ 2 trở đi trong cùng run
-
-- id theo mẫu SHOT_XX_CLIP_N_VIDEO.
-- ref phải có ĐÚNG HAI item, không hơn không kém, và đúng thứ tự:
-  1. SHOT_XX_CLIP_N-1_END, type SCENE_SETTING_START.
-  2. SHOT_XX_CLIP_N_END, type SCENE_SETTING_END.
-- ref[0] dùng alias type SCENE_SETTING_START dù id trỏ tới item có type SCENE_SETTING_END.
-- CẤM TUYỆT ĐỐI: KHÔNG được thêm CHARACTER hoặc LOCATION vào ref của VIDEO, dù nhân vật/bối cảnh có xuất hiện trong clip — ref của VIDEO CHỈ chứa đúng 2 boundary ở trên, không thêm bất kỳ item nào khác. Nhân vật/bối cảnh xuất hiện trong clip đã được thể hiện qua ref của SCENE_SETTING_START/SCENE_SETTING_END tương ứng, không cần (và không được) lặp lại ở ref của VIDEO.
-- prompt: chỉ chứa VIDEO PROMPT dùng trực tiếp để gen video.
-- prompt phải bắt đầu bằng “Continuous six-second cinematic shot bounded exactly by the referenced START FRAME and END FRAME."
-- prompt BẮT BUỘC phải nêu đủ, bằng tiếng Anh, ngay trong cùng field (không được thiếu bất kỳ mục nào dưới đây, kể cả khi prompt đã dài) — GIỐNG HỆT yêu cầu ở "VIDEO của clip đầu continuity run" phía trên, áp dụng lại cho MỌI clip, không chỉ clip đầu:
-  1. Mô tả HÀNH ĐỘNG CỤ THỂ của CHÍNH clip này, tiếp nối trực tiếp từ trạng thái cuối của clip trước — lấy trực tiếp từ timeline câu chuyện đã phân tích ở PHẦN 1, viết CỤ THỂ cho riêng clip này, KHÔNG được là câu mô tả chung chung/rút gọn kiểu "natural human motion, cinematic camera movement" thay cho hành động thật.
-  2. Camera cụ thể: loại lens/focal length, khung hình, kiểu chuyển động máy — phải nhất quán hoặc kế thừa hợp lý từ camera của clip trước (xem CAMERA CONTINUITY), và phù hợp với chính hành động ở mục 1, không dùng cụm chung chung như "cinematic camera movement".
-  3. Lighting/thời điểm trong ngày cụ thể, nhất quán với clip trước.
-  4. Câu xác nhận khớp boundary: "The opening frame must match START exactly and the final stable frame must match END exactly."
-  5. Danh sách continuity bắt buộc giữ nguyên xuyên suốt: character identity, costume, location layout, prop state, time, weather, lighting direction, camera continuity, natural physics.
-  6. Câu cấm: "No jump cuts, no hidden scene change, no extra events, no modern elements."
-- CẤM TUYỆT ĐỐI: dùng lại nguyên văn hoặc gần giống nguyên văn cùng 1 đoạn mô tả hành động/camera cho từ 2 VIDEO prompt trở lên trong cùng file — mỗi VIDEO phải có mục 1 và 2 RIÊNG, khớp đúng hành động thật của clip đó. Nếu 2 VIDEO prompt bất kỳ giống nhau quá mức (chỉ khác id), coi là lỗi phải viết lại.
-- duration: số giây của clip do PHẦN 1 quyết định.
-
+CẤM TUYỆT ĐỐI:
+- Dùng cụm “bounded by the referenced START FRAME and END FRAME”.
+- Dùng câu “The opening frame must match START exactly and the final stable frame must match END exactly.”
+- Nói rằng có supplied/referenced/current/previous START FRAME hoặc END FRAME.
+- Yêu cầu dùng extracted last stable frame như một asset tham chiếu nếu asset đó không tồn tại trong schema.
+- Nhét Character Bible, Location Bible, metadata phân tích, tiêu đề, negative prompt riêng hoặc lời giải thích ngoài VIDEO prompt.
+- Dùng lại nguyên văn hoặc gần giống nguyên văn phần hành động/camera cho nhiều VIDEO chỉ bằng cách đổi ID. Mỗi prompt phải phản ánh đúng nhịp hành động riêng của clip.
 
 5. THỨ TỰ ITEM
 
-Thứ tự vật lý của các item trong root array là bắt buộc, không chỉ là thứ tự logic hoặc thứ tự tham chiếu.
+Thứ tự vật lý trong root array là bắt buộc:
 
-Áp dụng đúng thuật toán xuất tuần tự sau:
+1. Toàn bộ CHARACTER, theo thứ tự nhân vật được xác lập khi phân tích kịch bản.
+2. Toàn bộ LOCATION, theo thứ tự bối cảnh được xác lập khi phân tích kịch bản.
+3. Toàn bộ VIDEO, theo đúng timeline câu chuyện: SHOT tăng dần, trong mỗi SHOT thì CLIP tăng dần.
 
-1. Xuất toàn bộ item CHARACTER trước, theo thứ tự nhân vật được xác lập ở PHẦN 1.
-2. Xuất toàn bộ item LOCATION ngay sau CHARACTER, theo thứ tự bối cảnh được xác lập ở PHẦN 1.
-3. Sau LOCATION, xuất từng continuity run theo đúng timeline câu chuyện; phải hoàn tất toàn bộ item của run hiện tại rồi mới bắt đầu run kế tiếp.
-4. Trong mỗi continuity run:
-   - Xuất clip đầu đúng thứ tự liền kề: SCENE_SETTING_START của clip 01 → SCENE_SETTING_END của clip 01 → VIDEO của clip 01.
-   - Sau đó, với từng clip N từ 2 trở đi, xuất đúng một cặp liền kề: SCENE_SETTING_END của clip N → VIDEO của clip N.
-   - Lặp theo số clip tăng dần cho đến hết run.
+Mẫu:
 
-Mẫu thứ tự tổng quát bắt buộc:
-
-CHARACTER... → LOCATION...
-→ RUN 1: START_01 → END_01 → VIDEO_01 → END_02 → VIDEO_02 → END_03 → VIDEO_03...
-→ RUN 2: START_01 → END_01 → VIDEO_01 → END_02 → VIDEO_02...
+CHARACTER...
+→ LOCATION...
+→ SHOT_01_CLIP_01_VIDEO
+→ SHOT_01_CLIP_02_VIDEO
+→ SHOT_02_CLIP_01_VIDEO
 → tiếp tục cho đến hết timeline.
 
-Ví dụ với ID thực tế:
-
-- SHOT_01_CLIP_01_START
-- SHOT_01_CLIP_01_END
-- SHOT_01_CLIP_01_VIDEO
-- SHOT_01_CLIP_02_END
-- SHOT_01_CLIP_02_VIDEO
-- SHOT_01_CLIP_03_END
-- SHOT_01_CLIP_03_VIDEO
-- SHOT_02_CLIP_01_START
-- SHOT_02_CLIP_01_END
-- SHOT_02_CLIP_01_VIDEO
-- SHOT_02_CLIP_02_END
-- SHOT_02_CLIP_02_VIDEO
-
 Không được:
-
-- nhóm toàn bộ SCENE_SETTING_START, SCENE_SETTING_END hoặc VIDEO thành các block riêng theo type;
-- xuất VIDEO trước END tương ứng;
-- xuất item của run sau khi run hiện tại chưa hoàn tất;
-- sắp xếp lại toàn bộ array theo alphabet của id hoặc theo type;
-- tạo hoặc xuất SCENE_SETTING_START cho clip thứ hai trở đi trong cùng continuity run.
-
-Nếu bất kỳ quy tắc nào ở phần khác có thể được hiểu theo một thứ tự khác, mục 5 này là quy tắc ưu tiên cuối cùng về thứ tự vật lý của item trong root array.
-
+- xen CHARACTER hoặc LOCATION vào giữa block VIDEO;
+- nhóm/sắp xếp VIDEO theo nhân vật, location hoặc alphabet;
+- xuất clip sau trước clip trước;
+- tạo bất kỳ item nào ngoài CHARACTER, LOCATION và VIDEO.
 
 6. QUY TẮC THAM CHIẾU
 
-- Mọi ref.id phải trỏ đến một item tồn tại trong cùng file.
-- Theo mặc định, ref.type phải trùng type của item được tham chiếu.
-- Ngoại lệ alias type bắt buộc: khi END_N-1 được dùng làm first-frame boundary cho clip N từ 2 trở đi, giữ id của END_N-1 nhưng đặt ref.type = SCENE_SETTING_START.
-- CHARACTER và LOCATION không tham chiếu item khác.
-- Mỗi VIDEO có đúng hai temporal boundary refs.
-- VIDEO của clip đầu dùng START_01 → END_01.
-- VIDEO_N từ clip 2 trở đi dùng END_N-1 (alias SCENE_SETTING_START) → END_N.
-- END của clip đầu continuity run phải tham chiếu START của chính clip đó ở ref[0], type SCENE_SETTING_START.
-- END_N từ clip 2 trở đi phải dùng ref[0].id = END_N-1 và ref[0].type = SCENE_SETTING_START.
-- START_01 không tham chiếu temporal boundary trước đó; chỉ tham chiếu cast thực sự xuất hiện và LOCATION.
-- Không có START_N với N từ 2 trở đi.
-- Không broken chain, missing boundary, circular reference hoặc nhảy qua clip.
-
+- CHARACTER và LOCATION luôn có ref = [].
+- VIDEO.ref chỉ chứa đúng các CHARACTER và LOCATION tương ứng thực sự xuất hiện trong video.
+- Mỗi phần tử ref có đúng hai field: id và type.
+- ref.type chỉ được là CHARACTER hoặc LOCATION và phải trùng type của item được tham chiếu.
+- Mọi ref.id phải tồn tại trong cùng file.
+- Không duplicated ref trong cùng một VIDEO.
+- Không broken reference, circular reference hoặc forward reference tới asset không tồn tại.
+- Mọi CHARACTER trong VIDEO.ref phải thực sự nhìn thấy trong clip.
+- LOCATION trong VIDEO.ref phải là bối cảnh thực tế nhìn thấy của clip.
+- Không thêm asset “để dự phòng”, không thêm toàn bộ cast, không thêm location chỉ được nhắc tới.
+- Nếu cùng một clip diễn ra qua nhiều khu vực nhưng vẫn là một chuyển động liên tục, chỉ ref các LOCATION asset thực sự nhìn thấy. Nếu có scene change rõ ràng, phải tách thành VIDEO khác.
 
 7. QUY TẮC FIELD PROMPT
 
 - CHARACTER: chỉ Character Prompt.
 - LOCATION: chỉ Location Prompt.
-- SCENE_SETTING_START: chỉ START FRAME prompt của clip đầu continuity run.
-- SCENE_SETTING_END: chỉ END FRAME prompt.
-- VIDEO: chỉ Video Prompt dùng trực tiếp để gen video từ first-frame boundary đến END hiện tại.
+- VIDEO: chỉ Video Prompt dùng trực tiếp để gen video.
 - Không ghép nhiều loại prompt vào cùng một field.
-- Không đặt Character Bible, Location Bible, metadata phân tích, tiêu đề hoặc lời giải thích ngoài prompt chuyên dụng của item.
-
-Đối với clip N từ 2 trở đi:
-
-- Không tạo START prompt hoặc SCENE_SETTING_START item mới.
-- END prompt phải bắt đầu bằng “END FRAME cinematic still for the exact [duration]-second [ordinal] chunk, continuing directly from the previous END boundary...”, hoặc câu tương đương có cùng ý nghĩa bắt buộc.
-- VIDEO prompt phải bắt đầu bằng “Generate exactly [duration] seconds as a direct continuation from the exact previous END boundary toward the supplied current END boundary...”, hoặc câu tương đương có cùng ý nghĩa bắt buộc.
-- END và VIDEO prompt phải bảo toàn identity, position, pose, gaze, prop state, camera framing, lens behavior, lighting, environment và motion phase thực tế từ END_N-1, ngoại trừ delta được PHẦN 1 cho phép.
-- Prompt không được yêu cầu image generator tạo lại first frame.
-
+- Không tạo prompt riêng cho START FRAME hoặc END FRAME.
+- Không đưa JSON metadata hoặc lời giải thích về schema vào prompt.
+- Các thông tin quan trọng như hành động, nhân vật, bối cảnh, camera, lens, ánh sáng, motion, continuity và cinematic style phải được diễn đạt tự nhiên ngay trong VIDEO prompt.
+- Nếu clip tiếp nối clip trước, mô tả continuity bằng ngôn ngữ nội dung cụ thể, không dùng ID/boundary giả làm asset tham chiếu.
+- Duration được viết trong VIDEO prompt phải khớp chính xác field duration của item đó.
 
 8. KIỂM TRA BẮT BUỘC TRƯỚC KHI LƯU
 
 - Root là array JSON hợp lệ.
-- Thứ tự vật lý của root array đúng tuyệt đối: toàn bộ CHARACTER → toàn bộ LOCATION → từng continuity run theo timeline.
-- Mỗi run là một block liên tục, không bị xen item của run khác.
-- Trong mỗi run, ba item đầu đúng thứ tự START_01 → END_01 → VIDEO_01; sau đó mỗi clip N từ 2 trở đi là cặp liền kề END_N → VIDEO_N theo N tăng dần.
-- Không nhóm boundary hoặc VIDEO theo type và không sắp xếp lại array theo alphabet của id.
-- Không duplicated ID.
+- Thứ tự vật lý đúng tuyệt đối: toàn bộ CHARACTER → toàn bộ LOCATION → toàn bộ VIDEO theo timeline.
 - Mỗi item có đúng 5 field: id, type, ref, prompt, duration.
-- Không có field success hoặc field bổ sung nào khác.
-- type chỉ thuộc enum đã cho.
+- Không có field success hoặc field bổ sung.
+- type chỉ thuộc enum CHARACTER | LOCATION | VIDEO.
+- Không có type, id hoặc ref nào tạo SCENE_SETTING_START, SCENE_SETTING_END, START FRAME item, END FRAME item hoặc temporal boundary item.
+- Không duplicated ID.
 - ref luôn là array; mỗi phần tử ref chỉ có id và type.
-- Mọi ref.id đều tồn tại.
-- Mọi ref.type đều đúng type của item được tham chiếu, ngoại trừ alias bắt buộc khi END_N-1 được dùng làm first-frame boundary của clip N: id trỏ tới END_N-1 nhưng ref.type phải là SCENE_SETTING_START.
 - CHARACTER và LOCATION có ref = [] và duration = 0.
-- SCENE_SETTING_START và SCENE_SETTING_END có duration = 0.
-- Mỗi VIDEO có duration là số giây hợp lệ theo cấu hình ở PHẦN 1.
-- Mỗi continuity run có đúng một SCENE_SETTING_START tại clip đầu.
-- Không tồn tại SCENE_SETTING_START cho clip N từ 2 trở đi.
-- Mỗi VIDEO có đúng một first-frame boundary ref và một END boundary ref, TỔNG CỘNG ĐÚNG 2 phần tử trong ref — kiểm tra lại KHÔNG có VIDEO nào bị lẫn thêm CHARACTER hoặc LOCATION vào ref (lỗi hay gặp: thêm ref tới nhân vật/bối cảnh xuất hiện trong clip). Nếu phát hiện, xoá các ref CHARACTER/LOCATION đó khỏi VIDEO trước khi lưu file — chỉ giữ đúng 2 boundary.
-- VIDEO của clip đầu ref đúng thứ tự START_01 → END_01.
-- VIDEO_N từ clip 2 trở đi ref đúng thứ tự END_N-1 với alias SCENE_SETTING_START → END_N.
-- END của clip đầu run ref START của chính clip đó ở vị trí đầu tiên, type SCENE_SETTING_START.
-- END_N từ clip 2 trở đi có ref[0].id = END_N-1 và ref[0].type = SCENE_SETTING_START.
-- START_01 của mỗi run tham chiếu đúng cast + LOCATION và không có temporal predecessor.
-- First frame của clip N từ 2 trở đi không được image-generate; phải dùng exact extracted last stable frame của VIDEO_N-1.
-- Cast và LOCATION của boundary frames khớp hành động.
-- Duration viết trong START_01, END và VIDEO prompt khớp field duration của VIDEO tương ứng.
-- Camera, lens, ánh sáng, weather, costume, identity, prop count và ownership không tự thay đổi ngoài delta được PHẦN 1 cho phép.
-- END_N đạt được tự nhiên từ first-frame boundary trong duration.
-- VIDEO_N từ clip 2 trở đi kế thừa chính xác ACTUAL END_N-1, không dựa trên planned end state.
-- Motion và camera movement được handoff đúng giữa các VIDEO cùng run.
-- Mỗi VIDEO prompt (KHÔNG NGOẠI LỆ, kể cả clip N từ 2 trở đi) đã nêu đủ 6 mục bắt buộc: (1) mô tả hành động cụ thể RIÊNG của chính clip đó (không phải câu chung chung), (2) camera/lens/kiểu chuyển động cụ thể phù hợp với hành động đó, (3) lighting/thời điểm trong ngày cụ thể, (4) câu "The opening frame must match START exactly and the final stable frame must match END exactly.", (5) danh sách continuity (identity, costume, location layout, prop state, time, weather, lighting direction, camera continuity, physics), (6) câu cấm "No jump cuts, no hidden scene change, no extra events, no modern elements." — nếu thiếu mục nào, PHẢI bổ sung trước khi lưu file, không được rút gọn vì lý do trả lời ngắn gọn hơn.
-- So sánh chéo TOÀN BỘ VIDEO prompt với nhau: không có 2 prompt nào giống hệt hoặc gần giống nhau (chỉ khác mỗi id) — mỗi prompt phải phản ánh đúng hành động RIÊNG của clip đó. Nếu phát hiện trùng lặp, PHẢI viết lại prompt bị trùng trước khi lưu file.
-- So sánh chéo TOÀN BỘ SCENE_SETTING_START prompt với nhau, và riêng TOÀN BỘ SCENE_SETTING_END prompt với nhau: không có 2 prompt cùng type nào giống hệt hoặc gần giống nhau (chỉ khác mỗi id) — mỗi START phải phản ánh đúng khoảnh khắc mở đầu RIÊNG của run đó, mỗi END phải phản ánh đúng delta RIÊNG của clip đó. Nếu phát hiện trùng lặp, PHẢI viết lại prompt bị trùng trước khi lưu file.
-- Nếu có V VIDEO được chia thành R continuity run thì:
-  - Số SCENE_SETTING_START = R.
-  - Số SCENE_SETTING_END = V.
-  - Tổng số boundary items = R + V.
-- Đếm và ghi nhớ tổng CHARACTER, LOCATION, VIDEO để báo cáo sau khi tạo file.
-- ĐỘ BAO PHỦ: đối chiếu lại toàn bộ timeline gốc của kịch bản theo đúng thứ tự, xác nhận MỌI sự kiện/hành động chính trong kịch bản đều đã có ít nhất một continuity run/clip tương ứng, từ sự kiện đầu tiên đến sự kiện cuối cùng — không được coi là hoàn thành/serialize file khi kịch bản còn đoạn nào chưa được chuyển thành clip.
-
+- VIDEO có duration hợp lệ theo cấu hình ở PHẦN trên.
+- Mọi VIDEO.ref chỉ gồm CHARACTER và LOCATION thực sự xuất hiện trong chính clip, theo thứ tự CHARACTER trước rồi LOCATION.
+- Không VIDEO nào tham chiếu VIDEO khác hoặc item ngoài CHARACTER/LOCATION.
+- Mọi ref.id tồn tại và ref.type trùng type thực của item được tham chiếu.
+- Cast và LOCATION trong ref khớp chính xác nội dung prompt của VIDEO.
+- Không thiếu CHARACTER đang hiện diện; không thừa nhân vật chỉ được nhắc tới hoặc ngoài khung hình.
+- Không thiếu LOCATION thực tế; không thừa location không nhìn thấy.
+- Camera, lens, ánh sáng, weather, costume, identity, prop count/ownership và screen direction không tự thay đổi ngoài diễn biến cho phép.
+- Hành động đạt được tự nhiên trong duration.
+- Clip nối tiếp kế thừa hợp lý trạng thái thực tế được mô tả ở cuối clip trước.
+- Mỗi VIDEO prompt có đủ 7 mục bắt buộc tại phần 4.
+- So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có hành động và camera riêng phù hợp timeline.
+- So sánh chéo toàn bộ CHARACTER prompt và LOCATION prompt: không trùng lặp sai nhận diện hoặc mâu thuẫn thuộc tính.
+- ĐỘ BAO PHỦ: đối chiếu toàn bộ timeline gốc theo đúng thứ tự; mọi sự kiện/hành động chính từ đầu đến cuối phải có ít nhất một VIDEO tương ứng.
+- Đếm tổng CHARACTER, LOCATION và VIDEO để báo cáo sau khi tạo file.
 
 9. NGUYÊN TẮC ỔN ĐỊNH
 
-Khi người dùng đổi kịch bản, duration, quy tắc chia clip, cách nhóm continuity run, phong cách hình ảnh hoặc cách quay:
+Khi người dùng đổi kịch bản, duration, cách chia clip, cách nhóm continuity run, phong cách hình ảnh hoặc cách quay:
 
-- không sửa phần này.
 - Không sửa schema, field, enum, quy tắc ref, quy tắc thứ tự, validation hoặc cách bàn giao trong PHẦN này.
-- PHẦN trên mới quyết định có bao nhiêu nhân vật, location, run và video; PHẦN này chỉ đóng gói kết quả đó thành JSON đúng chuẩn.
+- PHẦN trên quyết định số lượng nhân vật, location, shot, clip và VIDEO; PHẦN này chỉ đóng gói kết quả thành JSON đúng chuẩn.
 
 Nguyên tắc tuyệt đối:
 
-END CỦA CLIP TRƯỚC PHẢI TRỞ THÀNH NGUỒN TRỰC TIẾP VÀ FIRST-FRAME BOUNDARY CỦA VIDEO CLIP SAU.
-KHÔNG TẠO ITEM SCENE_SETTING_START TỪ CLIP THỨ HAI TRỞ ĐI TRONG CÙNG CONTINUITY RUN.
-VIDEO ĐẦU MỖI RUN THAM CHIẾU START_01 VÀ END_01; MỌI VIDEO SAU THAM CHIẾU END CỦA CLIP TRƯỚC VÀ END CỦA CHÍNH NÓ.
-PHẦN QUAN TRỌNG: CHỈ KHI PHÂN TÍCH TOÀN BỘ KỊCH BẢN VÀ GHI RA FILE XONG THÌ MỚI GỬI FILE JSON VÀ THÔNG BÁO HOÀN THÀNH. Nếu chưa xử lý xong thì coi như chưa phản hồi xong — kể cả khi đã trả lời kiểu "tôi sẽ tiếp tục xử lý và gửi file sau", "sẽ gửi file khi hoàn tất", "JSON quá dài nên sẽ xuất riêng thành file" hoặc bất kỳ câu tương đương nào KHÔNG kèm file JSON đầy đủ thật sự đính kèm ngay trong tin nhắn đó, vẫn phải coi là CHƯA HOÀN THÀNH. JSON dài KHÔNG phải lý do để dừng lại/rút gọn/bỏ bớt item — phải tiếp tục xử lý ngay, mất bao nhiêu lượt cũng được, miễn ghi vào ĐÚNG CÙNG 1 file cho tới khi đầy đủ, không được dừng lại chờ được hỏi tiếp mới làm nốt.
+JSON CHỈ CÓ BA TYPE: CHARACTER, LOCATION VÀ VIDEO.
+VIDEO.ref CHỈ THAM CHIẾU CHARACTER VÀ LOCATION THỰC SỰ XUẤT HIỆN TRONG CHÍNH VIDEO ĐÓ.
+KHÔNG TẠO HOẶC THAM CHIẾU SCENE_SETTING, START FRAME, END FRAME HAY TEMPORAL BOUNDARY ITEM.
+CONTINUITY GIỮA CÁC CLIP ĐƯỢC MÔ TẢ TRỰC TIẾP TRONG VIDEO PROMPT, KHÔNG ĐƯỢC BIỂU DIỄN BẰNG ITEM TRUNG GIAN.
+CHỈ THÔNG BÁO “Đã hoàn thành” KHI FILE “_full.json” ĐÃ ĐƯỢC TẠO ĐẦY ĐỦ VÀ ĐÍNH KÈM TRONG CHÍNH LƯỢT TRẢ LỜI.

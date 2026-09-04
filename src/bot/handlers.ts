@@ -18,8 +18,10 @@ import {
 import { config } from "../config";
 import {
   confirmImageGeneration,
+  confirmImageGenerationPollo,
   confirmSceneGeneration,
   confirmVideoGeneration,
+  confirmVideoGenerationPollo,
   continueFailedStoryboardImages,
   continueFailedStoryboardVideo,
   enqueueJob,
@@ -1516,6 +1518,25 @@ export function registerHandlers(bot: Telegraf): void {
       .catch(() => {});
   });
 
+  // GIỐNG confirmImages HỆT nhưng đẩy job dùng pollo.ai (xem
+  // confirmImageGenerationPollo/StoryboardImagesPolloJob trong queue.ts) —
+  // nút song song "Tạo ảnh" gửi cùng lúc với "Tạo ảnh (AIVideo)".
+  bot.action(/^confirmImagesPollo:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmImageGenerationPollo(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo ảnh.");
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo ảnh.")
+      .catch(() => {});
+  });
+
   // Nút "Tạo ảnh scene" trong tin nhắn xác nhận sau khi ảnh CHARACTER/LOCATION
   // đã tạo xong (xem notifyStoryboardImagesAIVideoResult/createSceneConfirmation
   // trong queue.ts) — callback_data dạng "confirmScene:<id>", tra lại
@@ -1544,6 +1565,27 @@ export function registerHandlers(bot: Telegraf): void {
     if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     const confirmId = ctx.match[1];
     const ok = confirmVideoGeneration(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo video.");
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo video.")
+      .catch(() => {});
+  });
+
+  // GIỐNG confirmVideo HỆT nhưng đẩy job dùng pollo.ai (xem
+  // confirmVideoGenerationPollo/StoryboardVideoPolloJob trong queue.ts) — nút
+  // "Tạo video (Pollo)" được gửi NGAY sau khi ảnh CHARACTER/LOCATION xong
+  // (processPolloImageQueue) — pipeline Pollo BỎ HẲN bước "Tạo ảnh scene",
+  // khác với AIVideo (video thường tạo qua auto-push per-clip sau bước scene).
+  bot.action(/^confirmVideoPollo:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmVideoGenerationPollo(confirmId);
     if (!ok) {
       await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
         show_alert: true,

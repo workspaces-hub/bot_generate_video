@@ -12,8 +12,10 @@ import {
   ensureGeneratedFolder,
   generatedDirFor,
   generateReferenceImagesForFileViaAIVideo,
+  generateReferenceImagesForFileViaPollo,
   generateSceneImagesForFileViaAIVideo,
   generateVideosForFile,
+  generateVideosForFilePollo,
   loadPersistedStopStoryboardRequests,
   requestStopStoryboardPipeline,
   sleep,
@@ -134,6 +136,47 @@ export interface StoryboardSceneImagesAIVideoJob extends BaseJob {
 }
 
 /**
+ * 2 job "clone" của StoryboardImagesAIVideoJob/StoryboardVideoJob — GIỐNG HỆT
+ * cấu trúc (cùng field, cùng ý nghĩa), CHỈ KHÁC provider gen (pollo.ai thay
+ * vì AIVideo/hailuoai.video, xem generateReferenceImagesForFileViaPollo/
+ * generateVideosForFilePollo trong storyboardPipeline.ts).
+ *
+ * KHÁC AIVideo Ở 1 ĐIỂM QUAN TRỌNG (theo yêu cầu người dùng): pipeline Pollo
+ * BỎ HẲN bước "Tạo ảnh scene" (không còn StoryboardScenePolloJob/
+ * generateSceneImagesForFileViaPollo) — sau khi "Tạo ảnh" (CHARACTER/
+ * LOCATION) xong, đi THẲNG sang xác nhận "Tạo video" (xem
+ * processPolloImageQueue), video chỉ dùng ref CHARACTER/LOCATION (xem
+ * generateVideosForFilePollo).
+ *
+ * Theo yêu cầu người dùng: ở bước xác nhận "Tạo ảnh", user thấy SONG SONG 2
+ * nút bấm (AIVideo/Pollo) và tự chọn provider — có thể trộn (vd ảnh dùng
+ * AIVideo, video dùng Pollo). Theo yêu cầu người dùng (KHÔNG sửa function
+ * cũ), 2 nút này đến từ 2 LƯỢT SEND MESSAGE riêng biệt của 2 hàm hoàn toàn
+ * tách biệt — runStoryboardPipeline (AIVideo, GIỮ NGUYÊN không đổi) +
+ * runStoryboardPipelinePollo (clone mới, gửi tin nhắn "Tạo ảnh (Pollo)"
+ * riêng) — KHÔNG phải 1 tin nhắn gộp 2 nút chia sẻ 1 confirmId — xem
+ * confirmImageGenerationPollo bên dưới.
+ *
+ * CHƯA có nút "Tiếp tục..." (retry job lỗi) riêng cho Pollo — 2 nút
+ * CONTINUE_VIDEO_BUTTON_LABEL/CONTINUE_SCENE_FRAME_BUTTON_LABEL hiện tại chỉ
+ * retry lại job AIVideo, ngoài phạm vi yêu cầu ban đầu (chỉ xin clone bước xác
+ * nhận, không xin clone luồng retry).
+ */
+export interface StoryboardImagesPolloJob extends BaseJob {
+  type: "storyboardImagesPollo";
+  /** Path file JSON storyboard — truyền cho generateReferenceImagesForFileViaPollo. */
+  jsonPath: string;
+}
+
+export interface StoryboardVideoPolloJob extends BaseJob {
+  type: "storyboardVideoPollo";
+  /** Path file JSON storyboard (ảnh CHARACTER/LOCATION phải đã xong — KHÔNG cần SCENE_SETTING) — truyền cho generateVideosForFilePollo. */
+  jsonPath: string;
+  /** Cùng ý nghĩa với StoryboardVideoJob.entryIds — không truyền = xử lý hết entry VIDEO chưa "success", có truyền = chỉ (các) entry này. */
+  entryIds?: string[];
+}
+
+/**
  * Hàng đợi ẢNH gen bằng AIVideo (hailuoai.video) — RIÊNG với hàng đợi VIDEO
  * (AIVideoJob bên dưới), mỗi hàng đợi 1 browser tab/context xử lý tuần tự
  * độc lập với nhau (2 tab có thể mở đồng thời trên CÙNG tài khoản — chấp
@@ -148,7 +191,20 @@ type AIImageJob =
 /** Hàng đợi VIDEO gen bằng AIVideo (hailuoai.video) — xem chú thích AIImageJob ở trên. */
 type AIVideoJob = VideoGenerationJob | StoryboardVideoJob;
 
-export type GenerationJob = AIImageJob | AIVideoJob | ChatAIJob;
+/**
+ * Hàng đợi ẢNH/VIDEO gen bằng pollo.ai — TÁCH RIÊNG hẳn khỏi AIImageJob/
+ * AIVideoJob (browser context/session hoàn toàn khác, xem polloBrowser.ts),
+ * chạy song song độc lập, không phải chờ hàng đợi AIVideo xử lý xong.
+ */
+type PolloImageJob = StoryboardImagesPolloJob;
+type PolloVideoJob = StoryboardVideoPolloJob;
+
+export type GenerationJob =
+  | AIImageJob
+  | AIVideoJob
+  | ChatAIJob
+  | PolloImageJob
+  | PolloVideoJob;
 
 const IMAGE_QUEUE_FILE = path.resolve("./storage/image-queue.json");
 const VIDEO_QUEUE_FILE = path.resolve("./storage/video-queue.json");
@@ -165,6 +221,17 @@ const PENDING_SCENE_CONFIRMATIONS_FILE = path.resolve(
 const FAILED_STORYBOARD_JOBS_FILE = path.resolve(
   "./storage/failed-storyboard-jobs.json",
 );
+const PENDING_VIDEO_CONFIRMATIONS_POLLO_FILE = path.resolve(
+  "./storage/pending-video-confirmations-pollo.json",
+);
+const PENDING_IMAGE_CONFIRMATIONS_POLLO_FILE = path.resolve(
+  "./storage/pending-image-confirmations-pollo.json",
+);
+const FAILED_STORYBOARD_JOBS_POLLO_FILE = path.resolve(
+  "./storage/failed-storyboard-jobs-pollo.json",
+);
+const POLLO_IMAGE_QUEUE_FILE = path.resolve("./storage/pollo-image-queue.json");
+const POLLO_VIDEO_QUEUE_FILE = path.resolve("./storage/pollo-video-queue.json");
 
 // Chỉ dữ liệu thuần (không callback/ctx) nên ghi được ra file — sống sót
 // qua restart/crash. Job vẫn nằm trong mảng (và trong file) SUỐT lúc xử lý,
@@ -194,13 +261,29 @@ let videoProcessing = false;
 let currentVideoJob: AIVideoJob | null = null;
 const chatAIJobs: ChatAIJob[] = [];
 let chatAIProcessing = false;
+
+/**
+ * 2 hàng đợi ẢNH/VIDEO gen bằng pollo.ai — TÁCH RIÊNG hẳn khỏi imageJobs/
+ * videoJobs (xem chú thích PolloImageJob/PolloVideoJob), cùng cơ chế
+ * persist-ra-file/resume-sau-restart với các hàng đợi AIVideo ở trên.
+ * currentPolloVideoJob cùng lý do với currentVideoJob (hàng đợi video Pollo
+ * cũng dùng cơ chế quét job sẵn sàng, xem processPolloVideoQueue).
+ */
+const polloImageJobs: PolloImageJob[] = [];
+let polloImageProcessing = false;
+const polloVideoJobs: PolloVideoJob[] = [];
+let polloVideoProcessing = false;
+let currentPolloVideoJob: PolloVideoJob | null = null;
 let telegram: Telegram | null = null;
 
-/** 3 loại job storyboard có thể lỗi/cần retry riêng — xem failedStoryboardJobs. */
+/** 3 loại job storyboard AIVideo có thể lỗi/cần retry riêng — xem failedStoryboardJobs. */
 type FailableStoryboardJob =
   | StoryboardVideoJob
   | StoryboardImagesAIVideoJob
   | StoryboardSceneImagesAIVideoJob;
+
+/** GIỐNG FailableStoryboardJob HỆT nhưng 2 loại job Pollo — xem failedStoryboardJobsPollo (mảng RIÊNG, không dùng chung failedStoryboardJobs). */
+type FailableStoryboardJobPollo = StoryboardVideoPolloJob | StoryboardImagesPolloJob;
 
 /**
  * Lưu lại job "storyboardVideo"/"storyboardImagesAIVideo"/
@@ -261,6 +344,65 @@ function recordFailedStoryboardJob(job: FailableStoryboardJob): void {
   if (failedStoryboardJobs.includes(job)) return;
   failedStoryboardJobs.push(job);
   persistFailedStoryboardJobs();
+}
+
+/**
+ * GIỐNG failedStoryboardJobs/getFailedStoryboardJobs/
+ * loadPersistedFailedStoryboardJobs/persistFailedStoryboardJobs/
+ * recordFailedStoryboardJob HỆT nhưng mảng/file RIÊNG cho job Pollo — tránh
+ * lẫn lộn với failedStoryboardJobs (AIVideo), đặc biệt tránh bug tiềm ẩn nếu
+ * sau này có nút "Tiếp tục..." cho Pollo: continueFailedStoryboardJob tra
+ * theo jsonPath KHÔNG lọc type triệt để, nếu dùng chung 1 mảng có thể vô tình
+ * nhặt nhầm job Pollo rồi ép type thành AIVideo (hoặc ngược lại).
+ */
+const failedStoryboardJobsPollo: FailableStoryboardJobPollo[] = [];
+
+export function getFailedStoryboardJobsPollo(): FailableStoryboardJobPollo[] {
+  return failedStoryboardJobsPollo;
+}
+
+function loadPersistedFailedStoryboardJobsPollo(): void {
+  try {
+    if (!fs.existsSync(FAILED_STORYBOARD_JOBS_POLLO_FILE)) return;
+    const restored: FailableStoryboardJobPollo[] = JSON.parse(
+      fs.readFileSync(FAILED_STORYBOARD_JOBS_POLLO_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      failedStoryboardJobsPollo.push(...restored);
+      console.log(
+        `[queue] Khôi phục ${restored.length} job storyboard (Pollo) lỗi từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[queue] Không đọc được file job storyboard (Pollo) lỗi đã lưu, bỏ qua:",
+      err,
+    );
+  }
+}
+
+function persistFailedStoryboardJobsPollo(): void {
+  try {
+    fs.mkdirSync(path.dirname(FAILED_STORYBOARD_JOBS_POLLO_FILE), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      FAILED_STORYBOARD_JOBS_POLLO_FILE,
+      JSON.stringify(failedStoryboardJobsPollo, null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error(
+      "[queue] Không ghi được file job storyboard (Pollo) lỗi:",
+      err,
+    );
+  }
+}
+
+function recordFailedStoryboardJobPollo(job: FailableStoryboardJobPollo): void {
+  if (failedStoryboardJobsPollo.includes(job)) return;
+  failedStoryboardJobsPollo.push(job);
+  persistFailedStoryboardJobsPollo();
 }
 
 /**
@@ -330,14 +472,21 @@ export function initQueue(botTelegram: Telegram): void {
   loadPersistedImageJobs();
   loadPersistedVideoJobs();
   loadPersistedChatAIJobs();
+  loadPersistedPolloImageJobs();
+  loadPersistedPolloVideoJobs();
   loadPersistedPendingVideoConfirmations();
   loadPersistedPendingImageConfirmations();
   loadPersistedPendingSceneConfirmations();
+  loadPersistedPendingVideoConfirmationsPollo();
+  loadPersistedPendingImageConfirmationsPollo();
   loadPersistedFailedStoryboardJobs();
+  loadPersistedFailedStoryboardJobsPollo();
   loadPersistedStopStoryboardRequests();
   void processImageQueue();
   void processVideoQueue();
   void processChatAIQueue();
+  void processPolloImageQueue();
+  void processPolloVideoQueue();
 }
 
 function loadPersistedImageJobs(): void {
@@ -403,6 +552,72 @@ function persistVideoJobs(): void {
     );
   } catch (err) {
     console.error("[queue] Không ghi được file hàng đợi video:", err);
+  }
+}
+
+function loadPersistedPolloImageJobs(): void {
+  try {
+    if (!fs.existsSync(POLLO_IMAGE_QUEUE_FILE)) return;
+    const restored: PolloImageJob[] = JSON.parse(
+      fs.readFileSync(POLLO_IMAGE_QUEUE_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      polloImageJobs.push(...restored);
+      console.log(
+        `[queue] Khôi phục ${restored.length} job ảnh Pollo còn dang dở từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[queue] Không đọc được file hàng đợi ảnh Pollo đã lưu, bỏ qua:",
+      err,
+    );
+  }
+}
+
+function persistPolloImageJobs(): void {
+  try {
+    fs.mkdirSync(path.dirname(POLLO_IMAGE_QUEUE_FILE), { recursive: true });
+    fs.writeFileSync(
+      POLLO_IMAGE_QUEUE_FILE,
+      JSON.stringify(polloImageJobs, null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error("[queue] Không ghi được file hàng đợi ảnh Pollo:", err);
+  }
+}
+
+function loadPersistedPolloVideoJobs(): void {
+  try {
+    if (!fs.existsSync(POLLO_VIDEO_QUEUE_FILE)) return;
+    const restored: PolloVideoJob[] = JSON.parse(
+      fs.readFileSync(POLLO_VIDEO_QUEUE_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      polloVideoJobs.push(...restored);
+      console.log(
+        `[queue] Khôi phục ${restored.length} job video Pollo còn dang dở từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[queue] Không đọc được file hàng đợi video Pollo đã lưu, bỏ qua:",
+      err,
+    );
+  }
+}
+
+function persistPolloVideoJobs(): void {
+  try {
+    fs.mkdirSync(path.dirname(POLLO_VIDEO_QUEUE_FILE), { recursive: true });
+    fs.writeFileSync(
+      POLLO_VIDEO_QUEUE_FILE,
+      JSON.stringify(polloVideoJobs, null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error("[queue] Không ghi được file hàng đợi video Pollo:", err);
   }
 }
 
@@ -483,6 +698,32 @@ export function isStoryboardJobQueued(
 }
 
 /**
+ * GIỐNG isStoryboardJobQueued HỆT (cùng logic resolve path/entryId) nhưng
+ * quét polloImageJobs/polloVideoJobs (2 type Pollo) — hàm RIÊNG, KHÔNG dùng
+ * chung với isStoryboardJobQueued (AIVideo), theo đúng yêu cầu
+ * clone-logic-không-dùng-chung-function-cũ.
+ */
+export function isPolloStoryboardJobQueued(
+  type: "storyboardImagesPollo" | "storyboardVideoPollo",
+  jsonPath: string,
+  entryId?: string,
+): boolean {
+  const resolvedPath = path.resolve(jsonPath);
+  if (type === "storyboardVideoPollo") {
+    return polloVideoJobs.some((job) => {
+      if (job.type !== "storyboardVideoPollo") return false;
+      if (path.resolve(job.jsonPath) !== resolvedPath) return false;
+      if (!entryId) return true;
+      if (!job.entryIds || job.entryIds.length === 0) return true;
+      return job.entryIds.includes(entryId);
+    });
+  }
+  return polloImageJobs.some(
+    (job) => job.type === type && path.resolve(job.jsonPath) === resolvedPath,
+  );
+}
+
+/**
  * Đẩy job vào ĐÚNG hàng đợi theo loại — ảnh, video, ChatAI mỗi loại 1 hàng
  * đợi riêng (xem chú thích AIImageJob/AIVideoJob), chạy độc lập không phải
  * chờ nhau.
@@ -502,6 +743,18 @@ export function enqueueJob(job: GenerationJob): void {
     imageJobs.push(job);
     persistImageJobs();
     void processImageQueue();
+    return;
+  }
+  if (job.type === "storyboardImagesPollo") {
+    polloImageJobs.push(job);
+    persistPolloImageJobs();
+    void processPolloImageQueue();
+    return;
+  }
+  if (job.type === "storyboardVideoPollo") {
+    polloVideoJobs.push(job);
+    persistPolloVideoJobs();
+    void processPolloVideoQueue();
     return;
   }
   videoJobs.push(job);
@@ -569,6 +822,19 @@ export function stopAll(userId: number): StopAllResult {
     requestStopStoryboardPipeline(currentVideoJob.jsonPath);
   }
 
+  // Cùng cơ chế với hàng đợi AIVideo ở trên, áp dụng cho hàng đợi Pollo
+  // (xem chú thích PolloImageJob/PolloVideoJob) — job storyboard đang xử lý
+  // dở CỦA ĐÚNG user thì báo dừng sớm, không đụng job của user khác.
+  const currentPolloImageJob = polloImageProcessing
+    ? polloImageJobs[0]
+    : undefined;
+  if (currentPolloImageJob && currentPolloImageJob.userId === userId) {
+    requestStopStoryboardPipeline(currentPolloImageJob.jsonPath);
+  }
+  if (currentPolloVideoJob && currentPolloVideoJob.userId === userId) {
+    requestStopStoryboardPipeline(currentPolloVideoJob.jsonPath);
+  }
+
   const cancelledChatAIJobs: ChatAIJob[] = [];
   const chatAIStartIndex = chatAIProcessing ? 1 : 0;
   for (let i = chatAIJobs.length - 1; i >= chatAIStartIndex; i--) {
@@ -579,7 +845,12 @@ export function stopAll(userId: number): StopAllResult {
   }
   if (cancelledChatAIJobs.length > 0) persistChatAIJobs();
 
-  const cancelledOtherJobs: (AIImageJob | AIVideoJob)[] = [];
+  const cancelledOtherJobs: (
+    | AIImageJob
+    | AIVideoJob
+    | PolloImageJob
+    | PolloVideoJob
+  )[] = [];
 
   const imageStartIndex = imageProcessing ? 1 : 0;
   for (let i = imageJobs.length - 1; i >= imageStartIndex; i--) {
@@ -608,6 +879,26 @@ export function stopAll(userId: number): StopAllResult {
     }
   }
   persistVideoJobs();
+
+  const polloImageStartIndex = polloImageProcessing ? 1 : 0;
+  for (let i = polloImageJobs.length - 1; i >= polloImageStartIndex; i--) {
+    const job = polloImageJobs[i];
+    if (job.userId === userId) {
+      cancelledOtherJobs.push(job);
+      polloImageJobs.splice(i, 1);
+    }
+  }
+  persistPolloImageJobs();
+
+  for (let i = polloVideoJobs.length - 1; i >= 0; i--) {
+    const job = polloVideoJobs[i];
+    if (job === currentPolloVideoJob) continue;
+    if (job.userId === userId) {
+      cancelledOtherJobs.push(job);
+      polloVideoJobs.splice(i, 1);
+    }
+  }
+  persistPolloVideoJobs();
 
   for (const job of [...cancelledChatAIJobs, ...cancelledOtherJobs]) {
     void notifyJobCancelled(job);
@@ -722,6 +1013,102 @@ export function confirmVideoGeneration(confirmId: string): boolean {
   return true;
 }
 
+/**
+ * GIỐNG PendingVideoConfirmation/pendingVideoConfirmations/
+ * loadPersistedPendingVideoConfirmations/persistPendingVideoConfirmations/
+ * createVideoConfirmation HỆT nhưng map/file RIÊNG cho Pollo — KHÔNG dùng
+ * chung pendingVideoConfirmations (AIVideo) nữa, theo đúng yêu cầu
+ * clone-logic-không-dùng-chung-function-cũ.
+ */
+const pendingVideoConfirmationsPollo = new Map<
+  string,
+  PendingVideoConfirmation
+>();
+
+function loadPersistedPendingVideoConfirmationsPollo(): void {
+  try {
+    if (!fs.existsSync(PENDING_VIDEO_CONFIRMATIONS_POLLO_FILE)) return;
+    const restored: [string, PendingVideoConfirmation][] = JSON.parse(
+      fs.readFileSync(PENDING_VIDEO_CONFIRMATIONS_POLLO_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      for (const [id, pending] of restored) {
+        pendingVideoConfirmationsPollo.set(id, pending);
+      }
+      console.log(
+        `[queue] Khôi phục ${restored.length} lượt chờ xác nhận "Tạo video (Pollo)" từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[queue] Không đọc được file lượt chờ xác nhận "Tạo video (Pollo)" đã lưu, bỏ qua:',
+      err,
+    );
+  }
+}
+
+function persistPendingVideoConfirmationsPollo(): void {
+  try {
+    fs.mkdirSync(path.dirname(PENDING_VIDEO_CONFIRMATIONS_POLLO_FILE), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      PENDING_VIDEO_CONFIRMATIONS_POLLO_FILE,
+      JSON.stringify(
+        Array.from(pendingVideoConfirmationsPollo.entries()),
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error(
+      '[queue] Không ghi được file lượt chờ xác nhận "Tạo video (Pollo)":',
+      err,
+    );
+  }
+}
+
+/** GIỐNG createVideoConfirmation hệt nhưng ghi vào pendingVideoConfirmationsPollo (map riêng) — dùng cho nút "Tạo video (Pollo)". */
+export function createVideoConfirmationPollo(
+  chatId: number,
+  userId: number,
+  promptMessageId: number,
+  jsonPath: string,
+): string {
+  const confirmId = randomUUID();
+  pendingVideoConfirmationsPollo.set(confirmId, {
+    jsonPath,
+    chatId,
+    userId,
+    promptMessageId,
+  });
+  persistPendingVideoConfirmationsPollo();
+  return confirmId;
+}
+
+/**
+ * GIỐNG confirmVideoGeneration hệt nhưng đẩy job "storyboardVideoPollo" (dùng
+ * pollo.ai) thay vì "storyboardVideo" (AIVideo), đọc từ
+ * pendingVideoConfirmationsPollo (map RIÊNG, KHÔNG dùng chung
+ * pendingVideoConfirmations của AIVideo nữa).
+ */
+export function confirmVideoGenerationPollo(confirmId: string): boolean {
+  const pending = pendingVideoConfirmationsPollo.get(confirmId);
+  if (!pending) return false;
+  pendingVideoConfirmationsPollo.delete(confirmId);
+  persistPendingVideoConfirmationsPollo();
+  enqueueJob({
+    type: "storyboardVideoPollo",
+    chatId: pending.chatId,
+    userId: pending.userId,
+    prompt: "",
+    promptMessageId: pending.promptMessageId,
+    jsonPath: pending.jsonPath,
+  });
+  return true;
+}
+
 interface PendingImageConfirmation {
   jsonPath: string;
   chatId: number;
@@ -804,6 +1191,96 @@ export function confirmImageGeneration(confirmId: string): boolean {
   persistPendingImageConfirmations();
   enqueueJob({
     type: "storyboardImagesAIVideo",
+    chatId: pending.chatId,
+    userId: pending.userId,
+    prompt: "",
+    promptMessageId: pending.promptMessageId,
+    jsonPath: pending.jsonPath,
+  });
+  return true;
+}
+
+/**
+ * GIỐNG PendingImageConfirmation/pendingImageConfirmations/
+ * loadPersistedPendingImageConfirmations/persistPendingImageConfirmations/
+ * createImageConfirmation HỆT nhưng map/file RIÊNG cho Pollo — KHÔNG dùng
+ * chung pendingImageConfirmations (AIVideo) nữa.
+ */
+const pendingImageConfirmationsPollo = new Map<
+  string,
+  PendingImageConfirmation
+>();
+
+function loadPersistedPendingImageConfirmationsPollo(): void {
+  try {
+    if (!fs.existsSync(PENDING_IMAGE_CONFIRMATIONS_POLLO_FILE)) return;
+    const restored: [string, PendingImageConfirmation][] = JSON.parse(
+      fs.readFileSync(PENDING_IMAGE_CONFIRMATIONS_POLLO_FILE, "utf-8"),
+    );
+    if (restored.length > 0) {
+      for (const [id, pending] of restored) {
+        pendingImageConfirmationsPollo.set(id, pending);
+      }
+      console.log(
+        `[queue] Khôi phục ${restored.length} lượt chờ xác nhận "Tạo ảnh (Pollo)" từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[queue] Không đọc được file lượt chờ xác nhận "Tạo ảnh (Pollo)" đã lưu, bỏ qua:',
+      err,
+    );
+  }
+}
+
+function persistPendingImageConfirmationsPollo(): void {
+  try {
+    fs.mkdirSync(path.dirname(PENDING_IMAGE_CONFIRMATIONS_POLLO_FILE), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      PENDING_IMAGE_CONFIRMATIONS_POLLO_FILE,
+      JSON.stringify(
+        Array.from(pendingImageConfirmationsPollo.entries()),
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error(
+      '[queue] Không ghi được file lượt chờ xác nhận "Tạo ảnh (Pollo)":',
+      err,
+    );
+  }
+}
+
+/** GIỐNG createImageConfirmation hệt nhưng ghi vào pendingImageConfirmationsPollo (map riêng) — dùng cho nút "Tạo ảnh (Pollo)", xem runStoryboardPipelinePollo. */
+export function createImageConfirmationPollo(
+  chatId: number,
+  userId: number,
+  promptMessageId: number,
+  jsonPath: string,
+): string {
+  const confirmId = randomUUID();
+  pendingImageConfirmationsPollo.set(confirmId, {
+    jsonPath,
+    chatId,
+    userId,
+    promptMessageId,
+  });
+  persistPendingImageConfirmationsPollo();
+  return confirmId;
+}
+
+/** GIỐNG confirmImageGeneration hệt nhưng đẩy job "storyboardImagesPollo" (dùng pollo.ai), đọc từ pendingImageConfirmationsPollo (map RIÊNG, KHÔNG dùng chung pendingImageConfirmations của AIVideo nữa). */
+export function confirmImageGenerationPollo(confirmId: string): boolean {
+  const pending = pendingImageConfirmationsPollo.get(confirmId);
+  if (!pending) return false;
+  pendingImageConfirmationsPollo.delete(confirmId);
+  persistPendingImageConfirmationsPollo();
+  enqueueJob({
+    type: "storyboardImagesPollo",
     chatId: pending.chatId,
     userId: pending.userId,
     prompt: "",
@@ -904,9 +1381,15 @@ export function confirmSceneGeneration(confirmId: string): boolean {
   return true;
 }
 
+
 /** Tổng số job ảnh + video (AIVideo) còn đang chờ/xử lý dở, gộp cả 2 hàng đợi. */
 export function getPendingCount(): number {
   return imageJobs.length + videoJobs.length;
+}
+
+/** Tổng số job ảnh + video (Pollo) còn đang chờ/xử lý dở — TÁCH riêng với getPendingCount() (AIVideo), xem chú thích PolloImageJob/PolloVideoJob. */
+export function getPolloPendingCount(): number {
+  return polloImageJobs.length + polloVideoJobs.length;
 }
 
 export function getChatAIPendingCount(): number {
@@ -1199,6 +1682,103 @@ async function processImageQueue(): Promise<void> {
 }
 
 /**
+ * GIỐNG processImageQueue nhưng xử lý job "storyboardImagesPollo" (dùng
+ * pollo.ai) THAY VÌ "storyboardImagesAIVideo" — hàng đợi RIÊNG
+ * (polloImageJobs), chạy song song độc lập với processImageQueue.
+ *
+ * KHÁC AIVideo Ở 1 ĐIỂM QUAN TRỌNG (theo yêu cầu người dùng): KHÔNG có bước
+ * "Tạo ảnh scene" cho Pollo (đã bỏ hẳn — xem StoryboardImagesPolloJob) — ảnh
+ * CHARACTER/LOCATION xong là gửi THẲNG xác nhận "Tạo video (Pollo)"
+ * (createVideoConfirmationPollo, callback "confirmVideoPollo:<id>" — handler
+ * đã có sẵn trong handlers.ts).
+ */
+async function processPolloImageQueue(): Promise<void> {
+  if (polloImageProcessing || !telegram) return;
+  polloImageProcessing = true;
+  try {
+    while (polloImageJobs.length > 0) {
+      const job = polloImageJobs[0];
+      const jobId = randomUUID();
+      try {
+        const jsonBaseName = path.basename(
+          job.jsonPath,
+          path.extname(job.jsonPath),
+        );
+        const sendImageNow = async (imagePath: string): Promise<void> => {
+          const caption = buildResultCaption(jsonBaseName, imagePath);
+          await sendGeneratedImage(
+            job.chatId,
+            imagePath,
+            caption,
+            job.promptMessageId,
+            `${caption}${path.extname(imagePath)}`,
+          );
+        };
+        const notifyImageError = async (
+          id: string,
+          errorMessage: string,
+        ): Promise<void> => {
+          try {
+            const itemId = buildResultCaption(jsonBaseName, id);
+            const message = itemId + " 404";
+            await notifyAdmins(itemId + ": " + errorMessage);
+            await telegram!.sendMessage(job.chatId, message, {
+              reply_parameters: { message_id: job.promptMessageId },
+            });
+          } catch (err) {}
+        };
+
+        const refResult = await generateReferenceImagesForFileViaPollo(
+          job.jsonPath,
+          sendImageNow,
+          notifyImageError,
+        );
+        const readyForVideo =
+          refResult.failed === 0 && refResult.succeeded > 0;
+
+        if (readyForVideo) {
+          const confirmId = createVideoConfirmationPollo(
+            job.chatId,
+            job.userId,
+            job.promptMessageId,
+            job.jsonPath,
+          );
+          await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
+            reply_parameters: { message_id: job.promptMessageId },
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "Tạo video",
+                    callback_data: `confirmVideoPollo:${confirmId}`,
+                  },
+                ],
+              ],
+            },
+          });
+        }
+
+        if (refResult.failed > 0) {
+          recordFailedStoryboardJobPollo(job);
+        }
+        await notifyStoryboardImagesResultPollo(job, {
+          failedEntries: refResult.failedEntries,
+          readyForNext: readyForVideo,
+        });
+      } catch (err) {
+        await notifyError(job, err);
+      } finally {
+        clearStopStoryboardRequest(job.jsonPath);
+        polloImageJobs.shift();
+        persistPolloImageJobs();
+      }
+    }
+  } finally {
+    polloImageProcessing = false;
+  }
+}
+
+/**
  * Hàng đợi VIDEO (gen bằng AIVideo) — xử lý job "video" thường và
  * "storyboardVideo" (CHỈ generateVideosForFile, xem docstring
  * StoryboardVideoJob). KHÔNG lấy jobs[0] cố định như hàng đợi ảnh — dùng
@@ -1297,6 +1877,70 @@ async function processVideoQueue(): Promise<void> {
   }
 }
 
+/**
+ * GIỐNG processVideoQueue nhưng xử lý job "storyboardVideoPollo" (dùng
+ * generateVideosForFilePollo) — hàng đợi RIÊNG (polloVideoJobs), chạy song
+ * song độc lập với processVideoQueue.
+ *
+ * KHÁC processVideoQueue: FIFO ĐƠN THUẦN (luôn lấy jobs[0], KHÔNG quét tìm
+ * job "sẵn sàng" như findNextReadyVideoJobIndex) — pipeline Pollo không còn
+ * bước "Tạo ảnh scene" nên không có khái niệm "chờ SCENE_SETTING xong" nữa
+ * (xem StoryboardImagesPolloJob): job "storyboardVideoPollo" chỉ được tạo
+ * SAU KHI user đã bấm xác nhận "Tạo video (Pollo)" (tức CHARACTER/LOCATION
+ * đã chắc chắn xong), nên LUÔN sẵn sàng ngay khi tới lượt.
+ */
+async function processPolloVideoQueue(): Promise<void> {
+  if (polloVideoProcessing || !telegram) return;
+  polloVideoProcessing = true;
+  try {
+    while (polloVideoJobs.length > 0) {
+      const job = polloVideoJobs[0];
+      currentPolloVideoJob = job;
+      try {
+        const jsonBaseName = path.basename(
+          job.jsonPath,
+          path.extname(job.jsonPath),
+        );
+        const videoResult = await generateVideosForFilePollo(
+          job.jsonPath,
+          async (videoPath) => {
+            const caption = buildResultCaption(jsonBaseName, videoPath);
+            await sendGeneratedVideo(
+              job.chatId,
+              videoPath,
+              caption,
+              job.promptMessageId,
+              `${caption}${path.extname(videoPath)}`,
+            );
+          },
+          async (id: string, errorMessage: string): Promise<void> => {
+            try {
+              const itemId = buildResultCaption(jsonBaseName, id);
+              const message = itemId + " 404";
+              await notifyAdmins(itemId + ": " + errorMessage);
+              await telegram!.sendMessage(job.chatId, message, {
+                reply_parameters: { message_id: job.promptMessageId },
+              });
+            } catch (err) {}
+          },
+          job.entryIds,
+        );
+
+        await notifyStoryboardVideoResultPollo(job, videoResult);
+      } catch (err) {
+        await notifyError(job, err);
+      } finally {
+        clearStopStoryboardRequest(job.jsonPath);
+        currentPolloVideoJob = null;
+        polloVideoJobs.shift();
+        persistPolloVideoJobs();
+      }
+    }
+  } finally {
+    polloVideoProcessing = false;
+  }
+}
+
 async function processChatAIQueue(): Promise<void> {
   if (chatAIProcessing || !telegram) return;
   chatAIProcessing = true;
@@ -1329,7 +1973,12 @@ async function processChatAIQueue(): Promise<void> {
             );
           });
         }
-        const result = await runStoryboardPipeline(downloadedFiles, job);
+        // const result = await runStoryboardPipeline(downloadedFiles, job);
+        // Gửi THÊM 1 lượt xác nhận riêng cho Pollo (nút "Tạo ảnh (Pollo)") —
+        // xem docstring runStoryboardPipelinePollo. Kết quả của lượt này
+        // KHÔNG dùng cho notifyChatAISuccess (processedJsonCount giống hệt
+        // result ở trên, cùng đếm trên CHÍNH downloadedFiles).
+        const result = await runStoryboardPipelinePollo(downloadedFiles, job);
         await notifyChatAISuccess(job, result);
       } catch (err) {
         await notifyError(job, err);
@@ -1433,6 +2082,64 @@ async function runStoryboardPipeline(
   return { processedJsonCount, confirmPromptsSent };
 }
 
+/**
+ * GIỐNG runStoryboardPipeline HỆT (cùng lọc file .json, cùng
+ * ensureGeneratedFolder, cùng quy ước ChatAIPipelineResult) nhưng gửi nút
+ * "Tạo ảnh (Pollo)" (callback_data "confirmImagesPollo:<id>", xem
+ * confirmImageGenerationPollo) THAY VÌ "Tạo ảnh" (AIVideo) — hàm RIÊNG,
+ * KHÔNG sửa runStoryboardPipeline, theo đúng quy ước clone-theo-provider đã
+ * dùng xuyên suốt (generateReferenceImagesForFileViaPollo, selectDurationIfNeeded,
+ * v.v.) — không gộp chung 1 hàm rồi rẽ nhánh bên trong.
+ *
+ * Gọi RIÊNG (thêm 1 lượt sendMessage nữa) từ processChatAIQueue, SAU
+ * runStoryboardPipeline — kết quả là 2 tin nhắn xác nhận tách biệt cho mỗi
+ * file JSON (1 nút AIVideo, 1 nút Pollo) thay vì gộp 2 nút vào 1 tin nhắn.
+ * Dùng createImageConfirmationPollo (map pendingImageConfirmationsPollo
+ * RIÊNG, KHÔNG chung với pendingImageConfirmations của runStoryboardPipeline)
+ * nên confirmId của 2 hàm là 2 id ĐỘC LẬP — user có thể bấm CẢ 2 nút (cả
+ * AIVideo lẫn Pollo) nếu muốn, không loại trừ lẫn nhau.
+ */
+async function runStoryboardPipelinePollo(
+  downloadedFiles: string[],
+  job: ChatAIJob,
+): Promise<ChatAIPipelineResult> {
+  let processedJsonCount = 0;
+  let confirmPromptsSent = 0;
+
+  for (const filePath of downloadedFiles) {
+    if (path.extname(filePath).toLowerCase() !== ".json") {
+      continue;
+    }
+    processedJsonCount++;
+
+    const generatedDir = await ensureGeneratedFolder(filePath);
+    const generatedFilePath = path.join(generatedDir, path.basename(filePath));
+
+    const confirmId = createImageConfirmationPollo(
+      job.chatId,
+      job.userId,
+      job.promptMessageId,
+      generatedFilePath,
+    );
+    await telegram!.sendMessage(job.chatId, "Xác nhận tạo ảnh", {
+      reply_parameters: { message_id: job.promptMessageId },
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "Tạo ảnh",
+              callback_data: `confirmImagesPollo:${confirmId}`,
+            },
+          ],
+        ],
+      },
+    });
+    confirmPromptsSent++;
+  }
+
+  return { processedJsonCount, confirmPromptsSent };
+}
+
 function formatFailedEntries(entries: FailedEntry[]): string {
   return entries.map((e) => `- [${e.type}] ${e.id}`).join("\n");
 }
@@ -1497,6 +2204,41 @@ async function notifyStoryboardVideoResult(
 }
 
 /**
+ * GIỐNG notifyStoryboardVideoResult HỆT nhưng cho job "storyboardVideoPollo"
+ * (dùng pollo.ai) — hàm RIÊNG, gọi recordFailedStoryboardJobPollo (mảng
+ * failedStoryboardJobsPollo RIÊNG) thay vì recordFailedStoryboardJob, theo
+ * đúng yêu cầu clone-logic-không-dùng-chung-function-cũ.
+ */
+async function notifyStoryboardVideoResultPollo(
+  job: StoryboardVideoPolloJob,
+  result: GenerateVideosResult,
+): Promise<void> {
+  if (!telegram) return;
+  try {
+    if (result.failedEntries.length > 0) {
+      recordFailedStoryboardJobPollo(job);
+      await telegram.sendMessage(
+        job.chatId,
+        `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    }
+    if (result.succeeded > 0 && result.failed === 0) {
+      await telegram.sendMessage(job.chatId, `✅ Đã tạo video xong`, {
+        reply_parameters: { message_id: job.promptMessageId },
+      });
+    }
+  } catch (err) {
+    console.error("[queue] Gửi kết quả tạo video (Pollo) thất bại:", err);
+    await telegram.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+    await notifyAdmins(err);
+  }
+  await deleteStatusMessage(job);
+}
+
+/**
  * Báo cáo tổng kết job "storyboardImagesAIVideo" (CHARACTER/LOCATION) HOẶC
  * "storyboardSceneImagesAIVideo" (SCENE_SETTING) — 2 type RIÊNG dùng chung 1
  * hàm báo cáo vì cùng cấu trúc kết quả (xem generateReferenceImagesForFileViaAIVideo/
@@ -1528,6 +2270,36 @@ async function notifyStoryboardImagesAIVideoResult(
     // (processImageQueue) rồi, không cần báo thêm ở đây.
   } catch (err) {
     console.error("[queue] Gửi kết quả tạo ảnh (aiVideo) thất bại:", err);
+    await telegram.sendMessage(job.chatId, "404", {
+      reply_parameters: { message_id: job.promptMessageId },
+    });
+    await notifyAdmins(err);
+  }
+  await deleteStatusMessage(job);
+}
+
+/**
+ * GIỐNG notifyStoryboardImagesAIVideoResult HỆT nhưng cho job
+ * "storyboardImagesPollo" (dùng pollo.ai) — hàm RIÊNG, gọi
+ * recordFailedStoryboardJobPollo thay vì recordFailedStoryboardJob, theo
+ * đúng yêu cầu clone-logic-không-dùng-chung-function-cũ.
+ */
+async function notifyStoryboardImagesResultPollo(
+  job: StoryboardImagesPolloJob,
+  result: StoryboardImagesAIVideoResult,
+): Promise<void> {
+  if (!telegram) return;
+  try {
+    if (result.failedEntries.length > 0) {
+      recordFailedStoryboardJobPollo(job);
+      await telegram.sendMessage(
+        job.chatId,
+        `⚠️ Không tạo được ảnh cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+    }
+  } catch (err) {
+    console.error("[queue] Gửi kết quả tạo ảnh (Pollo) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
     });
@@ -1780,8 +2552,18 @@ async function notifyChatAISuccess(
 }
 
 function jobTypeLabel(type: GenerationJob["type"]): string {
-  if (type === "video" || type === "storyboardVideo") return "video";
-  if (type === "image" || type === "storyboardImagesAIVideo") return "ảnh";
+  if (
+    type === "video" ||
+    type === "storyboardVideo" ||
+    type === "storyboardVideoPollo"
+  )
+    return "video";
+  if (
+    type === "image" ||
+    type === "storyboardImagesAIVideo" ||
+    type === "storyboardImagesPollo"
+  )
+    return "ảnh";
   return "ChatAI";
 }
 
