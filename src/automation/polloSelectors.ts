@@ -218,18 +218,6 @@ export const creditPaywallLocator = (page: Page): Locator =>
   page.getByText(/you don't have enough credits/i);
 
 /**
- * Nút đóng (X) của popup quảng cáo/promo (vd "Unlock Unlimited MiniMax H3"
- * kèm video nền tự phát) — xác nhận qua lỗi thật (job inspect-pollo-
- * reference-upload): popup này che kín composer, chặn mọi click vào mode
- * chip/model chip bên dưới ("... subtree intercepts pointer events"). Class
- * ".coco-modal-close" là class CHUNG của cả hệ thống modal "coco-modal" (thấy
- * lặp lại ở nhiều nơi khác, vd coco-dropdown-menu) — không riêng promo này,
- * nên đáng tin cậy dùng chung cho MỌI popup dạng coco-modal.
- */
-export const modalCloseButtonLocator = (page: Page): Locator =>
-  page.locator(".coco-modal-close");
-
-/**
  * Dấu hiệu chưa đăng nhập — CHƯA có DOM thật xác nhận riêng cho pollo.ai
  * (đăng nhập qua Google/email popup khác nhiều site), tạm dùng suy đoán hợp
  * lý (nút "Sign In"/"Log in" ở header) — cần chỉnh lại nếu sai khi gặp thật.
