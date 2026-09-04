@@ -399,17 +399,49 @@ async function assetPickerUrls(cards: Locator): Promise<string[]> {
   return cards.evaluateAll((els) => els.map((el) => el.getAttribute("data-asset-url") ?? ""));
 }
 
+/**
+ * Chờ số card trong lưới Uploads ỔN ĐỊNH (không đổi giữa 2 lần đọc liên
+ * tiếp) trước khi lấy làm baseline — xác nhận qua debug thật (job
+ * debug-pollo-upload-stuck): dialog Uploads render TOÀN BỘ lịch sử upload
+ * của tài khoản (không phải chỉ vài item), tài khoản dùng nhiều lần trong
+ * session này đã có 65+ item, số card tăng dần 0 → 45 → 65 trong ~15-25s
+ * trước khi ổn định. Bấm "Upload Media" xong gọi ngay countBefore lúc lưới
+ * CHƯA load xong sẽ ra baseline SAI (thấp hơn thực tế) — sau đó so sánh
+ * data-asset-url trước/sau (xem submitAssetUpload) có thể nhầm 1 ảnh CŨ vừa
+ * kịp render là ảnh MỚI vừa upload. Cần ổn định trước khi chụp baseline.
+ */
+async function waitForStableCardCount(
+  cards: Locator,
+  maxWaitMs = 15_000,
+  intervalMs = 1000,
+): Promise<void> {
+  const page = cards.page();
+  const start = Date.now();
+  let previous = await cards.count();
+  while (Date.now() - start < maxWaitMs) {
+    await page.waitForTimeout(intervalMs);
+    const current = await cards.count();
+    if (current === previous) return;
+    previous = current;
+  }
+}
+
 export async function submitAssetUpload(page: Page, imagePath: string): Promise<string> {
   const cards = assetPickerCardLocator(page);
+  await waitForStableCardCount(cards);
   const urlsBefore = await assetPickerUrls(cards);
   const countBefore = urlsBefore.length;
   const fileInput = uploadDialogFileInputLocator(page);
+  // Thư viện upload của tài khoản CÀNG NGÀY CÀNG LỚN (xem docstring
+  // waitForStableCardCount) khiến lưới cần thêm thời gian render/ổn định
+  // mỗi lần mở — tăng timeout từ 30s lên 45s để có thêm dư địa, tránh báo
+  // lỗi timeout giả trong khi ảnh vẫn đang xử lý bình thường.
   const waitForNewCard = () =>
     page.waitForFunction(
       (expected) =>
         document.querySelectorAll('[data-testid="asset-picker-card"]').length >= expected,
       countBefore + 1,
-      { timeout: 30_000 },
+      { timeout: 45_000 },
     );
 
   await fileInput.setInputFiles(imagePath, { timeout: 10_000 });
