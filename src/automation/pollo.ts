@@ -384,88 +384,62 @@ async function switchModeIfNeeded(page: Page, modeName: string): Promise<void> {
 }
 
 /**
- * Nộp file vào input ẩn của dialog Uploads rồi chờ card MỚI (thumbnail thật,
- * mang data-testid="asset-picker-card") xuất hiện — xác nhận qua lỗi thật
- * (job cay_khe_rm_end_SHOT_01_CLIP_01_VIDEO, xem storage/debug): card
- * placeholder "Uploading" (spinner, chưa có data-asset-url) KHÔNG mang
- * testid này nên không tính vào count, đảm bảo chỉ coi là xong khi thumbnail
- * thật đã render. Ảnh chụp lỗi cho thấy upload có thể bị KẸT hẳn ở trạng thái
- * "Uploading" quá 30s (nghẽn tạm phía site, không rõ nguyên nhân cụ thể) — nộp
- * lại ĐÚNG 1 LẦN (setInputFiles lại chính input đó, dialog vẫn đang mở nên
- * không cần bấm lại nút mở) trước khi ném lỗi hẳn.
+ * Nộp file vào input ẩn của dialog Uploads rồi chờ card MỚI xuất hiện, click
+ * chọn nó rồi bấm Select — trả về data-asset-url của card đó (dùng cho
+ * insertMentionForFile khớp theo URL, xem chú thích ở đó).
+ *
+ * LỊCH SỬ 2 CÁCH LÀM CŨ, cả 2 đều KHÔNG scale khi thư viện Uploads của tài
+ * khoản lớn dần (xác nhận qua debug thật, job debug-pollo-upload-stuck: sau
+ * nhiều lần test trong session này, tài khoản đã có 65+ item, và dialog
+ * Uploads render TOÀN BỘ lịch sử, không phải chỉ vài item gần nhất):
+ * 1. Đếm document.querySelectorAll(...).length trước/sau — mỗi lần gọi phải
+ *    duyệt HẾT mọi card khớp selector trên toàn trang, càng nhiều item càng
+ *    chậm, khiến cả việc chờ "ổn định" lẫn việc chờ "tăng thêm 1" đều có thể
+ *    vượt timeout dù ảnh vẫn xử lý bình thường (không phải bug thật).
+ * 2. Thêm bước "chờ ổn định" trước khi lấy baseline — chỉ giảm nhẹ rủi ro,
+ *    không giải quyết gốc rễ (thư viện càng lớn, chờ ổn định càng lâu).
+ *
+ * CÁCH MỚI: dùng document.querySelector(...) (không phải querySelectorAll)
+ * — chỉ cần tìm ĐÚNG 1 phần tử ĐẦU TIÊN khớp selector, KHÔNG phải duyệt hết
+ * toàn bộ danh sách, nên tốc độ không phụ thuộc thư viện lớn hay nhỏ. Dựa
+ * vào bằng chứng thật đã xác nhận nhiều lần: card MỚI upload luôn chèn NGAY
+ * ĐẦU lưới (ngay sau nút "Upload Media", "Upload Media" bản thân KHÔNG mang
+ * data-testid="asset-picker-card" nên không tính) — so sánh data-asset-url
+ * của ĐÚNG card đầu tiên trước/sau, không cần biết tổng số lượng.
  */
-/** Đọc data-asset-url của mọi card hiện có — dùng để tìm card MỚI bằng cách so sánh trước/sau, không đoán vị trí (xem chú thích submitAssetUpload bên dưới). */
-async function assetPickerUrls(cards: Locator): Promise<string[]> {
-  return cards.evaluateAll((els) => els.map((el) => el.getAttribute("data-asset-url") ?? ""));
-}
-
-/**
- * Chờ số card trong lưới Uploads ỔN ĐỊNH (không đổi giữa 2 lần đọc liên
- * tiếp) trước khi lấy làm baseline — xác nhận qua debug thật (job
- * debug-pollo-upload-stuck): dialog Uploads render TOÀN BỘ lịch sử upload
- * của tài khoản (không phải chỉ vài item), tài khoản dùng nhiều lần trong
- * session này đã có 65+ item, số card tăng dần 0 → 45 → 65 trong ~15-25s
- * trước khi ổn định. Bấm "Upload Media" xong gọi ngay countBefore lúc lưới
- * CHƯA load xong sẽ ra baseline SAI (thấp hơn thực tế) — sau đó so sánh
- * data-asset-url trước/sau (xem submitAssetUpload) có thể nhầm 1 ảnh CŨ vừa
- * kịp render là ảnh MỚI vừa upload. Cần ổn định trước khi chụp baseline.
- */
-async function waitForStableCardCount(
-  cards: Locator,
-  maxWaitMs = 15_000,
-  intervalMs = 1000,
-): Promise<void> {
-  const page = cards.page();
-  const start = Date.now();
-  let previous = await cards.count();
-  while (Date.now() - start < maxWaitMs) {
-    await page.waitForTimeout(intervalMs);
-    const current = await cards.count();
-    if (current === previous) return;
-    previous = current;
-  }
-}
-
 export async function submitAssetUpload(page: Page, imagePath: string): Promise<string> {
   const cards = assetPickerCardLocator(page);
-  await waitForStableCardCount(cards);
-  const urlsBefore = await assetPickerUrls(cards);
-  const countBefore = urlsBefore.length;
   const fileInput = uploadDialogFileInputLocator(page);
-  // Thư viện upload của tài khoản CÀNG NGÀY CÀNG LỚN (xem docstring
-  // waitForStableCardCount) khiến lưới cần thêm thời gian render/ổn định
-  // mỗi lần mở — tăng timeout từ 30s lên 45s để có thêm dư địa, tránh báo
-  // lỗi timeout giả trong khi ảnh vẫn đang xử lý bình thường.
-  const waitForNewCard = () =>
+  const firstCardUrlBefore = await cards.first().getAttribute("data-asset-url").catch(() => null);
+
+  const waitForFirstCardToChange = () =>
     page.waitForFunction(
-      (expected) =>
-        document.querySelectorAll('[data-testid="asset-picker-card"]').length >= expected,
-      countBefore + 1,
+      (prevUrl) => {
+        const first = document.querySelector('[data-testid="asset-picker-card"]');
+        const url = first?.getAttribute("data-asset-url") ?? null;
+        return Boolean(url) && url !== prevUrl;
+      },
+      firstCardUrlBefore,
       { timeout: 45_000 },
     );
 
   await fileInput.setInputFiles(imagePath, { timeout: 10_000 });
   try {
-    await waitForNewCard();
+    await waitForFirstCardToChange();
   } catch (err) {
     await fileInput.setInputFiles(imagePath, { timeout: 10_000 });
-    await waitForNewCard();
+    await waitForFirstCardToChange();
   }
 
-  // Card mới upload KHÔNG chắc chèn ở CUỐI lưới (bằng chứng thật — job
-  // cay_khe_rm_end_SHOT_01_CLIP_01_VIDEO: placeholder "Uploading" render ngay
-  // SAU nút "Upload Media", tức ĐẦU lưới — trước đây code đoán nhầm .nth(count-1)
-  // là card mới, thực ra chọn nhầm 1 ảnh cũ có sẵn trong thư viện, khiến bước
-  // "@ mention" sau đó tìm không ra file vừa upload). So sánh data-asset-url
-  // trước/sau để tìm ĐÚNG card mới xuất hiện, không đoán vị trí.
-  const urlsBeforeSet = new Set(urlsBefore);
-  const urlsAfter = await assetPickerUrls(cards);
-  const newIndex = urlsAfter.findIndex((url) => url && !urlsBeforeSet.has(url));
-  const targetIndex = newIndex >= 0 ? newIndex : urlsAfter.length - 1;
+  const newCard = cards.first();
+  const newUrl = await newCard.getAttribute("data-asset-url");
+  if (!newUrl) {
+    throw new GenerationError("Upload xong nhưng không đọc được data-asset-url của card mới.");
+  }
 
-  await cards.nth(targetIndex).click({ timeout: 10_000 });
+  await newCard.click({ timeout: 10_000 });
   await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
-  return urlsAfter[targetIndex];
+  return newUrl;
 }
 
 /** Cùng cơ chế "phải click thumbnail để chọn trước khi Select enable" đã xác nhận qua lỗi thật — xem docstring uploadReferenceImage trong polloImage.ts. */
