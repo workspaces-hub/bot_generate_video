@@ -733,6 +733,13 @@ export async function generateVideo(
     // ngay sau khi upload xong để giảm tối đa khoảng hở đó.
     if (!startFramePath && referenceImagePaths.length > 0) {
       for (const refPath of referenceImagePaths) {
+        // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc mới
+        // vào trang — xác nhận qua lỗi thật (job microdrama_co_dau_phan_boi_
+        // twist_prompt_SHOT_01_CLIP_01_VIDEO): 1 popup coco-modal-wrap MỚI
+        // xuất hiện SAU đó (lúc đã chọn model/gõ prompt xong), chặn click nút
+        // "Upload Media" mà không có gì dismiss lại. Gọi lại NGAY TRƯỚC mỗi
+        // lần upload — rẻ, best-effort, không lỗi nếu không có gì để đóng.
+        await dismissBlockingOverlays(page);
         const assetUrl = await uploadReferenceVideoImage(page, refPath);
         await editor.focus();
         await insertMentionForFile(page, assetUrl);
