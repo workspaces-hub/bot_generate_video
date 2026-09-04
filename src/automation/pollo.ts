@@ -724,7 +724,13 @@ export async function generateVideo(
       deepLink = buildDeepLinkUrl("Reference to Video", model);
     }
     const url = deepLink?.url ?? new URL("/video", config.polloBaseUrl).toString();
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    // timeout: 0 = tắt hẳn giới hạn thời gian — xác nhận qua lỗi thật (job
+    // microdrama_co_dau_phan_boi_twist_prompt_SHOT_05_CLIP_01_VIDEO): mạng
+    // VPS/site pollo.ai chậm thoáng qua khiến goto vượt quá 60s dù không có
+    // gì sai, làm rớt cả job dù chỉ là chậm tạm thời. Cùng lý do đã áp dụng
+    // cho fetchWithRetry (tải file lớn qua mạng chậm không nên bị huỷ giữa
+    // chừng chỉ vì quá 1 mốc thời gian cố định).
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 0 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
     await dismissBlockingOverlays(page);

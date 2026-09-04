@@ -189,7 +189,10 @@ export async function generateImage(
   const page = await context.newPage();
   try {
     const url = new URL("/image", config.polloBaseUrl).toString();
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    // timeout: 0 = tắt hẳn giới hạn thời gian — cùng lý do đã sửa cho
+    // generateVideo bên pollo.ts (job microdrama_co_dau_phan_boi_twist_prompt):
+    // mạng/site chậm thoáng qua không nên làm rớt cả job.
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 0 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
     await dismissBlockingOverlays(page);
