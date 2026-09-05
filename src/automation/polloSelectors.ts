@@ -64,6 +64,16 @@ export const assetPickerCardLocator = (page: Page): Locator =>
   page.locator('[data-testid="asset-picker-card"]');
 
 /**
+ * Cùng 1 card như assetPickerCardLocator, khớp ĐÚNG theo data-asset-url (thay
+ * vì vị trí) — dùng để CHỌN LẠI 1 ảnh ĐÃ upload trước đó (xem cache
+ * getCachedAssetUrl trong pollo.ts) mà không cần setInputFiles lại. Nhiều
+ * video/shot trong CÙNG 1 storyboard dùng CHUNG 1 file tham chiếu (CHARACTER/
+ * LOCATION) — xác nhận qua yêu cầu người dùng.
+ */
+export const assetPickerCardByUrlLocator = (page: Page, assetUrl: string): Locator =>
+  page.locator(`[data-testid="asset-picker-card"][data-asset-url="${assetUrl}"]`);
+
+/**
  * Spinner "Uploading" trên placeholder — xác nhận qua DOM thật (job
  * cay_khe_rm_end_SHOT_01_CLIP_01_VIDEO): placeholder card đang upload
  * (chưa có data-testid="asset-picker-card"/data-asset-url) chứa

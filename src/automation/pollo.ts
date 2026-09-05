@@ -10,6 +10,7 @@ import {
 } from "./aiVideo";
 import { firstVisible } from "./selectors";
 import {
+  assetPickerCardByUrlLocator,
   assetPickerCardLocator,
   creditPaywallLocator,
   generateButtonLocator,
@@ -587,6 +588,77 @@ export async function deleteStaleUploadedAssets(page: Page): Promise<void> {
   }
 }
 
+/**
+ * Cache LOCAL (persist ra file, sống qua cả restart bot) ánh xạ đường dẫn
+ * file ẢNH tuyệt đối → assetUrl đã upload lên pollo.ai lần gần nhất — theo
+ * yêu cầu người dùng: nhiều video/shot trong CÙNG 1 storyboard (hoặc khác
+ * storyboard chạy gần nhau) dùng CHUNG 1 file tham chiếu (CHARACTER/LOCATION
+ * không đổi giữa các shot) — upload lại y hệt file đó mỗi lần là dư thừa,
+ * vừa tốn thời gian vừa làm thư viện Uploads phình to nhanh hơn.
+ *
+ * TTL độc lập với STALE_ASSET_THRESHOLD_MS (deleteStaleUploadedAssets hiện
+ * đang bị comment tắt ở dưới — KHÔNG dựa vào việc nó có chạy hay không) —
+ * chỉ để tránh dùng lại URL quá cũ nếu sau này ảnh bị xoá thủ công hoặc do
+ * cơ chế dọn rác nào đó. submitAssetUpload bên dưới LUÔN xác minh card còn
+ * thật trong picker trước khi dùng (waitFor visible) — cache hết hạn hoặc
+ * card đã biến mất vì bất kỳ lý do gì đều tự rơi xuống nhánh upload lại bình
+ * thường, KHÔNG throw.
+ */
+const ASSET_CACHE_PATH = path.resolve("./storage/pollo-asset-cache.json");
+const ASSET_CACHE_TTL_MS = 55 * 60 * 1000;
+/** Xoá hẳn entry khỏi file cache sau ngần này — theo yêu cầu người dùng, tránh file phình to vô hạn (mỗi file ảnh tham chiếu MỚI của MỌI storyboard đều thêm 1 entry, KHÔNG entry nào tự mất nếu không có bước dọn này). */
+const ASSET_CACHE_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
+
+interface AssetCacheEntry {
+  assetUrl: string;
+  uploadedAtMs: number;
+}
+
+let assetCache: Record<string, AssetCacheEntry> | null = null;
+
+function readAssetCacheFile(): Record<string, AssetCacheEntry> {
+  try {
+    return JSON.parse(fs.readFileSync(ASSET_CACHE_PATH, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Xoá khỏi cache (mutate tại chỗ) mọi entry đã quá ASSET_CACHE_MAX_AGE_MS — gọi lúc load (dọn phần đã cũ từ trước khi bot khởi động lại) VÀ mỗi lần ghi thêm entry mới (dọn phần vừa "quá hạn" trong lúc bot chạy liên tục nhiều ngày không restart). */
+function pruneAssetCache(cache: Record<string, AssetCacheEntry>): void {
+  const cutoff = Date.now() - ASSET_CACHE_MAX_AGE_MS;
+  for (const key of Object.keys(cache)) {
+    if (cache[key].uploadedAtMs < cutoff) delete cache[key];
+  }
+}
+
+function loadAssetCache(): Record<string, AssetCacheEntry> {
+  if (!assetCache) {
+    assetCache = readAssetCacheFile();
+    pruneAssetCache(assetCache);
+  }
+  return assetCache;
+}
+
+function getCachedAssetUrl(imagePath: string): string | null {
+  const entry = loadAssetCache()[path.resolve(imagePath)];
+  if (!entry) return null;
+  if (Date.now() - entry.uploadedAtMs >= ASSET_CACHE_TTL_MS) return null;
+  return entry.assetUrl;
+}
+
+function rememberUploadedAsset(imagePath: string, assetUrl: string): void {
+  const cache = loadAssetCache();
+  cache[path.resolve(imagePath)] = { assetUrl, uploadedAtMs: Date.now() };
+  pruneAssetCache(cache);
+  try {
+    fs.mkdirSync(path.dirname(ASSET_CACHE_PATH), { recursive: true });
+    fs.writeFileSync(ASSET_CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[pollo] Không ghi được cache asset:", err);
+  }
+}
+
 export async function submitAssetUpload(
   page: Page,
   imagePath: string,
@@ -598,6 +670,24 @@ export async function submitAssetUpload(
   // await deleteStaleUploadedAssets(page).catch((err) => {
   //   console.warn("[pollo] deleteStaleUploadedAssets lỗi (bỏ qua, không chặn upload):", err);
   // });
+
+  // Đã upload file NÀY trước đó (còn hạn cache) — thử CHỌN LẠI đúng card cũ
+  // thay vì setInputFiles lại từ đầu. Vẫn xác minh card còn thật trong picker
+  // (waitFor visible, timeout ngắn) — không suy đoán mù theo cache.
+  const cachedUrl = getCachedAssetUrl(imagePath);
+  if (cachedUrl) {
+    const existingCard = assetPickerCardByUrlLocator(page, cachedUrl).first();
+    const stillThere = await existingCard
+      .waitFor({ state: "visible", timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (stillThere) {
+      await existingCard.click({ timeout: 10_000 });
+      await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
+      return cachedUrl;
+    }
+    // Không còn thấy nữa — rơi xuống upload lại bình thường bên dưới.
+  }
 
   const firstCardUrlBefore = await cards.first().getAttribute("data-asset-url").catch(() => null);
 
@@ -625,6 +715,7 @@ export async function submitAssetUpload(
       if (!stillUploading) {
         await cards.first().click({ timeout: 10_000 });
         await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
+        rememberUploadedAsset(imagePath, currentUrl);
         return currentUrl;
       }
     }
