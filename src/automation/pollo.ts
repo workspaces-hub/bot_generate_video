@@ -519,6 +519,74 @@ async function switchModeIfNeeded(page: Page, modeName: string): Promise<void> {
  * tử nào trong dialog nữa mới coi là hoàn tất, tránh nộp/chọn ảnh kế tiếp
  * trong khi ảnh này (hoặc 1 placeholder khác đang chờ) vẫn còn xử lý dở.
  */
+/** Ngưỡng coi 1 ảnh trong picker Uploads là "của lần gen khác" (đủ cũ để xoá) — xem deleteStaleUploadedAssets. */
+const STALE_ASSET_THRESHOLD_MS = 60 * 60 * 1000;
+
+/**
+ * Xoá các ảnh CŨ (uploads của lần gen khác) trong picker Uploads trước khi
+ * upload ảnh mới — theo yêu cầu người dùng, tránh picker "@ mention" ngày
+ * càng đầy ảnh không liên quan (xem chú thích submitAssetUpload: thư viện đã
+ * ghi nhận 65+ item).
+ *
+ * CHỈ xoá card có timestamp (nhúng trong data-asset-url, xem
+ * extractAssetTimestampMs) CŨ HƠN STALE_ASSET_THRESHOLD_MS so với thời điểm
+ * gọi — KHÔNG xoá "tất cả ảnh khác" ngay lập tức. Lý do: processPolloVideoQueue
+ * và processPolloImageQueue chạy SONG SONG ĐỘC LẬP trên CÙNG 1 tài khoản (2
+ * context riêng, xem polloBrowser.ts) — xoá ngay ảnh vừa upload xong của 1
+ * job KHÁC đang chạy cùng lúc (video hoặc ảnh) sẽ làm hỏng job đó giữa chừng,
+ * mà xoá trên pollo.ai KHÔNG THỂ hoàn tác (xác nhận qua popup thật:
+ * "Are you sure you want to delete? This can't be undone." — xem
+ * scripts/inspect-pollo-asset-delete-confirm.ts). Ngưỡng 60 phút (đã tăng từ
+ * 10 phút ban đầu) đủ dư an toàn cho mọi bước upload+mention của 1 entry
+ * (thường xong trong dưới 1 phút).
+ *
+ * Card MỚI luôn chèn ĐẦU lưới (đã xác nhận nhiều lần, xem docstring
+ * submitAssetUpload) nên danh sách luôn sắp theo thời gian giảm dần — xoá
+ * lần lượt từ CUỐI (.last(), cũ nhất) lên, DỪNG NGAY khi gặp card đủ mới
+ * hoặc không đọc được timestamp (an toàn hơn đoán tiếp, tránh xoá nhầm nếu
+ * thứ tự thực tế không đúng như giả định).
+ *
+ * Xác nhận DOM thật: hover card hiện nút button[aria-label="Delete"]; bấm
+ * xong hiện popup xác nhận dùng chung convention modal-popup của site
+ * (data-slot="modal-ok" = nút xác nhận xoá, "modal-cancel" = huỷ).
+ */
+export async function deleteStaleUploadedAssets(page: Page): Promise<void> {
+  const cards = assetPickerCardLocator(page);
+  const cutoff = Date.now() - STALE_ASSET_THRESHOLD_MS;
+
+  for (let i = 0; i < 200; i++) {
+    const count = await cards.count().catch(() => 0);
+    if (count === 0) return;
+
+    const last = cards.last();
+    const url = await last.getAttribute("data-asset-url").catch(() => null);
+    if (!url) return;
+
+    const ts = extractAssetTimestampMs(url);
+    if (ts === null || ts >= cutoff) return;
+
+    await last.hover().catch(() => {});
+    const deleted = await last
+      .locator('button[aria-label="Delete"]')
+      .click({ timeout: 4000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!deleted) return;
+
+    const confirmed = await page
+      .locator('button[data-slot="modal-ok"]')
+      .first()
+      .click({ timeout: 4000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!confirmed) {
+      await page.keyboard.press("Escape").catch(() => {});
+      return;
+    }
+    await page.waitForTimeout(500);
+  }
+}
+
 export async function submitAssetUpload(
   page: Page,
   imagePath: string,
@@ -526,6 +594,11 @@ export async function submitAssetUpload(
 ): Promise<string> {
   const cards = assetPickerCardLocator(page);
   const fileInput = uploadDialogFileInputLocator(page);
+
+  // await deleteStaleUploadedAssets(page).catch((err) => {
+  //   console.warn("[pollo] deleteStaleUploadedAssets lỗi (bỏ qua, không chặn upload):", err);
+  // });
+
   const firstCardUrlBefore = await cards.first().getAttribute("data-asset-url").catch(() => null);
 
   await fileInput.setInputFiles(imagePath, { timeout: 10_000 });
@@ -624,10 +697,23 @@ async function uploadReferenceVideoImage(page: Page, imagePath: string): Promise
  * Library" riêng của họ, KHÔNG đáng tin theo tên file đã upload. Vẫn giữ
  * retry (đóng/mở lại "@") phòng trường hợp ảnh cần thêm chút thời gian index
  * xong mới xuất hiện trong picker.
+ *
+ * SỬA (xác nhận qua lỗi thật, job test_master_donghua_SHOT_01_CLIP_01_VIDEO):
+ * item.click() báo "element is not stable" rồi "element was detached from
+ * the DOM, retrying" — danh sách picker bị re-render giữa lúc click (có thể
+ * do 1 upload MỚI khác vừa chèn vào đầu danh sách, kể cả từ 1 job Pollo khác
+ * đang chạy song song trên CÙNG tài khoản — xem chú thích đầu file). click()
+ * lúc đó THROW, nhưng trước đây lời gọi này KHÔNG nằm trong try/catch nên lỗi
+ * thoát thẳng ra ngoài NGAY LẦN ĐẦU, bỏ qua toàn bộ cơ chế retry (đóng/mở lại
+ * "@") bên dưới vốn chỉ áp dụng cho trường hợp "không tìm thấy item" — dù
+ * item ĐÃ tìm thấy (found=true), chỉ là click bị trượt do DOM đang động. Bọc
+ * try/catch quanh click() để lỗi click cũng rơi vào đúng cơ chế retry đó thay
+ * vì bỏ cuộc ngay từ lần thử đầu tiên.
  */
 async function insertMentionForFile(page: Page, assetUrl: string): Promise<void> {
   const item = mentionPickerItemByUrlLocator(page, assetUrl).first();
   const maxAttempts = 4;
+  let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await page.keyboard.type(" @", { delay: 50 });
@@ -645,8 +731,12 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
       .catch(() => false);
 
     if (found) {
-      await item.click({ timeout: 5_000 });
-      return;
+      try {
+        await item.click({ timeout: 5_000 });
+        return;
+      } catch (err) {
+        lastError = err;
+      }
     }
 
     if (attempt === maxAttempts) break;
@@ -657,8 +747,9 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
     await page.waitForTimeout(3000);
   }
 
+  const detail = lastError instanceof Error ? ` (lần cuối lỗi click: ${lastError.message})` : "";
   throw new GenerationError(
-    `Không tìm thấy ảnh vừa upload (${assetUrl}) trong picker "@ mention" sau ${maxAttempts} lần thử (ảnh có thể chưa kịp index xong phía pollo.ai).`,
+    `Không chọn được ảnh vừa upload (${assetUrl}) trong picker "@ mention" sau ${maxAttempts} lần thử${detail} (ảnh có thể chưa kịp index xong, hoặc danh sách liên tục bị re-render do job khác đang upload cùng lúc).`,
   );
 }
 
