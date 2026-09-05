@@ -63,6 +63,17 @@ export const uploadDialogFileInputLocator = (page: Page): Locator =>
 export const assetPickerCardLocator = (page: Page): Locator =>
   page.locator('[data-testid="asset-picker-card"]');
 
+/**
+ * Spinner "Uploading" trên placeholder — xác nhận qua DOM thật (job
+ * cay_khe_rm_end_SHOT_01_CLIP_01_VIDEO): placeholder card đang upload
+ * (chưa có data-testid="asset-picker-card"/data-asset-url) chứa
+ * <span class="i-cus--pol-loading animate-spin">. Dùng để xác nhận file ĐÃ
+ * XỬ LÝ XONG HẲN (không còn spinner nào trong dialog) trước khi coi 1 lượt
+ * upload là hoàn tất — xem submitAssetUpload trong pollo.ts.
+ */
+export const uploadingSpinnerLocator = (page: Page): Locator =>
+  page.locator("span.i-cus--pol-loading");
+
 /** Nút "Select" xác nhận ảnh vừa CHỌN (xem assetPickerCardLocator) trong dialog — chỉ enable sau khi đã click thumbnail. */
 export const uploadDialogSelectButtonLocator = (page: Page): Locator =>
   page.locator('[data-testid="asset-picker-confirm"]');

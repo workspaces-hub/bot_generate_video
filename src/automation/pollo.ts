@@ -27,6 +27,7 @@ import {
   uploadCardButtonForImage,
   uploadDialogFileInputLocator,
   uploadDialogSelectButtonLocator,
+  uploadingSpinnerLocator,
   videoLengthOptionLocator,
   videoLengthSliderInputLocator,
 } from "./polloSelectors";
@@ -449,40 +450,69 @@ async function switchModeIfNeeded(page: Page, modeName: string): Promise<void> {
  * ĐẦU lưới (ngay sau nút "Upload Media", "Upload Media" bản thân KHÔNG mang
  * data-testid="asset-picker-card" nên không tính) — so sánh data-asset-url
  * của ĐÚNG card đầu tiên trước/sau, không cần biết tổng số lượng.
+ *
+ * Có data-asset-url MỚI KHÔNG có nghĩa là ảnh đã xử lý xong hẳn (theo yêu
+ * cầu người dùng: phải xác nhận HẾT "Uploading" mới được chuyển sang ảnh
+ * tiếp theo) — chờ thêm cho tới khi uploadingSpinnerLocator không còn phần
+ * tử nào trong dialog nữa mới coi là hoàn tất, tránh nộp/chọn ảnh kế tiếp
+ * trong khi ảnh này (hoặc 1 placeholder khác đang chờ) vẫn còn xử lý dở.
  */
-export async function submitAssetUpload(page: Page, imagePath: string): Promise<string> {
+export async function submitAssetUpload(
+  page: Page,
+  imagePath: string,
+  reopenDialog: () => Promise<void>,
+): Promise<string> {
   const cards = assetPickerCardLocator(page);
   const fileInput = uploadDialogFileInputLocator(page);
   const firstCardUrlBefore = await cards.first().getAttribute("data-asset-url").catch(() => null);
 
-  const waitForFirstCardToChange = () =>
-    page.waitForFunction(
-      (prevUrl) => {
-        const first = document.querySelector('[data-testid="asset-picker-card"]');
-        const url = first?.getAttribute("data-asset-url") ?? null;
-        return Boolean(url) && url !== prevUrl;
-      },
-      firstCardUrlBefore,
-      { timeout: 45_000 },
-    );
-
   await fileInput.setInputFiles(imagePath, { timeout: 10_000 });
-  try {
-    await waitForFirstCardToChange();
-  } catch (err) {
-    await fileInput.setInputFiles(imagePath, { timeout: 10_000 });
-    await waitForFirstCardToChange();
+
+  // Poll thay vì 1 lần waitForFunction dài — xác nhận qua lỗi thật (job
+  // EP01_drama_SHOT_15_CLIP_01_VIDEO): dialog Uploads có thể TỰ ĐÓNG giữa
+  // lúc đang chờ (đúng lúc setInputFiles vừa xong, dialog vẫn mở — snapshot
+  // lỗi lúc hết 45s cho thấy dialog đã đóng hẳn, không còn card nào cả),
+  // khiến document.querySelector(...) mãi mãi trả về null dù file có thể
+  // vẫn đang xử lý bình thường phía server. Phát hiện dialog đóng giữa
+  // chừng thì MỞ LẠI (không nộp lại file) để đọc trạng thái mới nhất, thay
+  // vì cứ chờ 1 selector không bao giờ khớp lại được nữa.
+  const deadlineMs = Date.now() + 45_000;
+  let reopenedOnce = false;
+  let resubmittedOnce = false;
+  while (Date.now() < deadlineMs) {
+    const currentUrl = await cards.first().getAttribute("data-asset-url").catch(() => null);
+    if (currentUrl && currentUrl !== firstCardUrlBefore) {
+      // Có data-asset-url MỚI không có nghĩa là đã xử lý xong HẲN — chờ
+      // thêm cho tới khi KHÔNG CÒN spinner "Uploading" nào trong dialog mới
+      // coi là xong, tránh chuyển sang upload ảnh kế tiếp trong khi ảnh này
+      // (hoặc 1 placeholder khác) vẫn đang xử lý dở.
+      const stillUploading = (await uploadingSpinnerLocator(page).count().catch(() => 0)) > 0;
+      if (!stillUploading) {
+        await cards.first().click({ timeout: 10_000 });
+        await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
+        return currentUrl;
+      }
+    }
+
+    const dialogClosed = (await cards.count().catch(() => 0)) === 0;
+    if (dialogClosed) {
+      if (!reopenedOnce) {
+        reopenedOnce = true;
+        await reopenDialog().catch(() => {});
+      } else if (!resubmittedOnce) {
+        // Mở lại 1 lần mà dialog vẫn đóng/không thấy ảnh mới — thử nộp lại
+        // file đúng 1 lần (dialog đã mở lại từ bước trên) trước khi chịu thua.
+        resubmittedOnce = true;
+        await fileInput.setInputFiles(imagePath, { timeout: 10_000 }).catch(() => {});
+      }
+    }
+
+    await page.waitForTimeout(2000);
   }
 
-  const newCard = cards.first();
-  const newUrl = await newCard.getAttribute("data-asset-url");
-  if (!newUrl) {
-    throw new GenerationError("Upload xong nhưng không đọc được data-asset-url của card mới.");
-  }
-
-  await newCard.click({ timeout: 10_000 });
-  await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
-  return newUrl;
+  throw new GenerationError(
+    "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 45s (đã thử mở lại dialog).",
+  );
 }
 
 /** Cùng cơ chế "phải click thumbnail để chọn trước khi Select enable" đã xác nhận qua lỗi thật — xem docstring uploadReferenceImage trong polloImage.ts. */
@@ -491,8 +521,10 @@ async function uploadFrameImage(
   label: "Start" | "End",
   imagePath: string,
 ): Promise<void> {
-  await clickWithOverlayDismiss(page, uploadCardButtonByLabel(page, label).first());
-  await submitAssetUpload(page, imagePath);
+  const openDialog = () =>
+    clickWithOverlayDismiss(page, uploadCardButtonByLabel(page, label).first());
+  await openDialog();
+  await submitAssetUpload(page, imagePath, openDialog);
 }
 
 /**
@@ -504,8 +536,9 @@ async function uploadFrameImage(
  * "Character Library" của họ, không phải luôn theo tên file đã upload).
  */
 async function uploadReferenceVideoImage(page: Page, imagePath: string): Promise<string> {
-  await clickWithOverlayDismiss(page, uploadCardButtonForImage(page).first());
-  return submitAssetUpload(page, imagePath);
+  const openDialog = () => clickWithOverlayDismiss(page, uploadCardButtonForImage(page).first());
+  await openDialog();
+  return submitAssetUpload(page, imagePath, openDialog);
 }
 
 /**

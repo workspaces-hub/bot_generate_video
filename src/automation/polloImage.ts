@@ -56,8 +56,9 @@ export interface PolloGenerateImageOptions {
  * lưới khi đã có sẵn nhiều file khác).
  */
 async function uploadReferenceImage(page: Page, imagePath: string): Promise<void> {
-  await clickWithOverlayDismiss(page, uploadCardButtonLocator(page).first());
-  await submitAssetUpload(page, imagePath);
+  const openDialog = () => clickWithOverlayDismiss(page, uploadCardButtonLocator(page).first());
+  await openDialog();
+  await submitAssetUpload(page, imagePath, openDialog);
 }
 
 interface ResultBaseline {

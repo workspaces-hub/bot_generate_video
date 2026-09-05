@@ -1160,6 +1160,16 @@ export async function gotoWithRetry(
  * lỗi lấy nhầm URL) — thử lại vài lần trước khi báo lỗi hẳn, thay vì fail
  * job ngay ở lần đầu.
  */
+/** Đọc header "Retry-After" (giây) nếu server có trả — dùng cho HTTP 429, xem fetchWithRetry. */
+function resolveRetryAfterMs(
+  response: import("playwright").APIResponse,
+  fallbackMs: number,
+): number {
+  const header = response.headers()["retry-after"];
+  const seconds = header ? Number(header) : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : fallbackMs;
+}
+
 export async function fetchWithRetry(
   page: Page,
   url: string,
@@ -1178,7 +1188,12 @@ export async function fetchWithRetry(
     //   `[aiVideo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
     // );
     if (attempt < attempts) {
-      await page.waitForTimeout(delayMs);
+      // HTTP 429 (rate limit) — xác nhận qua lỗi thật (job
+      // EP01_drama_SHOT_17_CLIP_01_VIDEO): delay cố định 5s giữa các lần thử
+      // quá ngắn để tránh rate-limit thật, dùng Retry-After của server nếu
+      // có, không thì chờ hẳn 30s (thay vì 5s) mới thử lại.
+      const wait = lastStatus === 429 ? resolveRetryAfterMs(response, 30_000) : delayMs;
+      await page.waitForTimeout(wait);
     }
   }
   throw new GenerationError(
