@@ -2,26 +2,28 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../src/config";
 import { getPolloBrowserContext } from "../src/automation/polloBrowser";
-import { captureErrorSnapshot, captureSnapshot, fetchWithRetry } from "../src/automation/aiVideo";
+import { captureErrorSnapshot, fetchWithRetry } from "../src/automation/aiVideo";
 import { dismissBlockingOverlays } from "../src/automation/pollo";
 import { resultVideoLocator } from "../src/automation/polloSelectors";
 
 /**
- * One-off tái sử dụng (đã dùng lần trước cho SHOT_01_CLIP_01_VIDEO): job
- * VIDEO generate xong THẬT trên pollo.ai nhưng script cũ hết timeout (20
- * phút) trước khi kịp thấy kết quả — server vẫn tiếp tục render sau khi
- * page đóng. Quét TẤT CẢ <video class="vjs-tech"> trên /create (không dùng
- * resultCardLocator — data-widget-name="project_content_card" là 1 GRID
- * CONTAINER chứa nhiều item, không phải 1 card đơn, đã xác nhận lần trước),
- * lấy video có timestamp trong tên file MỚI NHẤT SAU thời điểm job bắt đầu,
- * tải về rồi đặt đúng chỗ output.
+ * One-off tái sử dụng: job VIDEO generate xong THẬT trên pollo.ai nhưng
+ * script cũ hết timeout trước khi kịp thấy kết quả — server vẫn tiếp tục
+ * render sau khi page đóng. Quét TẤT CẢ <video class="vjs-tech"> trên
+ * /create, lấy video có timestamp trong tên file MỚI NHẤT SAU thời điểm
+ * job bắt đầu, tải về rồi đặt đúng chỗ output.
  *
- * Đổi ENTRY_ID/JOB_START_MS mỗi lần dùng lại cho entry khác.
+ * Đổi ENTRY_ID/JOB_START_MS/DEST_PATH mỗi lần dùng lại cho entry khác.
  */
-const ENTRY_ID = "SHOT_01_CLIP_02_VIDEO";
-const JOB_START_MS = new Date("2026-09-04T06:30:24.075Z").getTime();
-const DEST_PATH = path.resolve(`./storage/generated/cay_khe_rm_end/${ENTRY_ID}.mp4`);
-const JSON_PATH = path.resolve("./storage/generated/cay_khe_rm_end/cay_khe_rm_end.json");
+const ENTRY_ID = "SHOT_12_CLIP_01_VIDEO";
+const JOB_START_MS = new Date("2026-09-04T17:44:59.336Z").getTime();
+// Chặn trên: entry KẾ TIẾP (SHOT_13) đã bắt đầu lỗi lúc 18:07:53 — nghĩa là
+// queue đã chuyển sang xử lý entry khác trước mốc này. Video của SHOT_12
+// (nếu có) PHẢI nằm trong khoảng [JOB_START_MS, SHOT_13_START_MS], không
+// được lấy bừa "video sớm nhất sau JOB_START_MS" vì rất nhiều entry khác đã
+// chạy tiếp sau đó hàng giờ, tạo ra nhiều video không liên quan.
+const NEXT_ENTRY_START_MS = new Date("2026-09-04T18:07:53.474Z").getTime();
+const DEST_PATH = path.resolve(`./storage/generated/EP01_drama/${ENTRY_ID}.mp4`);
 
 function extractTimestamp(url: string): number | null {
   const m = url.match(/\/(\d{13})-/);
@@ -31,7 +33,7 @@ function extractTimestamp(url: string): number | null {
 async function main(): Promise<void> {
   const context = await getPolloBrowserContext();
   const page = await context.newPage();
-  const jobId = "recover-pollo-video-download-2";
+  const jobId = "recover-pollo-video-download";
   try {
     await page.goto(new URL("/create", config.polloBaseUrl).toString(), {
       waitUntil: "domcontentloaded",
@@ -59,13 +61,27 @@ async function main(): Promise<void> {
       console.log(`  ${new Date(c.ts).toISOString()} — ${c.src}`);
     }
 
-    const afterJobStart = candidates.filter((c) => c.ts >= JOB_START_MS - 60_000);
-    if (afterJobStart.length === 0) {
+    const inWindow = candidates.filter(
+      (c) => c.ts >= JOB_START_MS - 60_000 && c.ts <= NEXT_ENTRY_START_MS,
+    );
+    console.log(
+      `Video trong khoảng [${new Date(JOB_START_MS).toISOString()}, ${new Date(NEXT_ENTRY_START_MS).toISOString()}]:`,
+      inWindow.length,
+    );
+    for (const c of inWindow) {
+      console.log(`  ${new Date(c.ts).toISOString()} — ${c.src}`);
+    }
+    if (inWindow.length === 0) {
       throw new Error(
-        `Không tìm thấy video nào có timestamp sau ${new Date(JOB_START_MS).toISOString()} (job start).`,
+        "Không tìm thấy video nào trong đúng khoảng thời gian của entry này — có thể entry thật sự chưa render xong / lỗi thật, KHÔNG PHẢI chỉ chậm.",
       );
     }
-    const target = afterJobStart[afterJobStart.length - 1]; // cũ nhất trong nhóm "sau job start" = khớp job này nhất (job kế tiếp sẽ mới hơn nữa)
+    if (inWindow.length > 1) {
+      throw new Error(
+        `Tìm thấy ${inWindow.length} video trong khoảng thời gian này — không chắc video nào đúng, cần kiểm tra thủ công thay vì đoán.`,
+      );
+    }
+    const target = inWindow[0];
     console.log("Chọn video:", target.src, new Date(target.ts).toISOString());
 
     const response = await fetchWithRetry(page, target.src);
@@ -79,19 +95,6 @@ async function main(): Promise<void> {
     await fs.promises.mkdir(path.dirname(DEST_PATH), { recursive: true });
     await fs.promises.writeFile(DEST_PATH, buffer);
     console.log(`Đã lưu: ${DEST_PATH}`);
-
-    const raw = await fs.promises.readFile(JSON_PATH, "utf-8");
-    const entries = JSON.parse(raw);
-    const entry = entries.find((e: { id?: string }) => e.id === ENTRY_ID);
-    if (entry) {
-      entry.success = true;
-      await fs.promises.writeFile(JSON_PATH, JSON.stringify(entries, null, 2), "utf-8");
-      console.log("Đã đánh dấu success=true trong JSON.");
-    } else {
-      console.warn(`Không tìm thấy entry ${ENTRY_ID} trong JSON để đánh dấu success.`);
-    }
-
-    await captureSnapshot(page, jobId, "after-recover");
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
     console.error("Script thất bại:", err instanceof Error ? err.message : err);

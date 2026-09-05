@@ -172,25 +172,49 @@ export async function clickWithOverlayDismiss(
  * mỗi lần bấm), giải thích chính xác triệu chứng "dialog tự đóng giữa
  * chừng" đã thấy lặp lại ở rất nhiều job.
  *
- * SỬA: trước MỖI lần thử click, kiểm tra aria-expanded — nếu đã "true" (đã
- * mở, kể cả khi lần thử click TRƯỚC đó báo lỗi) thì DỪNG NGAY, không click
- * thêm lần nào nữa.
+ * SỬA LẦN 1: trước MỖI lần thử click, kiểm tra aria-expanded — nếu đã
+ * "true" (đã mở, kể cả khi lần thử click TRƯỚC đó báo lỗi) thì DỪNG NGAY,
+ * không click thêm lần nào nữa.
+ *
+ * SỬA LẦN 2 (xác nhận qua lỗi thật vẫn LẶP LẠI y hệt sau bản sửa lần 1, job
+ * microdrama_SHOT_01_CLIP_01_VIDEO và nhiều job khác — snapshot lỗi vẫn cho
+ * thấy aria-expanded="false", dialog vẫn đóng): click() KHÔNG throw KHÔNG
+ * có nghĩa là dialog ĐÃ THỰC SỰ mở — trả về ngay khi click() không lỗi là
+ * SAI, vì click có thể "trượt" (đăng ký lên 1 phần tử khác do đang animate,
+ * hoặc React chưa kịp xử lý) mà Playwright không phát hiện ra. XÁC MINH
+ * TRỰC TIẾP bằng cách chờ uploadDialogFileInputLocator (input file ẩn CHỈ
+ * tồn tại khi dialog đã render) xuất hiện — chỉ coi là mở thành công khi
+ * thấy input này, không suy luận qua trạng thái click()/aria-expanded nữa.
  */
 export async function ensureUploadDialogOpen(
   page: Page,
   trigger: Locator,
   maxAttempts = 5,
 ): Promise<void> {
+  const fileInput = uploadDialogFileInputLocator(page);
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const expanded = await trigger.getAttribute("aria-expanded").catch(() => null);
-    if (expanded === "true") return;
-    try {
-      await trigger.click({ timeout: 4000 });
-      return;
-    } catch (err) {
-      if (attempt === maxAttempts) throw err;
-      await dismissBlockingOverlays(page);
+    if (expanded !== "true") {
+      try {
+        await trigger.click({ timeout: 4000 });
+      } catch (err) {
+        if (attempt === maxAttempts) throw err;
+        await dismissBlockingOverlays(page);
+        continue;
+      }
     }
+
+    const opened = await fileInput
+      .waitFor({ state: "attached", timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (opened) return;
+    if (attempt === maxAttempts) {
+      throw new GenerationError(
+        "Không mở được dialog Uploads sau nhiều lần thử (click không lỗi nhưng dialog không thực sự render).",
+      );
+    }
+    await dismissBlockingOverlays(page);
   }
 }
 
@@ -702,6 +726,19 @@ async function findRecentVideoViaCreatePage(
  * này" khi quét /create (xem findRecentVideoViaCreatePage). Trả về src video
  * trực tiếp (string) thay vì Locator — có thể đến từ card trên chính page
  * đang mở HOẶC từ /create, downloadResultVideo chỉ cần src để tải.
+ *
+ * SỬA (xác nhận qua lỗi thật, job DRAGON_Tranform_SHOT_06_CLIP_01_VIDEO): job
+ * bị báo lỗi "Hết thời gian chờ" đúng lúc card kết quả VẪN đang hiện
+ * "generating" (còn `[data-slot="task-card-generating"]`) — tức pollo.ai vẫn
+ * đang xử lý bình thường, không hề treo/lỗi, chỉ là generationTimeoutMs (cấu
+ * hình .env, 20 phút) ngắn hơn thời gian model thực tế cần để xong. timeoutMs
+ * giờ CHỈ áp dụng cho giai đoạn TRƯỚC KHI thấy card generate nào xuất hiện
+ * (bắt lỗi "bấm Generate không có phản hồi gì" — vd hết credit không tạo card
+ * mới, đã có outOfCredit check riêng bên dưới, hoặc 1 lỗi khác chưa biết). Một
+ * khi ĐÃ thấy card đang generate ít nhất 1 lần, coi như job đang chạy thật —
+ * không còn giới hạn thời gian nữa, cứ poll tới khi thực sự xong (hoặc lỗi rõ
+ * ràng khác như outOfCredit) — giống tinh thần "timeout: 0" đã áp dụng cho
+ * page.goto.
  */
 async function waitForNewResult(
   page: Page,
@@ -714,14 +751,17 @@ async function waitForNewResult(
   const pollIntervalMs = 5000;
   const createCheckEveryMs = 45_000;
   let lastCreateCheckAt = 0;
+  let sawGeneratingCard = false;
 
-  while (Date.now() - start < timeoutMs) {
+  while (true) {
     const count = await cards.count();
     if (count > baseline.count) {
       const newCard = cards.last();
       const stillGenerating =
         (await newCard.locator('[data-slot="task-card-generating"]').count()) > 0;
-      if (!stillGenerating) {
+      if (stillGenerating) {
+        sawGeneratingCard = true;
+      } else {
         const videoCount = await resultVideoLocator(newCard).count();
         if (videoCount > 0) {
           const src = await resultVideoLocator(newCard).first().getAttribute("src");
@@ -735,8 +775,8 @@ async function waitForNewResult(
 
     // Xác nhận qua lỗi thật (xem docstring creditPaywallLocator trong
     // polloSelectors.ts): bấm Generate khi không đủ credit KHÔNG tạo card mới
-    // nào cả — nếu không phát hiện riêng, vòng lặp trên sẽ treo tới hết
-    // timeoutMs (mặc định 3 tiếng) mà không báo lỗi gì.
+    // nào cả — nếu không phát hiện riêng, vòng lặp trên sẽ treo mãi mà không
+    // báo lỗi gì (nay không còn timeoutMs cứu, nên check này càng quan trọng).
     const outOfCredit = await creditPaywallLocator(page)
       .first()
       .isVisible()
@@ -755,10 +795,14 @@ async function waitForNewResult(
       if (foundSrc) return foundSrc;
     }
 
+    if (!sawGeneratingCard && Date.now() - start >= timeoutMs) {
+      throw new GenerationError(
+        `Hết thời gian chờ tạo video (timeout ${timeoutMs}ms) — chưa từng thấy card generate nào xuất hiện.`,
+      );
+    }
+
     await page.waitForTimeout(pollIntervalMs);
   }
-
-  throw new GenerationError(`Hết thời gian chờ tạo video (timeout ${timeoutMs}ms)`);
 }
 
 /**

@@ -86,6 +86,14 @@ async function captureResultBaseline(page: Page): Promise<ResultBaseline> {
  * cập nhật), xử lý theo hướng quét /create qua page riêng như bên video,
  * không reload page compose.
  */
+/**
+ * SỬA (đồng bộ với waitForNewResult bên pollo.ts, xác nhận qua lỗi thật job
+ * DRAGON_Tranform_SHOT_06_CLIP_01_VIDEO — video vẫn "generating" hợp lệ lúc bị
+ * báo hết timeout): timeoutMs CHỈ áp dụng cho giai đoạn TRƯỚC KHI thấy card
+ * generate nào xuất hiện. Một khi đã thấy card đang generate ít nhất 1 lần,
+ * không giới hạn thời gian nữa — chờ tới khi thực sự xong hoặc gặp lỗi rõ
+ * ràng khác (outOfCredit).
+ */
 async function waitForNewResult(
   page: Page,
   baseline: ResultBaseline,
@@ -94,14 +102,17 @@ async function waitForNewResult(
   const cards = resultCardLocator(page);
   const start = Date.now();
   const pollIntervalMs = 5000;
+  let sawGeneratingCard = false;
 
-  while (Date.now() - start < timeoutMs) {
+  while (true) {
     const count = await cards.count();
     if (count > baseline.count) {
       const newCard = cards.last();
       const stillGenerating =
         (await newCard.locator('[data-slot="task-card-generating"]').count()) > 0;
-      if (!stillGenerating) {
+      if (stillGenerating) {
+        sawGeneratingCard = true;
+      } else {
         const imageCount = await resultImageLocator(newCard).count();
         if (imageCount > 0) return newCard;
         // Card đã hết trạng thái "generating" nhưng KHÔNG có ảnh nào — nhiều
@@ -116,9 +127,10 @@ async function waitForNewResult(
 
     // Xác nhận qua lỗi thật khi test generateVideo (xem docstring
     // creditPaywallLocator trong polloSelectors.ts) — bấm Generate khi không
-    // đủ credit KHÔNG tạo card mới nào cả, khiến vòng lặp trên treo tới hết
-    // timeoutMs nếu không phát hiện riêng. Áp dụng phòng ngừa cho ảnh dù chưa
-    // trực tiếp gặp (cùng cơ chế popup, khả năng cao dùng chung).
+    // đủ credit KHÔNG tạo card mới nào cả, khiến vòng lặp trên treo mãi nếu
+    // không phát hiện riêng (nay không còn timeoutMs cứu). Áp dụng phòng ngừa
+    // cho ảnh dù chưa trực tiếp gặp (cùng cơ chế popup, khả năng cao dùng
+    // chung).
     const outOfCredit = await creditPaywallLocator(page)
       .first()
       .isVisible()
@@ -129,10 +141,14 @@ async function waitForNewResult(
       );
     }
 
+    if (!sawGeneratingCard && Date.now() - start >= timeoutMs) {
+      throw new GenerationError(
+        `Hết thời gian chờ tạo ảnh (timeout ${timeoutMs}ms) — chưa từng thấy card generate nào xuất hiện.`,
+      );
+    }
+
     await page.waitForTimeout(pollIntervalMs);
   }
-
-  throw new GenerationError(`Hết thời gian chờ tạo ảnh (timeout ${timeoutMs}ms)`);
 }
 
 /**

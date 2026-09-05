@@ -9,8 +9,19 @@ import type { Locator, Page } from "playwright";
  * chỉnh dần từ phỏng đoán ban đầu.
  */
 
-/** Ô nhập prompt — thực tế là 1 div contenteditable (ProseMirror), không phải <textarea>. */
+/**
+ * Ô nhập prompt — TRƯỚC ĐÂY là 1 div contenteditable (ProseMirror, id=
+ * "prompt-textarea"). Xác nhận qua lỗi thật (job f0c50391, hàng loạt job
+ * ChatAI lỗi cùng lúc "Không tìm thấy phần tử nào khớp"): ChatGPT đã đổi hẳn
+ * sang <textarea name="prompt-textarea" aria-label="Chat with ChatGPT">
+ * (class "wcDTda_fallbackTextarea", KHÔNG còn contenteditable, KHÔNG còn
+ * id="prompt-textarea" — chỉ còn name), khiến CẢ 3 selector cũ đều không
+ * khớp được nữa. Thêm selector mới KHỚP CHÍNH XÁC DOM hiện tại lên đầu danh
+ * sách, giữ nguyên các selector cũ phía sau làm dự phòng (phòng site đổi
+ * lại/A-B test).
+ */
 export const promptTextareaCandidates = (page: Page): Array<() => Locator> => [
+  () => page.locator('textarea[name="prompt-textarea"]'),
   () => page.locator("#prompt-textarea"),
   () => page.getByRole("textbox", { name: /message/i }),
   () => page.locator('[contenteditable="true"]'),
