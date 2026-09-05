@@ -6,6 +6,7 @@ import {
   dismissCloudflareChallengeIfPresent,
   getChatAIBrowserContext,
 } from "./chatAIBrowser";
+import { gotoChatAIWithRetry } from "./chatAI";
 import {
   assistantMessageLocator,
   fileUploadInputLocator,
@@ -362,24 +363,14 @@ async function attemptGenerateReferenceImage(
   const context = await getChatAIBrowserContext();
   const page = await context.newPage();
   try {
-    // Xác nhận qua log lỗi thật (job 95227a24): thoáng qua mạng/Cloudflare
-    // chập chờn khiến 1 lần goto timeout 600s dù các job trước/sau vẫn chạy
-    // bình thường — retry thêm 1 lần thay vì fail hẳn cả job ngay lập tức.
-    try {
-      await page.goto(config.chatAIBaseUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 900_000,
-      });
-    } catch (err) {
-      console.warn(
-        "[chatAIImage] page.goto lỗi lần 1, thử lại lần 2:",
-        err instanceof Error ? err.message : err,
-      );
-      await page.goto(config.chatAIBaseUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 900_000,
-      });
-    }
+    // Xác nhận qua log lỗi thật (job 95227a24, và nhiều job khác báo
+    // net::ERR_TUNNEL_CONNECTION_FAILED do proxy VPS chập chờn thoáng qua):
+    // dùng chung gotoChatAIWithRetry (chatAI.ts) thay vì tự viết retry riêng
+    // ở đây — cùng 1 endpoint (config.chatAIBaseUrl), cùng loại lỗi.
+    await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 900_000,
+    });
     await dismissCloudflareChallengeIfPresent(page);
 
     const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)

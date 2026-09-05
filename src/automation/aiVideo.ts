@@ -1092,11 +1092,11 @@ async function selectDurationIfNeeded(
       await clickWithForceFallback(option);
     }
     await page.waitForTimeout(300);
-    await captureSnapshot(
-      page,
-      `duration-attempt-${attempt}`,
-      `duration-attempt-${attempt}`,
-    );
+    // await captureSnapshot(
+    //   page,
+    //   `duration-attempt-${attempt}`,
+    //   `duration-attempt-${attempt}`,
+    // );
 
     const newLabel = await firstVisible(durationChipCandidates(page), 3000)
       .then((el) => el.innerText())

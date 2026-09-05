@@ -157,6 +157,44 @@ export async function clickWithOverlayDismiss(
 }
 
 /**
+ * Mở dialog Uploads qua nút toggle (data-testid="upload-card-asset-picker"/
+ * uploadCardButtonByLabel — aria-haspopup="dialog", aria-expanded) — xác
+ * nhận qua lỗi thật LẶP LẠI RẤT NHIỀU LẦN (hàng loạt job khác nhau, luôn
+ * cùng 1 kiểu: dialog Uploads đã ĐÓNG HẲN lúc chụp snapshot lỗi dù
+ * setInputFiles trước đó chạy thành công — nghĩa là dialog CÓ mở lúc đầu):
+ * nút này là DIV toggle (KHÔNG phải <button> thật, xem class group/upload-
+ * card + before/after hover-animation group-hover/image-upload:!translate-x)
+ * rất dễ bị Playwright báo "element is not stable" NGAY LÚC click vừa đăng
+ * ký — tức click ĐÃ thực sự mở dialog thành công nhưng Playwright vẫn coi
+ * là lỗi (do đang bận animate). clickWithOverlayDismiss (dùng cho click
+ * thường) sẽ RETRY click khi gặp lỗi này — click thêm 1 lần NỮA vào ĐÚNG
+ * nút toggle đó sẽ ĐÓNG LẠI dialog vừa mở (vì aria-expanded đảo trạng thái
+ * mỗi lần bấm), giải thích chính xác triệu chứng "dialog tự đóng giữa
+ * chừng" đã thấy lặp lại ở rất nhiều job.
+ *
+ * SỬA: trước MỖI lần thử click, kiểm tra aria-expanded — nếu đã "true" (đã
+ * mở, kể cả khi lần thử click TRƯỚC đó báo lỗi) thì DỪNG NGAY, không click
+ * thêm lần nào nữa.
+ */
+export async function ensureUploadDialogOpen(
+  page: Page,
+  trigger: Locator,
+  maxAttempts = 5,
+): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const expanded = await trigger.getAttribute("aria-expanded").catch(() => null);
+    if (expanded === "true") return;
+    try {
+      await trigger.click({ timeout: 4000 });
+      return;
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      await dismissBlockingOverlays(page);
+    }
+  }
+}
+
+/**
  * Xác nhận qua test thật (job inspect-pollo-deeplink, theo phát hiện của
  * user): pollo.ai hỗ trợ deep-link set sẵn CẢ mode lẫn model ngay qua URL —
  * vd https://pollo.ai/reference-to-video?target=reference-to-video&modelName=minimax-hailuo-03
@@ -521,8 +559,7 @@ async function uploadFrameImage(
   label: "Start" | "End",
   imagePath: string,
 ): Promise<void> {
-  const openDialog = () =>
-    clickWithOverlayDismiss(page, uploadCardButtonByLabel(page, label).first());
+  const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonByLabel(page, label).first());
   await openDialog();
   await submitAssetUpload(page, imagePath, openDialog);
 }
@@ -536,7 +573,7 @@ async function uploadFrameImage(
  * "Character Library" của họ, không phải luôn theo tên file đã upload).
  */
 async function uploadReferenceVideoImage(page: Page, imagePath: string): Promise<string> {
-  const openDialog = () => clickWithOverlayDismiss(page, uploadCardButtonForImage(page).first());
+  const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonForImage(page).first());
   await openDialog();
   return submitAssetUpload(page, imagePath, openDialog);
 }

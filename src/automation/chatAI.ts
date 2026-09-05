@@ -34,6 +34,38 @@ import { captureErrorSnapshot, captureSnapshot } from "./aiVideo";
 export class ChatAIError extends Error {}
 
 /**
+ * page.goto tới ChatGPT kèm retry — xác nhận qua lỗi thật (nhiều job khác
+ * nhau): proxy VPS thoáng qua bị lỗi tunnel (net::ERR_TUNNEL_CONNECTION_
+ * FAILED) khiến 1 lần goto thất bại hẳn (không phải chỉ chậm) dù chỉ vài
+ * giây sau thử lại là proxy đã ổn định trở lại. Retry tối đa `attempts`
+ * lần (mặc định 3), có delay giữa các lần thử — dùng chung cho MỌI lần
+ * page.goto tới config.chatAIBaseUrl (askChatAI, reviseGenerationPrompt,
+ * chatAIImage.ts) thay vì mỗi chỗ tự viết 1 kiểu retry riêng.
+ */
+export async function gotoChatAIWithRetry(
+  page: Page,
+  url: string,
+  options: Parameters<Page["goto"]>[1],
+  attempts = 3,
+  delayMs = 5000,
+): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await page.goto(url, options);
+      return;
+    } catch (err) {
+      const isLastAttempt = attempt === attempts;
+      console.warn(
+        `[chatAI] page.goto lỗi lần ${attempt}/${attempts}${isLastAttempt ? "" : ", thử lại"}:`,
+        err instanceof Error ? err.message : err,
+      );
+      if (isLastAttempt) throw err;
+      await page.waitForTimeout(delayMs);
+    }
+  }
+}
+
+/**
  * Xoá sạch nội dung ô nhập rồi gõ lại "text" qua page.keyboard.insertText()
  * — KHÔNG dùng textarea.fill(). Xác nhận qua debug thật (job 463abed5):
  * fill() set thẳng textContent của <div contenteditable> (ProseMirror) rồi
@@ -834,7 +866,7 @@ export async function askChatAI(
   const context = await getChatAIBrowserContext();
   const page = await context.newPage();
   try {
-    await page.goto(config.chatAIBaseUrl, {
+    await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -890,7 +922,7 @@ export async function askChatAI(
         lastMessageCount + 1,
       );
       lastMessageCount = result.messageCount;
-      await captureSnapshot(page, jobId, "result");
+      // await captureSnapshot(page, jobId, "result");
 
       // Xác nhận qua log lỗi thật (job 35941268/1aacc019): ChatAI đọc được
       // file đính kèm nhưng khẳng định SAI là "chưa chứa kịch bản phim" dù
@@ -904,11 +936,11 @@ export async function askChatAI(
         for (const filePath of result.downloadedFiles) {
           await fs.promises.unlink(filePath).catch(() => {});
         }
-        await captureSnapshot(
-          page,
-          `${jobId}-missing-script-turn-${turn}`,
-          `missing-script-turn-${turn}`,
-        );
+        // await captureSnapshot(
+        //   page,
+        //   `${jobId}-missing-script-turn-${turn}`,
+        //   `missing-script-turn-${turn}`,
+        // );
         const scriptText = attachmentPath
           ? await extractScriptFromAttachment(attachmentPath)
           : null;
@@ -1027,7 +1059,7 @@ export async function reviseGenerationPrompt(
   const context = await getChatAIReviseBrowserContext();
   const page = await context.newPage();
   try {
-    await page.goto(config.chatAIBaseUrl, {
+    await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -1070,7 +1102,7 @@ Hãy viết lại ĐÚNG prompt này để mô tả lại y hệt ý tưởng, b
       throw new ChatAIError("ChatAI không trả về prompt viết lại nào");
     }
 
-    await captureSnapshot(page, jobId, "revise-prompt-result");
+    // await captureSnapshot(page, jobId, "revise-prompt-result");
     return revisedPrompt;
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);

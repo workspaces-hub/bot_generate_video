@@ -6,6 +6,7 @@ import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
   clickWithOverlayDismiss,
   dismissBlockingOverlays,
+  ensureUploadDialogOpen,
   resolveDownloadExtension,
   submitAssetUpload,
 } from "./pollo";
@@ -56,7 +57,7 @@ export interface PolloGenerateImageOptions {
  * lưới khi đã có sẵn nhiều file khác).
  */
 async function uploadReferenceImage(page: Page, imagePath: string): Promise<void> {
-  const openDialog = () => clickWithOverlayDismiss(page, uploadCardButtonLocator(page).first());
+  const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonLocator(page).first());
   await openDialog();
   await submitAssetUpload(page, imagePath, openDialog);
 }
@@ -217,11 +218,11 @@ export async function generateImage(
     await page.waitForTimeout(300);
 
     const baseline = await captureResultBaseline(page);
-    await captureSnapshot(page, jobId, "before-click-generate");
+    // await captureSnapshot(page, jobId, "before-click-generate");
     await dismissBlockingOverlays(page);
     const generateButton = generateButtonLocator(page).first();
     await clickWithOverlayDismiss(page, generateButton);
-    await captureSnapshot(page, jobId, "after-click-generate");
+    // await captureSnapshot(page, jobId, "after-click-generate");
 
     const newCard = await waitForNewResult(page, baseline, config.generationTimeoutMs);
     return await downloadResultImages(page, newCard, jobId);
