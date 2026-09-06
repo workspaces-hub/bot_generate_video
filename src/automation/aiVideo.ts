@@ -1173,15 +1173,48 @@ function resolveRetryAfterMs(
 export async function fetchWithRetry(
   page: Page,
   url: string,
-  attempts = 4,
+  // Mặc định 8 (không phải 4) — xác nhận qua lỗi thật (test-pollo-generate-image,
+  // job test-gen-3803679f): pollo.ai CDN trả 429 với body nguyên văn "Too Many
+  // Connections" — khác hẳn rate-limit "quá nhiều request/phút" thông thường,
+  // đây là giới hạn SỐ KẾT NỐI ĐANG MỞ cùng lúc (nghi do IP proxy dùng chung
+  // với nhiều traffic khác). Server tự trả retry-after=5s (rất ngắn, được tôn
+  // trọng đúng — xem resolveRetryAfterMs) nhưng 4 lần thử (3 lần chờ 5s = 15s)
+  // vẫn KHÔNG đủ để có 1 khe kết nối trống. Vì mỗi lần chờ rất rẻ (5s, không
+  // phải 30s+ như 429 thường), tăng số lần thử lên nhiều hơn thay vì kéo dài
+  // từng lần chờ.
+  attempts = 8,
   delayMs = 5000,
 ): Promise<import("playwright").APIResponse> {
   let lastStatus = 0;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    // timeout: 0 = tắt hẳn giới hạn thời gian (cùng lý do đã sửa cho tải ảnh
-    // ChatAI ở chatAIImage.ts, job e887e23c) — video dung lượng lớn qua mạng
-    // VPS chậm không nên bị huỷ giữa chừng chỉ vì quá 30s mặc định.
-    const response = await page.context().request.get(url, { timeout: 0 });
+    let response: import("playwright").APIResponse;
+    try {
+      // timeout: 0 = tắt hẳn giới hạn thời gian (cùng lý do đã sửa cho tải ảnh
+      // ChatAI ở chatAIImage.ts, job e887e23c) — video dung lượng lớn qua mạng
+      // VPS chậm không nên bị huỷ giữa chừng chỉ vì quá 30s mặc định.
+      response = await page.context().request.get(url, { timeout: 0 });
+    } catch (err) {
+      // SỬA: request.get() có thể THROW thẳng (không trả về response nào cả)
+      // khi proxy không dựng được tunnel — xác nhận qua lỗi thật (script
+      // test-pollo-live-network): net::ERR_TUNNEL_CONNECTION_FAILED xảy ra
+      // HÀNG LOẠT trên nhiều domain khác nhau cùng lúc (Google Analytics,
+      // API riêng của pollo.ai, CDN ảnh/video...) — sự cố TẠM THỜI của
+      // chính PROXY, không phải site/CDN cụ thể nào. Trước đây lỗi này
+      // KHÔNG được bắt (không có try/catch), khiến toàn bộ cơ chế retry/
+      // backoff bên dưới (vốn chỉ xử lý response HTTP lỗi) bị bỏ qua hoàn
+      // toàn — throw ngay lần đầu dù còn nguyên "attempts" chưa dùng tới.
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[aiVideo] Tải file lỗi kết nối (lần ${attempt}/${attempts}): ${url}\n  lỗi: ${message}`,
+      );
+      if (attempt < attempts) {
+        await page.waitForTimeout(delayMs);
+        continue;
+      }
+      throw new GenerationError(
+        `Tải file thất bại sau ${attempts} lần thử: lỗi kết nối (${message})`,
+      );
+    }
     if (response.ok()) return response;
     lastStatus = response.status();
 

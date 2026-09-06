@@ -22,6 +22,7 @@ import {
   paramsChipLocator,
   promptEditorLocator,
   resultCardLocator,
+  resultItemLocator,
   resultVideoLocator,
   signInIndicatorCandidates,
   uploadCardButtonByLabel,
@@ -125,6 +126,40 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
   }
 
   await page.keyboard.press("Escape").catch(() => {});
+}
+
+/**
+ * page.goto có retry — xác nhận qua lỗi thật (script test-pollo-live-network,
+ * chạy thật qua đúng proxy trong .env): net::ERR_TUNNEL_CONNECTION_FAILED
+ * xảy ra HÀNG LOẠT trên rất nhiều domain khác nhau CÙNG LÚC (Google
+ * Analytics, API riêng của pollo.ai như banner.visibleList, CDN ảnh/video)
+ * — sự cố TẠM THỜI của chính PROXY, không phải site/CDN pollo.ai cụ thể nào.
+ * Trước đây page.goto() KHÔNG có retry gì cả — gặp đúng lỗi này giữa lúc mở
+ * trang là throw ngay, y hệt kiểu lỗi ERR_TUNNEL_CONNECTION_FAILED đã từng
+ * gặp và sửa cho ChatGPT (xem gotoChatAIWithRetry trong chatAI.ts) — áp dụng
+ * cùng cơ chế cho pollo.ai.
+ */
+export async function gotoPolloWithRetry(
+  page: Page,
+  url: string,
+  options: Parameters<Page["goto"]>[1],
+  attempts = 3,
+  delayMs = 5000,
+): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await page.goto(url, options);
+      return;
+    } catch (err) {
+      const isLastAttempt = attempt === attempts;
+      console.warn(
+        `[pollo] page.goto lỗi lần ${attempt}/${attempts}${isLastAttempt ? "" : ", thử lại"}:`,
+        err instanceof Error ? err.message : err,
+      );
+      if (isLastAttempt) throw err;
+      await page.waitForTimeout(delayMs);
+    }
+  }
 }
 
 /**
@@ -851,20 +886,71 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
  * marketing ("Maintain Perfect Subject Consistency Across Frames", FAQ,
  * pricing...) dù đã đăng nhập THẬT (data-user-status="valid" trên <html>,
  * KHÔNG phải lỗi session — signInIndicatorCandidates không bắt được trường
- * hợp này) — 0 phần tử prompt-editor/prompt-generate-btn nào trong DOM. Mọi
- * thao tác sau đó (upload, mention, focus editor...) đều thất bại với thông
- * báo khó hiểu (vd "Upload timeout" dù không liên quan gì tới upload thật).
- * Nghi do trang deep-link mới thêm 1 lớp shell marketing/SEO render trước,
- * hydrate composer thật SAU — đôi khi hydrate không kịp/không xong trong
- * khoảng chờ cố định (networkidle + 2s) hiện tại.
+ * hợp này). Mọi thao tác sau đó (upload, mention, focus editor...) đều thất
+ * bại với thông báo khó hiểu (vd "Upload timeout" dù không liên quan gì tới
+ * upload thật). Nguyên nhân gốc (xác nhận qua script test-pollo-live-network,
+ * chạy thật qua proxy trong .env): PHẦN LỚN file JS (_next/static/chunks/*.js
+ * — mã nguồn thật của app) lỗi net::ERR_TUNNEL_CONNECTION_FAILED do proxy
+ * chập chờn, khiến trang chỉ render được HTML tĩnh phía server (SSR shell),
+ * KHÔNG hydrate được thành composer thật.
+ *
+ * SỬA (xác nhận qua lỗi thật, job test-gen-fc50dac0 — locator.focus() timeout
+ * 30s ngay cả SAU KHI waitForComposerReady báo true): bản đầu chỉ kiểm tra
+ * `[data-testid="prompt-editor"]` (khung bọc ngoài) hoặc
+ * `[data-testid="prompt-generate-btn"]` ĐÃ ATTACHED — nhưng khung bọc ngoài
+ * này lại ĐƯỢC SERVER RENDER SẴN (SSR, xác nhận qua HTML debug thật:
+ * data-testid="prompt-editor" tồn tại NGAY CẢ KHI trang chưa hydrate xong),
+ * nên "attached" KHÔNG chứng minh được đã hydrate — false positive, báo sẵn
+ * sàng trong khi thực ra composer vẫn chỉ là shell tĩnh. Phần tử
+ * `contenteditable="true"` bên trong CHỈ được ProseMirror (JS) thêm vào SAU
+ * khi hydrate xong — đây mới là tín hiệu đáng tin, và cũng chính là phần tử
+ * mà mọi nơi gọi promptEditorLocator() thực sự cần dùng ngay sau đó.
  */
 export async function waitForComposerReady(page: Page, timeoutMs: number): Promise<boolean> {
   return await page
-    .locator('[data-testid="prompt-generate-btn"], [data-testid="prompt-editor"]')
+    .locator('[data-testid="prompt-editor"] [contenteditable="true"]')
     .first()
     .waitFor({ state: "attached", timeout: timeoutMs })
     .then(() => true)
     .catch(() => false);
+}
+
+/**
+ * Gọi SAU KHI đã goto() xong — chờ composer sẵn sàng (xem
+ * waitForComposerReady), RELOAD TỐI ĐA maxReloads lần nếu chưa thấy, rồi
+ * throw GenerationError rõ ràng nếu vẫn không được. An toàn để reload ở ĐÂY
+ * (khác hẳn lúc đang chờ kết quả generate — xem findRecentVideoViaCreatePage):
+ * thời điểm này CHƯA bấm Generate, chưa có gì đang chạy dở để mất.
+ *
+ * maxReloads=2 (không phải 1) — xác nhận qua lỗi thật (job test-gen-d5cf5eb1):
+ * gốc rễ là PROXY chập chờn (xem docstring waitForComposerReady), mức lỗi có
+ * thể dao động rất mạnh theo từng thời điểm (có lúc 60+ request tĩnh cùng lỗi
+ * tunnel, có lúc load sạch hoàn toàn ngay lần đầu) — 1 lần reload không phải
+ * lúc nào cũng đủ để "trúng" đúng lúc proxy ổn định trở lại, thêm 1 lần nữa
+ * tăng cơ hội mà chi phí thời gian không đáng kể so với việc bỏ cuộc cả job.
+ */
+export async function ensureComposerReadyOrThrow(
+  page: Page,
+  url: string,
+  featureLabel: string,
+  maxReloads = 2,
+): Promise<void> {
+  let composerReady = await waitForComposerReady(page, 15_000);
+  for (let reloadAttempt = 1; !composerReady && reloadAttempt <= maxReloads; reloadAttempt++) {
+    console.warn(
+      `[pollo] Composer chưa render sau khi vào ${url} (proxy có thể đang chập chờn) — thử reload lại (lần ${reloadAttempt}/${maxReloads}).`,
+    );
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 0 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+    await dismissBlockingOverlays(page);
+    composerReady = await waitForComposerReady(page, 20_000);
+  }
+  if (!composerReady) {
+    throw new GenerationError(
+      `pollo.ai không hiển thị giao diện ${featureLabel} (${url}) — trang chưa hydrate xong dù đã reload lại ${maxReloads} lần. Có thể proxy đang chập chờn nặng hoặc site đổi cấu trúc trang.`,
+    );
+  }
 }
 
 /**
@@ -922,6 +1008,52 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void
   await switchLocator.click({ timeout: 5000 }).catch((err) => {
     console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
   });
+}
+
+/**
+ * Bấm vào 1 thumbnail kết quả (xem resultItemLocator) để lấy id nội bộ
+ * pollo.ai của đúng output đó — xác nhận qua DOM thật (script inspect-pollo-
+ * video-id*, không lưu lại trong repo): id KHÔNG có sẵn trong DOM dưới dạng
+ * href/data-* nào, CHỈ lộ ra qua URL SAU KHI click thật (điều hướng phía
+ * client sang dạng "https://pollo.ai/v/<id>" — khớp định dạng
+ * "videoId=<id>" trong URL mà người dùng cung cấp, vd
+ * https://pollo.ai/create?target=text-to-image&videoId=cmtprxlrq40fjla09jl34o9pv).
+ *
+ * Theo yêu cầu người dùng: ID này được LƯU VÀO ĐÚNG ENTRY trong file JSON
+ * storyboard gốc (storage/generated/<FILE_JSON>/<FILE_JSON>.json), KHÔNG
+ * phải 1 file riêng — caller (storyboardPipeline.ts, nơi đã đọc/ghi entries
+ * qua saveEntries) tự gán vào field entry.polloResultId rồi lưu, nên hàm này
+ * CHỈ trả về id (hoặc null), không tự ghi file gì cả.
+ *
+ * Best-effort: KHÔNG throw nếu không lấy được (đây là dữ liệu bổ sung, không
+ * nên làm rớt cả job generate nếu chỉ bước lấy id thất bại). Tự quay lại
+ * (goBack) trang trước đó sau khi lấy xong, phòng khi code gọi sau còn cần
+ * dùng lại đúng trang composer (dù hiện tại luôn gọi hàm này SAU CÙNG, ngay
+ * trước khi đóng page).
+ */
+export async function captureResultId(page: Page, card: Locator): Promise<string | null> {
+  const item = resultItemLocator(card).first();
+  const urlBefore = page.url();
+  const clicked = await item
+    .click({ timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!clicked) {
+    console.warn("[pollo] Không bấm được vào thumbnail kết quả để lấy id (bỏ qua).");
+    return null;
+  }
+
+  await page.waitForTimeout(1000);
+  const match = page.url().match(/\/v\/([a-z0-9]+)/i);
+
+  if (page.url() !== urlBefore) {
+    await page.goBack({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {});
+  }
+  if (!match) {
+    console.warn(`[pollo] Không đọc được id kết quả từ URL sau khi click (URL: ${page.url()}).`);
+    return null;
+  }
+  return match[1];
 }
 
 interface ResultBaseline {
@@ -1002,12 +1134,18 @@ async function findRecentVideoViaCreatePage(
  * ràng khác như outOfCredit) — giống tinh thần "timeout: 0" đã áp dụng cho
  * page.goto.
  */
+interface VideoResult {
+  src: string;
+  /** Card trên chính page đang mở — null nếu kết quả chỉ tìm thấy qua /create (xem findRecentVideoViaCreatePage), lúc đó không có card nào trên page hiện tại để lấy id (xem captureResultId). */
+  card: Locator | null;
+}
+
 async function waitForNewResult(
   page: Page,
   baseline: ResultBaseline,
   timeoutMs: number,
   generateClickedAtMs: number,
-): Promise<string> {
+): Promise<VideoResult> {
   const cards = resultCardLocator(page);
   const start = Date.now();
   const pollIntervalMs = 5000;
@@ -1027,7 +1165,7 @@ async function waitForNewResult(
         const videoCount = await resultVideoLocator(newCard).count();
         if (videoCount > 0) {
           const src = await resultVideoLocator(newCard).first().getAttribute("src");
-          if (src) return src;
+          if (src) return { src, card: newCard };
         }
         // Cùng cơ chế card kết quả với polloImage.ts (xem docstring
         // waitForNewResult ở đó) — pollo.ai có thể từ chối vì nội dung bị
@@ -1067,7 +1205,7 @@ async function waitForNewResult(
       const foundSrc = await findRecentVideoViaCreatePage(page, generateClickedAtMs).catch(
         () => null,
       );
-      if (foundSrc) return foundSrc;
+      if (foundSrc) return { src: foundSrc, card: null };
     }
 
     if (!sawGeneratingCard && Date.now() - start >= timeoutMs) {
@@ -1097,11 +1235,17 @@ async function downloadResultVideo(page: Page, src: string, jobId: string): Prom
   return filePath;
 }
 
+/** Kết quả generate video pollo.ai — polloResultId (id nội bộ pollo.ai, dạng "/v/<id>") null nếu không lấy được (xem captureResultId), caller (storyboardPipeline.ts) tự quyết định lưu vào đâu. */
+export interface PolloGenerateVideoResult {
+  filePath: string;
+  polloResultId: string | null;
+}
+
 export async function generateVideo(
   prompt: string,
   { startFramePath, endFramePath, referenceImagePaths = [], model, duration }: PolloGenerateVideoOptions,
   jobId: string,
-): Promise<string> {
+): Promise<PolloGenerateVideoResult> {
   const context = await getPolloBrowserContext();
   const page = await context.newPage();
   try {
@@ -1119,31 +1263,12 @@ export async function generateVideo(
     // gì sai, làm rớt cả job dù chỉ là chậm tạm thời. Cùng lý do đã áp dụng
     // cho fetchWithRetry (tải file lớn qua mạng chậm không nên bị huỷ giữa
     // chừng chỉ vì quá 1 mốc thời gian cố định).
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 0 });
+    await gotoPolloWithRetry(page, url, { waitUntil: "domcontentloaded", timeout: 0 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
     await dismissBlockingOverlays(page);
 
-    // Composer chưa render (xem docstring waitForComposerReady) — RELOAD 1
-    // LẦN trước khi bỏ cuộc. An toàn để reload ở ĐÂY (khác hẳn lúc đang chờ
-    // kết quả generate — xem findRecentVideoViaCreatePage): thời điểm này
-    // CHƯA bấm Generate, chưa có gì đang chạy dở để mất.
-    let composerReady = await waitForComposerReady(page, 15_000);
-    if (!composerReady) {
-      console.warn(
-        `[pollo] Composer chưa render sau khi vào ${url} (chỉ thấy trang marketing) — thử reload lại 1 lần.`,
-      );
-      await page.reload({ waitUntil: "domcontentloaded", timeout: 0 }).catch(() => {});
-      await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
-      await page.waitForTimeout(2000);
-      await dismissBlockingOverlays(page);
-      composerReady = await waitForComposerReady(page, 20_000);
-    }
-    if (!composerReady) {
-      throw new GenerationError(
-        `pollo.ai không hiển thị giao diện tạo video (${url}) — trang chỉ hiện nội dung marketing dù đã đăng nhập, kể cả sau khi reload lại. Có thể site đang gặp sự cố hoặc đổi cấu trúc trang.`,
-      );
-    }
+    await ensureComposerReadyOrThrow(page, url, "tạo video");
 
     const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
       .then(() => true)
@@ -1213,13 +1338,18 @@ export async function generateVideo(
     await clickWithOverlayDismiss(page, generateButton);
     const generateClickedAtMs = Date.now();
 
-    const videoSrc = await waitForNewResult(
+    const { src: videoSrc, card: resultCard } = await waitForNewResult(
       page,
       baseline,
       config.generationTimeoutMs,
       generateClickedAtMs,
     );
-    return await downloadResultVideo(page, videoSrc, jobId);
+    const filePath = await downloadResultVideo(page, videoSrc, jobId);
+    // resultCard null = kết quả chỉ tìm thấy qua /create (xem
+    // findRecentVideoViaCreatePage), không có card nào trên page hiện tại để
+    // lấy id — best-effort bỏ qua, không cố gắng thêm (trường hợp hiếm).
+    const polloResultId = resultCard ? await captureResultId(page, resultCard) : null;
+    return { filePath, polloResultId };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
     throw err instanceof GenerationError

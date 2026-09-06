@@ -200,6 +200,19 @@ export const resultCardLocator = (page: Page): Locator =>
   page.locator('[data-widget-name="project_content_card"]');
 
 /**
+ * 1 THUMBNAIL cụ thể (1 ảnh/video output) BÊN TRONG resultCardLocator — khác
+ * cấp với resultCardLocator (card = cả khối prompt + LƯỚI có thể nhiều output
+ * cùng lúc, thumbnail = từng ô trong lưới đó). Bấm vào thumbnail này điều
+ * hướng sang URL dạng "/v/<id>" (id nội bộ pollo.ai cho đúng output đó) — xác
+ * nhận qua DOM thật (script inspect-pollo-video-id*, không lưu lại trong
+ * repo): outerHTML mang class "group relative flex w-full cursor-pointer...",
+ * KHÔNG có href/data-* nào chứa sẵn id — id CHỈ lộ ra qua URL SAU KHI click
+ * thật (điều hướng phía client, không phải link tĩnh).
+ */
+export const resultItemLocator = (card: Page | Locator): Locator =>
+  card.locator("div.group.relative.cursor-pointer");
+
+/**
  * Ảnh THÀNH CÔNG bên trong 1 result card — alt cố định "Generated image",
  * src là URL CDN cuối cùng. Xác nhận qua file tải THẬT (job
  * test-pollo-image-e2e): ảnh VẪN có watermark "Pollo.ai" đóng góc, KHÔNG có

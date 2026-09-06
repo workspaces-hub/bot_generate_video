@@ -30,6 +30,8 @@ export interface StoryboardEntry {
   success?: boolean;
   /** Id hội thoại ChatAI (phần "/c/<id>" trên URL) lúc gen ảnh cho entry này — chỉ có ở entry CHARACTER/LOCATION/SCENE_SETTING (dùng ChatAI), VIDEO không có (dùng AIVideo). */
   chatAISessionId?: string;
+  /** Id nội bộ pollo.ai (phần "/v/<id>" trên URL, vd https://pollo.ai/create?target=text-to-image&videoId=<id>) của kết quả gen ảnh/video mới nhất qua Pollo cho entry này — theo yêu cầu người dùng, xem captureResultId trong pollo.ts. */
+  polloResultId?: string;
   [key: string]: unknown;
 }
 
@@ -631,13 +633,18 @@ export async function generateReferenceImagesForFileViaPollo(
     );
     let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
     try {
-      const imagePaths = await generateWithContentViolationRetry(
+      const { filePaths: imagePaths, polloResultId } = await generateWithContentViolationRetry(
         entry,
         jobId,
         () => generateImagePollo(entry.prompt!, {}, jobId),
       );
       if (imagePaths.length === 0) {
         throw new Error("Không tạo được ảnh nào");
+      }
+      // Lưu id kết quả pollo.ai (dạng "/v/<id>") NGAY VÀO entry trong file
+      // JSON storyboard gốc — theo yêu cầu người dùng, KHÔNG lưu file riêng.
+      if (polloResultId) {
+        entry.polloResultId = polloResultId;
       }
       const [firstImage, ...extraImages] = imagePaths;
       destPath = path.join(
@@ -1088,7 +1095,7 @@ export async function generateVideosForFilePollo(
       console.log(
         `[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video (pollo)...`,
       );
-      const tempFilePath = await generateWithContentViolationRetry(
+      const { filePath: tempFilePath, polloResultId } = await generateWithContentViolationRetry(
         entry,
         jobId,
         () =>
@@ -1098,6 +1105,11 @@ export async function generateVideosForFilePollo(
             jobId,
           ),
       );
+      // Lưu id kết quả pollo.ai (dạng "/v/<id>") NGAY VÀO entry trong file
+      // JSON storyboard gốc — theo yêu cầu người dùng, KHÔNG lưu file riêng.
+      if (polloResultId) {
+        entry.polloResultId = polloResultId;
+      }
 
       const destPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
       try {

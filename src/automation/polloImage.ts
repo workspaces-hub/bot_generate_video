@@ -4,13 +4,15 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
+  captureResultId,
   clickWithOverlayDismiss,
   dismissBlockingOverlays,
   enableUnlimitedIfNotEnoughCredit,
+  ensureComposerReadyOrThrow,
   ensureUploadDialogOpen,
+  gotoPolloWithRetry,
   resolveDownloadExtension,
   submitAssetUpload,
-  waitForComposerReady,
 } from "./pollo";
 import {
   GenerationError,
@@ -205,17 +207,21 @@ async function downloadResultImages(
   return filePaths;
 }
 
+/** Kết quả generate ảnh pollo.ai — polloResultId (id nội bộ pollo.ai, dạng "/v/<id>") null nếu không lấy được (xem captureResultId), caller (storyboardPipeline.ts) tự quyết định lưu vào đâu. */
+export interface PolloGenerateImageResult {
+  filePaths: string[];
+  polloResultId: string | null;
+}
+
 /**
  * Tạo ảnh từ prompt + tối đa vài ảnh tham chiếu (tuỳ chọn) qua pollo.ai
- * (mode "Text/Image to Image", mặc định của trang /image). Cùng interface
- * trả về (mảng path) với generateImage của aiVideoImage.ts để dễ dùng thay
- * thế cho nhau sau này (nếu wired vào storyboardPipeline.ts).
+ * (mode "Text/Image to Image", mặc định của trang /image).
  */
 export async function generateImage(
   prompt: string,
   { referenceImagePaths = [] }: PolloGenerateImageOptions,
   jobId: string,
-): Promise<string[]> {
+): Promise<PolloGenerateImageResult> {
   const context = await getPolloImageBrowserContext();
   const page = await context.newPage();
   try {
@@ -223,34 +229,12 @@ export async function generateImage(
     // timeout: 0 = tắt hẳn giới hạn thời gian — cùng lý do đã sửa cho
     // generateVideo bên pollo.ts (job microdrama_co_dau_phan_boi_twist_prompt):
     // mạng/site chậm thoáng qua không nên làm rớt cả job.
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 0 });
+    await gotoPolloWithRetry(page, url, { waitUntil: "domcontentloaded", timeout: 0 });
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
     await dismissBlockingOverlays(page);
 
-    // Composer chưa render (xem docstring waitForComposerReady trong
-    // pollo.ts) — xác nhận qua lỗi thật LẶP LẠI TRÊN MỌI JOB ảnh liên tiếp
-    // (test_normal_2/3, hàng loạt CHARACTER/LOCATION): snapshot cho thấy
-    // trang chỉ load được HTML thô, CHƯA áp dụng CSS/JS xong (data-user-status
-    // vẫn "valid" — không phải lỗi đăng nhập, dù nhìn thấy chữ "Login" do CSS
-    // ẩn nó chưa kịp load). RELOAD 1 lần trước khi bỏ cuộc — an toàn ở bước
-    // này vì chưa bấm Generate.
-    let composerReady = await waitForComposerReady(page, 15_000);
-    if (!composerReady) {
-      console.warn(
-        `[pollo] Composer chưa render sau khi vào ${url} (trang có thể chưa hydrate xong) — thử reload lại 1 lần.`,
-      );
-      await page.reload({ waitUntil: "domcontentloaded", timeout: 0 }).catch(() => {});
-      await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
-      await page.waitForTimeout(2000);
-      await dismissBlockingOverlays(page);
-      composerReady = await waitForComposerReady(page, 20_000);
-    }
-    if (!composerReady) {
-      throw new GenerationError(
-        `pollo.ai không hiển thị giao diện tạo ảnh (${url}) — trang chưa hydrate xong dù đã reload lại. Có thể site đang gặp sự cố hoặc đổi cấu trúc trang.`,
-      );
-    }
+    await ensureComposerReadyOrThrow(page, url, "tạo ảnh");
 
     const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
       .then(() => true)
@@ -280,7 +264,9 @@ export async function generateImage(
     // await captureSnapshot(page, jobId, "after-click-generate");
 
     const newCard = await waitForNewResult(page, baseline, config.generationTimeoutMs);
-    return await downloadResultImages(page, newCard, jobId);
+    const filePaths = await downloadResultImages(page, newCard, jobId);
+    const polloResultId = await captureResultId(page, newCard);
+    return { filePaths, polloResultId };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
     throw err instanceof GenerationError
