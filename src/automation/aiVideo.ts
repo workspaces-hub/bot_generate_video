@@ -1192,7 +1192,15 @@ export async function fetchWithRetry(
       // EP01_drama_SHOT_17_CLIP_01_VIDEO): delay cố định 5s giữa các lần thử
       // quá ngắn để tránh rate-limit thật, dùng Retry-After của server nếu
       // có, không thì chờ hẳn 30s (thay vì 5s) mới thử lại.
-      const wait = lastStatus === 429 ? resolveRetryAfterMs(response, 30_000) : delayMs;
+      //
+      // SỬA: 30s CỐ ĐỊNH cho mọi lần thử vẫn CHƯA đủ — xác nhận qua lỗi thật
+      // (job test_normal_2_CHAR_MARGARET): vẫn nhận HTTP 429 sau ĐỦ 4 lần
+      // thử (3 lần chờ 30s = 90s tổng cộng) mà chưa hết bị giới hạn. Tăng
+      // dần theo số lần thử (30s/60s/90s...) khi server không trả
+      // Retry-After — cho CDN nhiều thời gian hồi hơn thay vì cứ chờ đúng 1
+      // mốc cố định rồi bỏ cuộc.
+      const wait =
+        lastStatus === 429 ? resolveRetryAfterMs(response, 30_000 * attempt) : delayMs;
       await page.waitForTimeout(wait);
     }
   }
