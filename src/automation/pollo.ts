@@ -858,7 +858,7 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
  * hydrate composer thật SAU — đôi khi hydrate không kịp/không xong trong
  * khoảng chờ cố định (networkidle + 2s) hiện tại.
  */
-async function waitForComposerReady(page: Page, timeoutMs: number): Promise<boolean> {
+export async function waitForComposerReady(page: Page, timeoutMs: number): Promise<boolean> {
   return await page
     .locator('[data-testid="prompt-generate-btn"], [data-testid="prompt-editor"]')
     .first()

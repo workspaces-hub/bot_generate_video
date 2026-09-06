@@ -9,6 +9,7 @@ import {
   ensureUploadDialogOpen,
   resolveDownloadExtension,
   submitAssetUpload,
+  waitForComposerReady,
 } from "./pollo";
 import {
   GenerationError,
@@ -225,6 +226,30 @@ export async function generateImage(
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
     await dismissBlockingOverlays(page);
+
+    // Composer chưa render (xem docstring waitForComposerReady trong
+    // pollo.ts) — xác nhận qua lỗi thật LẶP LẠI TRÊN MỌI JOB ảnh liên tiếp
+    // (test_normal_2/3, hàng loạt CHARACTER/LOCATION): snapshot cho thấy
+    // trang chỉ load được HTML thô, CHƯA áp dụng CSS/JS xong (data-user-status
+    // vẫn "valid" — không phải lỗi đăng nhập, dù nhìn thấy chữ "Login" do CSS
+    // ẩn nó chưa kịp load). RELOAD 1 lần trước khi bỏ cuộc — an toàn ở bước
+    // này vì chưa bấm Generate.
+    let composerReady = await waitForComposerReady(page, 15_000);
+    if (!composerReady) {
+      console.warn(
+        `[pollo] Composer chưa render sau khi vào ${url} (trang có thể chưa hydrate xong) — thử reload lại 1 lần.`,
+      );
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 0 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+      await dismissBlockingOverlays(page);
+      composerReady = await waitForComposerReady(page, 20_000);
+    }
+    if (!composerReady) {
+      throw new GenerationError(
+        `pollo.ai không hiển thị giao diện tạo ảnh (${url}) — trang chưa hydrate xong dù đã reload lại. Có thể site đang gặp sự cố hoặc đổi cấu trúc trang.`,
+      );
+    }
 
     const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
       .then(() => true)
