@@ -867,6 +867,63 @@ export async function waitForComposerReady(page: Page, timeoutMs: number): Promi
     .catch(() => false);
 }
 
+/**
+ * Tự bật switch "Unlimited" khi credit hiện tại KHÔNG đủ trả phí lượt tạo
+ * này — theo yêu cầu người dùng. Xác nhận qua DOM thật (script khảo sát
+ * 1 lần, không lưu lại trong repo):
+ * - Switch nằm trong `div[data-button-name="is_unlimited"]` (kèm
+ *   `data-unlimited-model="<tên model>"` — CHỈ render khi model đang chọn có
+ *   hỗ trợ Unlimited, best-effort bỏ qua nếu không thấy chứ không throw).
+ *   Tooltip khi hover xác nhận đúng nghĩa: "Turn it on for unlimited free
+ *   generations (363/365 days). Turn it off for faster speeds." — bật lên
+ *   thì generate dùng quota Unlimited riêng (KHÔNG trừ credit).
+ * - Credit hiện tại đọc qua `span.i-cus--pol-credits-2` (icon coin cạnh số
+ *   dư, header).
+ * - Phí lượt tạo hiện tại đọc qua `[data-slot="credit-cost-value"]` (hiện
+ *   cạnh nút Generate, đổi theo model/setting đang chọn — PHẢI đọc SAU khi
+ *   đã chọn xong model/duration/mention, ngay trước lúc bấm Generate).
+ */
+export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void> {
+  const switchLocator = page
+    .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+    .first();
+  const switchExists = (await switchLocator.count().catch(() => 0)) > 0;
+  if (!switchExists) return;
+
+  const alreadyOn =
+    (await switchLocator.getAttribute("aria-checked").catch(() => null)) === "true";
+  if (alreadyOn) return;
+
+  const creditText = await page
+    .locator("span.i-cus--pol-credits-2")
+    .locator("xpath=..")
+    .first()
+    .innerText()
+    .catch(() => "");
+  const feeText = await page
+    .locator('[data-slot="credit-cost-value"] .font-semibold')
+    .first()
+    .innerText()
+    .catch(() => "");
+  const credit = Number.parseInt(creditText, 10);
+  const fee = Number.parseInt(feeText, 10);
+
+  if (!Number.isFinite(credit) || !Number.isFinite(fee)) {
+    console.warn(
+      `[pollo] Không đọc được credit/phí lượt tạo (credit="${creditText}", phí="${feeText}") — bỏ qua bật Unlimited.`,
+    );
+    return;
+  }
+  if (credit >= fee) return;
+
+  console.warn(
+    `[pollo] Credit hiện tại (${credit}) không đủ trả phí lượt tạo (${fee}) — tự bật "Unlimited".`,
+  );
+  await switchLocator.click({ timeout: 5000 }).catch((err) => {
+    console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
+  });
+}
+
 interface ResultBaseline {
   count: number;
 }
@@ -1147,6 +1204,8 @@ export async function generateVideo(
         await insertMentionForFile(page, assetUrl);
       }
     }
+
+    await enableUnlimitedIfNotEnoughCredit(page);
 
     const baseline = await captureResultBaseline(page);
 

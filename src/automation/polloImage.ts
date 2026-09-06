@@ -6,6 +6,7 @@ import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
   clickWithOverlayDismiss,
   dismissBlockingOverlays,
+  enableUnlimitedIfNotEnoughCredit,
   ensureUploadDialogOpen,
   resolveDownloadExtension,
   submitAssetUpload,
@@ -268,6 +269,8 @@ export async function generateImage(
     await editor.focus();
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
+
+    await enableUnlimitedIfNotEnoughCredit(page);
 
     const baseline = await captureResultBaseline(page);
     // await captureSnapshot(page, jobId, "before-click-generate");
