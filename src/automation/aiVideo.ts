@@ -1184,21 +1184,34 @@ export async function fetchWithRetry(
     const response = await page.context().request.get(url, { timeout: 0 });
     if (response.ok()) return response;
     lastStatus = response.status();
-    // console.warn(
-    //   `[aiVideo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}`,
-    // );
+
+    // GHI LOG chi tiết response khi lỗi — xác nhận qua lỗi thật LẶP LẠI (job
+    // test_normal_2_CHAR_MARGARET, 2 lần cách nhau ~13 phút, kể cả sau khi
+    // đã tăng backoff 429 lên 30/60/90s = 180s tổng): backoff dài hơn KHÔNG
+    // giải quyết được, nghi đây không phải rate-limit ngắn hạn thông thường
+    // (có thể là quota dài hạn hơn, hoặc chặn theo IP dùng chung với các
+    // request khác của cả bot — video/ảnh/dọn rác asset đều poll pollo.ai
+    // liên tục qua CÙNG 1 proxy IP). Log header/body thật để lần lỗi tiếp
+    // theo có bằng chứng cụ thể thay vì đoán tiếp (theo đúng cách đã tìm ra
+    // gốc rễ lỗi upload ChatAI trước đó).
+    const responseHeaders = response.headers();
+    const bodySnippet = await response
+      .text()
+      .then((t) => t.slice(0, 300))
+      .catch(() => "(không đọc được body)");
+    console.warn(
+      `[aiVideo] Tải file lỗi HTTP ${lastStatus} (lần ${attempt}/${attempts}): ${url}\n` +
+        `  headers: retry-after=${responseHeaders["retry-after"] ?? "(không có)"}, cf-ray=${responseHeaders["cf-ray"] ?? "(không có)"}, server=${responseHeaders["server"] ?? "(không có)"}\n` +
+        `  body: ${bodySnippet}`,
+    );
+
     if (attempt < attempts) {
       // HTTP 429 (rate limit) — xác nhận qua lỗi thật (job
       // EP01_drama_SHOT_17_CLIP_01_VIDEO): delay cố định 5s giữa các lần thử
       // quá ngắn để tránh rate-limit thật, dùng Retry-After của server nếu
-      // có, không thì chờ hẳn 30s (thay vì 5s) mới thử lại.
-      //
-      // SỬA: 30s CỐ ĐỊNH cho mọi lần thử vẫn CHƯA đủ — xác nhận qua lỗi thật
-      // (job test_normal_2_CHAR_MARGARET): vẫn nhận HTTP 429 sau ĐỦ 4 lần
-      // thử (3 lần chờ 30s = 90s tổng cộng) mà chưa hết bị giới hạn. Tăng
-      // dần theo số lần thử (30s/60s/90s...) khi server không trả
-      // Retry-After — cho CDN nhiều thời gian hồi hơn thay vì cứ chờ đúng 1
-      // mốc cố định rồi bỏ cuộc.
+      // có, không thì chờ hẳn 30s (thay vì 5s) mới thử lại. SAU ĐÓ tăng dần
+      // theo số lần thử (30/60/90s) — vẫn KHÔNG đủ, xem log chi tiết ở trên
+      // để tìm nguyên nhân thật thay vì tiếp tục kéo dài backoff mù quáng.
       const wait =
         lastStatus === 429 ? resolveRetryAfterMs(response, 30_000 * attempt) : delayMs;
       await page.waitForTimeout(wait);
