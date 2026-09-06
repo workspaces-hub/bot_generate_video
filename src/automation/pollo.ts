@@ -844,6 +844,29 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
   );
 }
 
+/**
+ * Xác nhận trang ĐÃ render composer thật (không chỉ trang marketing/SEO) —
+ * xác nhận qua lỗi thật LẶP LẠI NHIỀU LẦN (test_donghua_SHOT_01/02,
+ * test_tutien_SHOT_01/19): goto xong trang chỉ hiện full-page nội dung
+ * marketing ("Maintain Perfect Subject Consistency Across Frames", FAQ,
+ * pricing...) dù đã đăng nhập THẬT (data-user-status="valid" trên <html>,
+ * KHÔNG phải lỗi session — signInIndicatorCandidates không bắt được trường
+ * hợp này) — 0 phần tử prompt-editor/prompt-generate-btn nào trong DOM. Mọi
+ * thao tác sau đó (upload, mention, focus editor...) đều thất bại với thông
+ * báo khó hiểu (vd "Upload timeout" dù không liên quan gì tới upload thật).
+ * Nghi do trang deep-link mới thêm 1 lớp shell marketing/SEO render trước,
+ * hydrate composer thật SAU — đôi khi hydrate không kịp/không xong trong
+ * khoảng chờ cố định (networkidle + 2s) hiện tại.
+ */
+async function waitForComposerReady(page: Page, timeoutMs: number): Promise<boolean> {
+  return await page
+    .locator('[data-testid="prompt-generate-btn"], [data-testid="prompt-editor"]')
+    .first()
+    .waitFor({ state: "attached", timeout: timeoutMs })
+    .then(() => true)
+    .catch(() => false);
+}
+
 interface ResultBaseline {
   count: number;
 }
@@ -949,6 +972,19 @@ async function waitForNewResult(
           const src = await resultVideoLocator(newCard).first().getAttribute("src");
           if (src) return src;
         }
+        // Cùng cơ chế card kết quả với polloImage.ts (xem docstring
+        // waitForNewResult ở đó) — pollo.ai có thể từ chối vì nội dung bị
+        // model bên thứ 3 gắn cờ ("Input flagged by the third-party model...")
+        // ngay cả ở mode video, dù chưa trực tiếp gặp job video nào bị vậy
+        // (chỉ mới xác nhận ở ảnh). Ném message chứa nguyên văn để khớp
+        // CONTENT_VIOLATION_PATTERN, kích hoạt retry qua ChatAI thay vì bỏ
+        // cuộc ngay.
+        const cardText = await newCard.innerText().catch(() => "");
+        if (/flagged by the third-party model/i.test(cardText)) {
+          throw new GenerationError(
+            `pollo.ai từ chối tạo video: ${cardText.split("\n")[0].trim()}`,
+          );
+        }
         throw new GenerationError(
           "pollo.ai báo card kết quả đã xong nhưng không thấy video nào (có thể đã lỗi — cần bổ sung phát hiện cụ thể khi có bằng chứng thật)",
         );
@@ -1030,6 +1066,27 @@ export async function generateVideo(
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
     await dismissBlockingOverlays(page);
+
+    // Composer chưa render (xem docstring waitForComposerReady) — RELOAD 1
+    // LẦN trước khi bỏ cuộc. An toàn để reload ở ĐÂY (khác hẳn lúc đang chờ
+    // kết quả generate — xem findRecentVideoViaCreatePage): thời điểm này
+    // CHƯA bấm Generate, chưa có gì đang chạy dở để mất.
+    let composerReady = await waitForComposerReady(page, 15_000);
+    if (!composerReady) {
+      console.warn(
+        `[pollo] Composer chưa render sau khi vào ${url} (chỉ thấy trang marketing) — thử reload lại 1 lần.`,
+      );
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 0 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+      await dismissBlockingOverlays(page);
+      composerReady = await waitForComposerReady(page, 20_000);
+    }
+    if (!composerReady) {
+      throw new GenerationError(
+        `pollo.ai không hiển thị giao diện tạo video (${url}) — trang chỉ hiện nội dung marketing dù đã đăng nhập, kể cả sau khi reload lại. Có thể site đang gặp sự cố hoặc đổi cấu trúc trang.`,
+      );
+    }
 
     const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
       .then(() => true)

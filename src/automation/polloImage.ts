@@ -115,10 +115,21 @@ async function waitForNewResult(
       } else {
         const imageCount = await resultImageLocator(newCard).count();
         if (imageCount > 0) return newCard;
-        // Card đã hết trạng thái "generating" nhưng KHÔNG có ảnh nào — nhiều
-        // khả năng là lỗi (chưa có bằng chứng DOM thật cho card lỗi của
-        // pollo.ai) — báo lỗi chung, cần bổ sung phát hiện cụ thể hơn khi có
-        // job thật gặp trường hợp này.
+        // Card đã hết trạng thái "generating" nhưng KHÔNG có ảnh nào — xác
+        // nhận qua lỗi thật (job test_master_live_CHARACTER_LAM_YEN_NHIEN):
+        // card hiện nguyên văn "Input flagged by the third-party model.
+        // Please modify your input and try again. Credits refunded." — pollo.ai
+        // từ chối vì nội dung bị model bên thứ 3 gắn cờ, CÙNG bản chất với
+        // lỗi vi phạm chính sách của AIVideo. Ném message chứa nguyên văn này
+        // để khớp CONTENT_VIOLATION_PATTERN (storyboardPipeline.ts) — nhờ đó
+        // generateWithContentViolationRetry tự kích hoạt nhờ ChatAI viết lại
+        // prompt rồi thử lại, thay vì bỏ cuộc ngay.
+        const cardText = await newCard.innerText().catch(() => "");
+        if (/flagged by the third-party model/i.test(cardText)) {
+          throw new GenerationError(
+            `pollo.ai từ chối tạo ảnh: ${cardText.split("\n")[0].trim()}`,
+          );
+        }
         throw new GenerationError(
           "pollo.ai báo card kết quả đã xong nhưng không thấy ảnh nào (có thể đã lỗi — cần bổ sung phát hiện cụ thể khi có bằng chứng thật)",
         );

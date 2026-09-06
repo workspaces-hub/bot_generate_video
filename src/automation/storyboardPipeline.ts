@@ -56,9 +56,19 @@ export function sleep(ms: number): Promise<void> {
  * copyrighted IP (e.g. character names or likenesses). Please revise and
  * retry." Match rộng theo cụm từ đặc trưng thay vì nguyên câu, phòng site đổi
  * chữ nhưng vẫn cùng ý (vd rút gọn câu sau).
+ *
+ * "flagged by the third-party model" — thêm cho pollo.ai, xác nhận qua lỗi
+ * thật (job test_master_live_CHARACTER_LAM_YEN_NHIEN): card kết quả hiện
+ * nguyên văn "Input flagged by the third-party model. Please modify your
+ * input and try again. Credits refunded." (xem waitForNewResult trong
+ * polloImage.ts/pollo.ts) — cùng BẢN CHẤT vi phạm chính sách nội dung như
+ * AIVideo, chỉ khác chữ, nên gộp chung pattern để generateWithContentViolationRetry
+ * bên dưới cũng tự nhờ ChatAI viết lại prompt cho pollo.ai thay vì bỏ cuộc
+ * ngay (trước đây pollo.ai KHÔNG match được pattern cũ, luôn rơi vào lỗi
+ * chung "không thấy ảnh nào", không bao giờ kích hoạt retry).
  */
 const CONTENT_VIOLATION_PATTERN =
-  /community guidelines|sensitive terms|copyrighted ip/i;
+  /community guidelines|sensitive terms|copyrighted ip|flagged by the third-party model/i;
 
 function isContentViolationError(errorMessage: string): boolean {
   return CONTENT_VIOLATION_PATTERN.test(errorMessage);

@@ -83,16 +83,25 @@ export async function gotoChatAIWithRetry(
  * fallback này (khi so khớp KHÔNG khớp) có thể chạy trong lúc composer chưa
  * ổn định focus đúng vào ô nhập (attachment vừa xong có thể làm focus lệch),
  * khiến Ctrl+A/Delete không xoá được nội dung ĐÃ dán trước đó, rồi insertText
- * chỉ NỐI THÊM text mới vào cuối thay vì thay thế. Click lại thẳng vào
+ * chỉ NỐI THÊM text mới vào cuối thay vì thay thế. Focus lại thẳng vào
  * textarea NGAY TRƯỚC khi Ctrl+A để đảm bảo focus đúng chỗ trước khi xoá/gõ,
  * bất kể trạng thái focus trước đó.
+ *
+ * Dùng .focus() thay vì .click() — xác nhận qua lỗi thật (nhiều job, vd
+ * a6158b2d/cc922ffe/d8efadb1/cc5e8802): sau khi ChatGPT đổi sang <textarea>
+ * thật (xem promptTextareaCandidates), .click() liên tục báo "<div
+ * class=\"...composer-container...\"> intercepts pointer events" suốt 30s dù
+ * chính textarea vẫn "visible, enabled and stable" — 1 lớp wrapper của
+ * composer nằm ĐÈ lên đúng toạ độ click dù không che mắt thường. .focus() gọi
+ * thẳng element.focus() qua JS, KHÔNG cần hit-test toạ độ chuột nên né được
+ * lớp che này hoàn toàn, vẫn đủ để Ctrl+A/Delete/insertText hoạt động đúng.
  */
 async function insertPromptText(
   page: Page,
   textarea: Locator,
   text: string,
 ): Promise<void> {
-  await textarea.click();
+  await textarea.focus();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Delete");
   await page.keyboard.insertText(text);
@@ -196,7 +205,9 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   }
 
   const textarea = await firstVisible(promptTextareaCandidates(page), 20_000);
-  await textarea.click();
+  // .focus() thay vì .click() — xem docstring insertPromptText bên trên (né
+  // lỗi wrapper composer "intercepts pointer events" trên <textarea> thật).
+  await textarea.focus();
   if (clipboardOk) {
     await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.press("ControlOrMeta+V");
