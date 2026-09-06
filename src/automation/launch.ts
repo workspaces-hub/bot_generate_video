@@ -8,10 +8,28 @@ import { config } from "../config";
  * Dùng Chrome thật (channel: "chrome") thay vì Chromium bundled, đồng thời
  * gỡ các cờ/flag tố cáo automation để đăng nhập Google hoạt động bình thường.
  *
- * useProxy=false (dùng cho ChatAI — xem chatAIBrowser.ts): tính năng
- * ChatAI không cần proxy, chỉ AIVideo mới cần (tránh đăng nhập/generate
- * từ 2 IP khác nhau — xem config.proxyServer). Mặc định true để không đổi
- * hành vi các nơi gọi cũ (login.ts, check-proxy.ts).
+ * useProxy=false: dành cho các trường hợp xác nhận KHÔNG cần proxy. Mặc định
+ * true để không đổi hành vi các nơi gọi cũ (login.ts, check-proxy.ts). LƯU Ý:
+ * ChatAI THỰC RA vẫn cần proxy (xem chatAIBrowser.ts — đã thử tắt, bị
+ * Cloudflare chặn ngay bằng IP thẳng của VPS), khác với nhận định ban đầu ghi
+ * ở đây.
+ *
+ * proxyBypass: danh sách domain (phân tách bằng dấu phẩy) cho đi THẲNG,
+ * KHÔNG qua proxy — xác nhận qua lỗi thật (ChatAI, banner "Failed upload to
+ * files.oaiusercontent.com..."): domain CDN riêng để ChatGPT nhận file đính
+ * kèm liên tục upload lỗi qua proxy hiện tại dù domain chính chatgpt.com vẫn
+ * hoạt động bình thường. Log network thật (bắt trực tiếp request/response,
+ * xem uploadAttachment trong chatAI.ts) mới lộ ra URL upload THẬT SỰ dùng 1
+ * SUBDOMAIN KHÁC, đổi theo vùng Azure xử lý request (vd
+ * "sdmntprwestus2.oaiusercontent.com" — Azure Blob Storage đứng sau,
+ * "files.oaiusercontent.com" chỉ là 1 trong nhiều subdomain có thể gặp),
+ * nhận đúng lỗi "net::ERR_TUNNEL_CONNECTION_FAILED" (proxy không dựng được
+ * tunnel tới subdomain đó). PHẢI dùng dạng wildcard cả subdomain (dấu chấm
+ * đứng đầu, vd ".oaiusercontent.com") thay vì liệt kê từng subdomain cụ thể —
+ * không đoán trước được Azure sẽ dùng subdomain nào ở lần upload tiếp theo.
+ * Domain CDN lưu file tĩnh này không có Cloudflare anti-bot như chatgpt.com
+ * nên bypass thẳng IP VPS an toàn (khác domain chính chatgpt.com, bắt buộc
+ * phải qua proxy để né Cloudflare).
  *
  * Xác nhận thật: ChatAI (Cloudflare Turnstile) challenge "Verify you are
  * human" liên tục xuất hiện khi bot chạy headless:true trên VPS, trong khi
@@ -31,8 +49,25 @@ import { config } from "../config";
  * GLX +render" (RANDR: hỗ trợ đổi độ phân giải runtime, browser thật hay
  * query; GLX/render: cần cho WebGL/canvas rendering không bị thiếu extension
  * bất thường so với X server thật).
+ *
+ * disableHttp2AndQuic (mặc định true, giữ hành vi cũ cho AIVideo/Pollo):
+ * --disable-quic/--disable-http2 được thêm từ trước KHÔNG có bằng chứng/lý do
+ * ghi lại cụ thể (nghi để tương thích proxy — nhiều proxy HTTP/SOCKS tunnel
+ * HTTP/1.1 ổn định hơn hẳn HTTP/2 multiplexing/QUIC qua UDP). Đang thử TẮT
+ * (đặt false) riêng cho ChatAI: banner lỗi thật "Failed upload to
+ * files.oaiusercontent.com..." (xem proxyBypass ở trên) VẪN xảy ra y hệt kể
+ * cả khi domain này đã bypass hẳn proxy (đi thẳng) — nghi ngờ chuyển hướng
+ * sang chính 2 flag này, vì domain CDN lưu file (thường Azure Blob Storage)
+ * thường đòi hỏi HTTP/2, bị ép xuống HTTP/1.1 cưỡng bức có thể gây đúng lỗi
+ * upload kiểu này. CHƯA CÓ BẰNG CHỨNG XÁC NHẬN HẲN — đang trong giai đoạn thử
+ * nghiệm, cần log thật từ lần chạy tiếp theo để biết có giải quyết được
+ * không.
  */
-export async function launchRealChrome(useProxy = true): Promise<Browser> {
+export async function launchRealChrome(
+  useProxy = true,
+  proxyBypass?: string,
+  disableHttp2AndQuic = true,
+): Promise<Browser> {
   if (
     !config.headless &&
     process.platform === "linux" &&
@@ -53,9 +88,10 @@ export async function launchRealChrome(useProxy = true): Promise<Browser> {
     // video nặng (tính năng Omni Reference). Chuyển sang dùng /tmp thay vì
     // /dev/shm để tránh giới hạn này.
     "--disable-dev-shm-usage",
-    "--disable-quic",
-    "--disable-http2",
   ];
+  if (disableHttp2AndQuic) {
+    args.push("--disable-quic", "--disable-http2");
+  }
   if (config.chromeNoSandbox) {
     args.push("--no-sandbox", "--disable-setuid-sandbox");
   }
@@ -74,6 +110,7 @@ export async function launchRealChrome(useProxy = true): Promise<Browser> {
             server: config.proxyServer,
             username: config.proxyUsername,
             password: config.proxyPassword,
+            bypass: proxyBypass,
           }
         : undefined,
   });

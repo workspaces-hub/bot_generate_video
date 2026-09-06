@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Locator, Page, Request, Response } from "playwright";
 import { config } from "../config";
 import {
   dismissCloudflareChallengeIfPresent,
@@ -143,16 +143,94 @@ async function waitForAttachmentUploadToSettle(
 }
 
 /**
+ * Toast lỗi mạng khi ChatGPT upload file đính kèm thất bại — xác nhận qua
+ * debug thật (storage/debug/"after-upload attachment".png/html): banner đỏ
+ * (role="alert", bg-red-500) nguyên văn "Failed upload to
+ * files.oaiusercontent.com. Please ensure your network settings allow access
+ * to this site or contact your network administrator." — nghi do PROXY_SERVER
+ * (đã biết chập chờn, xem gotoChatAIWithRetry) không cho qua domain CDN riêng
+ * "files.oaiusercontent.com" (khác domain chính chatgpt.com đang dùng để
+ * chat). QUAN TRỌNG: progress ring của waitForAttachmentUploadToSettle VẪN
+ * biến mất khi upload lỗi kiểu này (thử xong dù thất bại, không phải "đang
+ * thử mãi") — nếu không kiểm tra riêng banner này, code sẽ tưởng đã đính kèm
+ * xong rồi gõ prompt/bấm Send như bình thường, khiến ChatAI trả lời mà KHÔNG
+ * hề có file (lặp lại đúng kiểu lỗi "chưa chứa kịch bản" đã gặp trước đây,
+ * dù nguyên nhân khác).
+ */
+const attachmentUploadFailedLocator = (page: Page): Locator =>
+  page.getByText(/failed upload to files\.oaiusercontent\.com/i);
+
+/**
  * Đính kèm 1 file lên composer TRƯỚC khi gõ prompt — dùng khi user gửi prompt
  * qua file (.txt/.md) thay vì gõ/dán trực tiếp: UPLOAD file đó lên ChatAI rồi chỉ
  * gõ 1 câu ngắn yêu cầu ChatAI đọc file, thay vì dán nguyên nội dung file làm
  * prompt text (tránh dán prompt siêu dài, và để ChatAI tự đọc file y hệt cách
  * user thật đính kèm). Cùng cơ chế setInputFiles() đã dùng cho ảnh tham chiếu
  * (uploadReferenceImages trong chatAIImage.ts).
+ *
+ * Retry khi gặp banner lỗi mạng (xem attachmentUploadFailedLocator) — thử
+ * lại setInputFiles từ đầu, tối đa vài lần trước khi báo lỗi rõ ràng thay vì
+ * âm thầm tiếp tục gửi prompt không kèm file.
+ *
+ * GHI LOG network THẬT của request/response tới oaiusercontent.com mỗi lần
+ * thử — xác nhận qua curl thật trên VPS: kết nối thô (DNS/TLS/HTTP2) tới
+ * domain này hoàn toàn bình thường cả đi thẳng lẫn qua proxy, nên lỗi banner
+ * "Failed upload..." KHÔNG PHẢI do mạng/proxy như nghi ngờ ban đầu — phải là
+ * request THẬT SỰ của trình duyệt (khác hẳn 1 GET đơn giản của curl, có thể
+ * là PUT tới URL có chữ ký SAS hết hạn, hoặc bị Cloudflare chặn theo dấu hiệu
+ * automation) mới thất bại. Bắt status code/lỗi thật của request đó (thay vì
+ * chỉ đọc lại đúng banner chung chung "Failed upload...") để lần lỗi tiếp
+ * theo có bằng chứng cụ thể, tránh phải đoán tiếp.
  */
 async function uploadAttachment(page: Page, filePath: string): Promise<void> {
-  await fileUploadInputLocator(page).setInputFiles(filePath);
-  await waitForAttachmentUploadToSettle(page, path.basename(filePath));
+  const fileName = path.basename(filePath);
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const networkLogs: string[] = [];
+    const onResponse = (response: Response) => {
+      if (response.url().includes("oaiusercontent.com")) {
+        networkLogs.push(`response ${response.status()} ${response.request().method()} ${response.url()}`);
+      }
+    };
+    const onRequestFailed = (request: Request) => {
+      if (request.url().includes("oaiusercontent.com")) {
+        networkLogs.push(
+          `requestfailed ${request.failure()?.errorText ?? "(không rõ lỗi)"} ${request.method()} ${request.url()}`,
+        );
+      }
+    };
+    page.on("response", onResponse);
+    page.on("requestfailed", onRequestFailed);
+    try {
+      await fileUploadInputLocator(page).setInputFiles(filePath);
+      await waitForAttachmentUploadToSettle(page, fileName);
+    } finally {
+      page.off("response", onResponse);
+      page.off("requestfailed", onRequestFailed);
+    }
+
+    const uploadFailed = await attachmentUploadFailedLocator(page)
+      .first()
+      .isVisible({ timeout: 1000 })
+      .catch(() => false);
+    if (!uploadFailed) break;
+
+    const networkDetail =
+      networkLogs.length > 0
+        ? networkLogs.join(" | ")
+        : "(không bắt được request/response nào tới oaiusercontent.com)";
+
+    if (attempt === maxAttempts) {
+      throw new ChatAIError(
+        `Đính kèm file "${fileName}" lên ChatGPT thất bại sau ${maxAttempts} lần thử: "Failed upload to files.oaiusercontent.com". Chi tiết network: ${networkDetail}`,
+      );
+    }
+    console.warn(
+      `[chatAI] Upload file đính kèm "${fileName}" lỗi mạng (lần ${attempt}/${maxAttempts}), thử lại. Chi tiết network: ${networkDetail}`,
+    );
+    await page.waitForTimeout(3000);
+  }
+  await captureSnapshot(page, "after-upload attachment", "after-upload attachment");
 
   // Xác nhận qua thực tế (job 35941268, file 97KB/~2371 dòng): ChatAI trả
   // lời "file bạn gửi chưa chứa kịch bản phim" dù file THẬT SỰ có kịch bản ở
@@ -933,7 +1011,7 @@ export async function askChatAI(
         lastMessageCount + 1,
       );
       lastMessageCount = result.messageCount;
-      // await captureSnapshot(page, jobId, "result");
+      await captureSnapshot(page, jobId + "_"+(promptFileName || ""), "result");
 
       // Xác nhận qua log lỗi thật (job 35941268/1aacc019): ChatAI đọc được
       // file đính kèm nhưng khẳng định SAI là "chưa chứa kịch bản phim" dù

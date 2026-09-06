@@ -10,12 +10,31 @@ import { createBrowserContextManager } from "./browser";
  * Xác nhận qua debug thật (job afd3c6d8): từng thử tắt proxy cho ChatAI — IP
  * thẳng của VPS lập tức bị ChatAI chặn bằng Cloudflare "Verify you are
  * human" challenge, không vào được trang thật. Phải DÙNG LẠI proxy (đánh đổi
- * lấy việc qua được Cloudflare).
+ * lấy việc qua được Cloudflare) cho domain CHÍNH chatgpt.com.
+ *
+ * BYPASS proxy cho *TOÀN BỘ* subdomain oaiusercontent.com (xem docstring
+ * proxyBypass trong launch.ts).
+ *
+ * LỊCH SỬ: lúc đầu chỉ bypass đúng "files.oaiusercontent.com" — KHÔNG đủ.
+ * Log network thật (đã thêm bắt request/response, xem uploadAttachment trong
+ * chatAI.ts) cho thấy URL upload file THẬT SỰ trỏ tới 1 subdomain KHÁC hẳn,
+ * đổi theo vùng Azure xử lý request (vd "sdmntprwestus2.oaiusercontent.com"),
+ * KHÔNG PHẢI "files.oaiusercontent.com" — bypass cũ không khớp nên request
+ * này vẫn đi qua proxy như thường và nhận đúng lỗi
+ * "net::ERR_TUNNEL_CONNECTION_FAILED" (proxy không dựng được tunnel tới
+ * subdomain đó). Từng nghi ngờ nhầm sang HTTP/2 hay lỗi automation/Cloudflare
+ * (xem git blame) — SAI, gốc rễ chỉ đơn giản là bypass sai domain. Đổi sang
+ * ".oaiusercontent.com" (dấu chấm đầu = khớp MỌI subdomain, theo cú pháp
+ * bypass của Playwright/Chromium) để không phụ thuộc vùng Azure nào đang xử
+ * lý. Domain gốc (không phải chatgpt.com) không có Cloudflare Turnstile nên
+ * đi thẳng vẫn an toàn.
  */
 export const getChatAIBrowserContext = createBrowserContextManager(
   config.chatAIStorageStatePath,
   "chatAI-browser",
   'Chạy "npm run login-chatai" trước khi dùng tính năng ChatAI.',
+  true,
+  ".oaiusercontent.com",
 );
 
 /**
@@ -29,6 +48,8 @@ export const getChatAIReviseBrowserContext = createBrowserContextManager(
   config.chatAIReviseStorageStatePath,
   "chatAI-revise-browser",
   'Chạy "npm run login-chatai -- revise" trước khi dùng tính năng sửa prompt vi phạm nội dung.',
+  true,
+  ".oaiusercontent.com",
 );
 
 /**
