@@ -1310,7 +1310,7 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page, jobId: string
   );
   await switchLocator.click({ timeout: 5000 }).catch(async (err) => {
     console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
-    await captureSnapshot(page, jobId, "unlimited-switch-failed");
+    await captureSnapshot(page, jobId + "_unlimited-switch-failed", "unlimited-switch-failed");
   });
 }
 
