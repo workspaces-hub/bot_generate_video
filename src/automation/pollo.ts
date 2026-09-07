@@ -6,6 +6,7 @@ import { getPolloBrowserContext } from "./polloBrowser";
 import {
   GenerationError,
   captureErrorSnapshot,
+  captureSnapshot,
   fetchWithRetry,
 } from "./aiVideo";
 import { firstVisible } from "./selectors";
@@ -947,6 +948,49 @@ function rememberUploadedAsset(imagePath: string, assetUrl: string): void {
   }
 }
 
+/**
+ * Mutex TOÀN CỤC (KHÔNG reentrant — TUYỆT ĐỐI không gọi lồng nhau) khoá pha
+ * "upload ảnh tham chiếu + chọn nó" (submitAssetUpload) VÀ, riêng với video
+ * mode "Reference to Video", CẢ bước "@ mention" tiếp theo
+ * (insertMentionForFile) — dùng chung giữa pollo.ts (video) VÀ polloImage.ts
+ * (ảnh CHARACTER/LOCATION), vì processPolloVideoQueue/processPolloImageQueue
+ * chạy SONG SONG trên CÙNG 1 tài khoản pollo.ai (2 context riêng, xem
+ * polloBrowser.ts).
+ *
+ * XÁC NHẬN QUA LỖI THẬT (job test_normal_7_rep_SHOT_01_CLIP_01_VIDEO,
+ * 2026-09-07): insertMentionForFile hết 4 lần retry vẫn không tìm thấy ảnh
+ * vừa upload trong picker "@ mention". Đúng như chú thích tại nơi gọi
+ * insertMentionForFile đã ghi từ trước: picker "@ mention" CHỈ hiện ĐÚNG VÀI
+ * upload GẦN NHẤT CỦA CẢ TÀI KHOẢN (không riêng job này) — job Pollo khác
+ * (vd hàng đợi ảnh) upload dồn dập trong lúc job này đang giữ khoảng hở giữa
+ * "upload xong" và "click mention" đủ để đẩy hẳn ảnh của job này ra khỏi
+ * danh sách đang hiển thị. submitAssetUpload cũng tự nó không an toàn khi
+ * chạy đồng thời: hàm này nhận diện "card vừa upload" bằng cách so
+ * data-asset-url của card ĐẦU TIÊN trước/sau — nếu 1 job khác upload xen vào
+ * đúng lúc đó, card đầu tiên đổi vì URL CỦA JOB KHÁC, khiến job này chọn NHẦM
+ * ảnh của người khác làm ảnh tham chiếu (còn nguy hiểm hơn cả việc mention
+ * thất bại, vì âm thầm sai kết quả thay vì báo lỗi).
+ *
+ * Tăng số lần retry không giải quyết được gốc rễ — ảnh có thể ĐÃ THỰC SỰ
+ * biến mất khỏi cửa sổ hiển thị đó, chờ/thử lại bao lâu cũng vô ích. Khoá hẳn
+ * pha upload+chọn (và mention, với video) giữa 2 hàng đợi đảm bảo tại một
+ * thời điểm chỉ 1 job đang thao tác lên thư viện asset dùng chung, loại bỏ
+ * hoàn toàn nguồn gây race thay vì giảm xác suất. Phần còn lại của generate
+ * (gõ prompt, chờ render, tải video/ảnh — chiếm phần lớn thời gian) vẫn chạy
+ * song song bình thường giữa 2 hàng đợi, chỉ pha upload+chọn (thường vài
+ * giây/ảnh) bị nối tiếp.
+ */
+let polloAssetUploadLockTail: Promise<void> = Promise.resolve();
+
+export function withPolloAssetUploadLock<T>(fn: () => Promise<T>): Promise<T> {
+  const settled = polloAssetUploadLockTail.then(fn, fn);
+  polloAssetUploadLockTail = settled.then(
+    () => undefined,
+    () => undefined,
+  );
+  return settled;
+}
+
 export async function submitAssetUpload(
   page: Page,
   imagePath: string,
@@ -1029,7 +1073,13 @@ export async function submitAssetUpload(
   );
 }
 
-/** Cùng cơ chế "phải click thumbnail để chọn trước khi Select enable" đã xác nhận qua lỗi thật — xem docstring uploadReferenceImage trong polloImage.ts. */
+/**
+ * Cùng cơ chế "phải click thumbnail để chọn trước khi Select enable" đã xác
+ * nhận qua lỗi thật — xem docstring uploadReferenceImage trong polloImage.ts.
+ * Bọc trong withPolloAssetUploadLock (xem docstring hàm đó) — submitAssetUpload
+ * tự nó không an toàn khi 1 job Pollo khác (hàng đợi ảnh) upload xen vào cùng
+ * lúc.
+ */
 async function uploadFrameImage(
   page: Page,
   label: "Start" | "End",
@@ -1037,7 +1087,7 @@ async function uploadFrameImage(
 ): Promise<void> {
   const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonByLabel(page, label).first());
   await openDialog();
-  await submitAssetUpload(page, imagePath, openDialog);
+  await withPolloAssetUploadLock(() => submitAssetUpload(page, imagePath, openDialog));
 }
 
 /**
@@ -1222,7 +1272,7 @@ export async function ensureComposerReadyOrThrow(
  *   cạnh nút Generate, đổi theo model/setting đang chọn — PHẢI đọc SAU khi
  *   đã chọn xong model/duration/mention, ngay trước lúc bấm Generate).
  */
-export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void> {
+export async function enableUnlimitedIfNotEnoughCredit(page: Page, jobId: string): Promise<void> {
   const switchLocator = page
     .locator('div[data-button-name="is_unlimited"] [role="switch"]')
     .first();
@@ -1258,8 +1308,9 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void
   console.warn(
     `[pollo] Credit hiện tại (${credit}) không đủ trả phí lượt tạo (${fee}) — tự bật "Unlimited".`,
   );
-  await switchLocator.click({ timeout: 5000 }).catch((err) => {
+  await switchLocator.click({ timeout: 5000 }).catch(async (err) => {
     console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
+    await captureSnapshot(page, jobId, "unlimited-switch-failed");
   });
 }
 
@@ -1595,22 +1646,35 @@ export async function generateVideo(
     // song song trên CÙNG tài khoản cũng tính), nên khoảng hở giữa lúc upload
     // xong và lúc mention càng dài càng dễ bị đẩy khỏi danh sách. Mention
     // ngay sau khi upload xong để giảm tối đa khoảng hở đó.
+    //
+    // SỬA (xác nhận qua lỗi thật, job
+    // test_normal_7_rep_SHOT_01_CLIP_01_VIDEO, 2026-09-07): "mention ngay sau
+    // upload" chỉ GIẢM khoảng hở chứ không loại bỏ được — vẫn đủ thời gian để
+    // 1 job Pollo khác (hàng đợi ảnh) chen 1-2 upload của riêng nó vào giữa,
+    // đẩy ảnh job này khỏi picker trước khi insertMentionForFile kịp tìm thấy
+    // (hết cả 4 lần retry). Bọc CẢ upload lẫn mention trong 1 lần giữ
+    // withPolloAssetUploadLock (xem docstring hàm đó, khai báo cùng
+    // submitAssetUpload) — đảm bảo không job nào khác chen upload vào khoảng
+    // hở này nữa, loại bỏ hẳn race thay vì chỉ rút ngắn nó.
     if (!startFramePath && referenceImagePaths.length > 0) {
       for (const refPath of referenceImagePaths) {
-        // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc mới
-        // vào trang — xác nhận qua lỗi thật (job microdrama_co_dau_phan_boi_
-        // twist_prompt_SHOT_01_CLIP_01_VIDEO): 1 popup coco-modal-wrap MỚI
-        // xuất hiện SAU đó (lúc đã chọn model/gõ prompt xong), chặn click nút
-        // "Upload Media" mà không có gì dismiss lại. Gọi lại NGAY TRƯỚC mỗi
-        // lần upload — rẻ, best-effort, không lỗi nếu không có gì để đóng.
-        await dismissBlockingOverlays(page);
-        const assetUrl = await uploadReferenceVideoImage(page, refPath);
-        await editor.focus();
-        await insertMentionForFile(page, assetUrl);
+        await withPolloAssetUploadLock(async () => {
+          // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc
+          // mới vào trang — xác nhận qua lỗi thật (job
+          // microdrama_co_dau_phan_boi_twist_prompt_SHOT_01_CLIP_01_VIDEO): 1
+          // popup coco-modal-wrap MỚI xuất hiện SAU đó (lúc đã chọn model/gõ
+          // prompt xong), chặn click nút "Upload Media" mà không có gì dismiss
+          // lại. Gọi lại NGAY TRƯỚC mỗi lần upload — rẻ, best-effort, không
+          // lỗi nếu không có gì để đóng.
+          await dismissBlockingOverlays(page);
+          const assetUrl = await uploadReferenceVideoImage(page, refPath);
+          await editor.focus();
+          await insertMentionForFile(page, assetUrl);
+        });
       }
     }
 
-    await enableUnlimitedIfNotEnoughCredit(page);
+    await enableUnlimitedIfNotEnoughCredit(page, jobId);
 
     const baseline = await captureResultBaseline(page);
 
@@ -1659,9 +1723,20 @@ export async function generateVideo(
     }
     const filePath = await downloadResultVideo(page, videoSrc, jobId);
     // resultCard null = kết quả chỉ tìm thấy qua /create (xem
-    // findRecentVideoViaCreatePage), không có card nào trên page hiện tại để
-    // lấy id — best-effort bỏ qua, không cố gắng thêm (trường hợp hiếm).
-    const polloResultId = resultCard ? await captureResultId(page, resultCard) : null;
+    // findRecentVideoViaCreatePage) HOẶC qua nhánh video-src trực tiếp trên
+    // page (mode "Reference to Video"/chat_box — xem waitForNewResult phía
+    // trên), không có card nào để lấy id qua click thumbnail. Xác nhận qua
+    // NHIỀU lần test thật liền nhau (mọi lần generateVideo mode Reference to
+    // Video đều trả polloResultId=null dù job thành công): mode này KHÔNG
+    // BAO GIỜ có card, nên nhánh captureResultId gần như vô dụng cho video —
+    // dùng recordId (đã có sẵn từ captureGenerationRecordId) qua
+    // fetchGenerationRecordDetail làm nguồn videoId đáng tin cậy hơn hẳn,
+    // best-effort, không throw nếu thất bại.
+    let polloResultId = resultCard ? await captureResultId(page, resultCard) : null;
+    if (!polloResultId && recordId !== null) {
+      const detail = await fetchGenerationRecordDetail(page, recordId);
+      polloResultId = detail?.videoId ?? null;
+    }
     return { filePath, polloResultId };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);

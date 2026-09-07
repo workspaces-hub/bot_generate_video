@@ -1246,7 +1246,7 @@ export async function fetchWithRetry(
       // theo số lần thử (30/60/90s) — vẫn KHÔNG đủ, xem log chi tiết ở trên
       // để tìm nguyên nhân thật thay vì tiếp tục kéo dài backoff mù quáng.
       const wait =
-        lastStatus === 429 ? resolveRetryAfterMs(response, 30_000 * attempt) : delayMs;
+        lastStatus === 429 ? resolveRetryAfterMs(response, 30_000) : delayMs;
       await page.waitForTimeout(wait);
     }
   }

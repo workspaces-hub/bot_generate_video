@@ -23,8 +23,6 @@ import {
   confirmVideoGeneration,
   confirmVideoGenerationPollo,
   continueFailedStoryboardImages,
-  continueFailedStoryboardVideo,
-  continueFailedStoryboardVideoPollo,
   enqueueJob,
   isStoryboardJobQueued,
   stopAll,
@@ -1179,27 +1177,55 @@ export function registerHandlers(bot: Telegraf): void {
         userId,
         rawText: ctx.message.text,
       });
-    } else if (mode === "continueVideo" || mode === "continueSceneFrame") {
+    } else if (mode === "continueVideo") {
       // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
       // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
       const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
-      const isVideo = mode === "continueVideo";
-      // Job video lỗi có thể thuộc AIVideo (storyboardVideo) HOẶC Pollo
-      // (storyboardVideoPollo, mảng failedStoryboardJobsPollo RIÊNG, xem
-      // continueFailedStoryboardVideoPollo trong queue.ts) — user gõ tên file,
-      // không biết/không cần biết job lỗi thuộc provider nào, nên thử AIVideo
-      // trước rồi mới thử Pollo. Nhánh "gen scene frame" KHÔNG có bản Pollo
-      // tương ứng (pipeline Pollo bỏ hẳn bước scene, xem storyboardPipeline.ts)
-      // nên giữ nguyên chỉ AIVideo.
-      const ok = isVideo
-        ? continueFailedStoryboardVideo(jsonFileName) ||
-          continueFailedStoryboardVideoPollo(jsonFileName)
-        : continueFailedStoryboardImages(jsonFileName);
-      const actionLabel = isVideo ? "tạo video" : "gen scene frame";
+      // SỬA theo yêu cầu user: KHÔNG còn tra failedStoryboardJobs/
+      // failedStoryboardJobsPollo (bắt buộc phải TỪNG lỗi mới cho tiếp tục —
+      // chặn cả trường hợp file chưa từng gen video lần nào, hoặc job cũ đã
+      // bị dọn khỏi danh sách lỗi vì lý do khác). Giờ chỉ cần file JSON khớp
+      // tên tồn tại trong generated/ là đẩy thẳng 1 job "storyboardVideoPollo"
+      // MỚI vào hàng đợi — không kèm entryIds nghĩa là generateVideosForFilePollo
+      // tự xử lý hết entry VIDEO chưa "success", giống hệt luồng xác nhận
+      // bình thường (xem confirmVideoGenerationPollo).
+      const jsonPath = path.join(
+        generatedDirFor(jsonFileName),
+        `${jsonFileName}.json`,
+      );
+      const fileExists = await fs
+        .access(jsonPath)
+        .then(() => true)
+        .catch(() => false);
+      if (fileExists) {
+        enqueueJob({
+          type: "storyboardVideoPollo",
+          chatId: ctx.chat.id,
+          userId,
+          prompt: "",
+          promptMessageId: ctx.message.message_id,
+          jsonPath,
+        });
+        await ctx.reply(
+          `✅ Đã đưa "${jsonFileName}" vào hàng đợi tạo video, đợi xử lý.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      } else {
+        await ctx.reply(
+          `❌ Không tìm thấy file "${jsonFileName}" trong generated/. Không thể tiếp tục.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      }
+    } else if (mode === "continueSceneFrame") {
+      // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
+      // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
+      // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
+      const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
+      const ok = continueFailedStoryboardImages(jsonFileName);
       if (ok) {
         await ctx.reply(
-          `✅ Đã đưa "${jsonFileName}" vào hàng đợi ${actionLabel}, đợi xử lý.`,
+          `✅ Đã đưa "${jsonFileName}" vào hàng đợi gen scene frame, đợi xử lý.`,
           { reply_parameters: { message_id: ctx.message.message_id } },
         );
       } else {

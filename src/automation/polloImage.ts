@@ -17,6 +17,7 @@ import {
   submitAssetUpload,
   waitForGenerateButtonEnabled,
   waitForGenerationApiStatus,
+  withPolloAssetUploadLock,
 } from "./pollo";
 import {
   GenerationError,
@@ -67,7 +68,14 @@ export interface PolloGenerateImageOptions {
 async function uploadReferenceImage(page: Page, imagePath: string): Promise<void> {
   const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonLocator(page).first());
   await openDialog();
-  await submitAssetUpload(page, imagePath, openDialog);
+  // Bọc trong withPolloAssetUploadLock (khai báo cùng submitAssetUpload
+  // trong pollo.ts) — processPolloImageQueue chạy SONG SONG với
+  // processPolloVideoQueue trên CÙNG 1 tài khoản pollo.ai; nếu không khoá,
+  // submitAssetUpload của job này (nhận diện "card vừa upload" bằng cách so
+  // data-asset-url của card ĐẦU TIÊN trước/sau) có thể chọn NHẦM card của
+  // job video đang chạy đồng thời nếu nó upload xen đúng lúc. Xem docstring
+  // đầy đủ tại withPolloAssetUploadLock.
+  await withPolloAssetUploadLock(() => submitAssetUpload(page, imagePath, openDialog));
 }
 
 interface ResultBaseline {
@@ -258,7 +266,7 @@ export async function generateImage(
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
 
-    await enableUnlimitedIfNotEnoughCredit(page);
+    await enableUnlimitedIfNotEnoughCredit(page, jobId);
 
     const baseline = await captureResultBaseline(page);
     // await captureSnapshot(page, jobId, "before-click-generate");
@@ -305,7 +313,11 @@ export async function generateImage(
       throw err;
     }
     const filePaths = await downloadResultImages(page, newCard, jobId);
-    const polloResultId = await captureResultId(page, newCard);
+    let polloResultId = await captureResultId(page, newCard);
+    if (!polloResultId && recordId !== null) {
+      const detail = await fetchGenerationRecordDetail(page, recordId);
+      polloResultId = detail?.videoId ?? null;
+    }
     return { filePaths, polloResultId };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
