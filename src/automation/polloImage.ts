@@ -5,12 +5,12 @@ import { config } from "../config";
 import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
   captureResultId,
-  clickWithOverlayDismiss,
   dismissBlockingOverlays,
   enableUnlimitedIfNotEnoughCredit,
   ensureComposerReadyOrThrow,
   ensureUploadDialogOpen,
   captureGenerationRecordId,
+  clickGenerateButton,
   fetchGenerationRecordDetail,
   gotoPolloWithRetry,
   resolveDownloadExtension,
@@ -266,7 +266,7 @@ export async function generateImage(
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
-      clickWithOverlayDismiss(page, generateButton),
+      clickGenerateButton(page, generateButton, baseline.count),
     );
     // await captureSnapshot(page, jobId, "after-click-generate");
 

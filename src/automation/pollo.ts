@@ -212,6 +212,47 @@ export async function clickWithOverlayDismiss(
 }
 
 /**
+ * Bấm nút Generate — xác nhận qua lỗi thật (3 job liền (CHAR_NATE_RYDER,
+ * CHAR_BROOKE_CALLAHAN, CHAR_ASHFORD_STUDENT_CROWD) cùng lỗi
+ * clickWithOverlayDismiss timeout, log tối giản 1 dòng giống hệt dấu hiệu
+ * nút bị aria-disabled="true" — xem waitForGenerateButtonEnabled): debug
+ * snapshot của CHAR_NATE_RYDER cho thấy 1 card ĐANG GENERATE ĐÚNG PROMPT của
+ * chính entry này (badge "Create" hiện "1") — tức lần click ĐẦU đã THỰC SỰ
+ * thành công (generation đã bắt đầu), nhưng Playwright vẫn coi lần click đó
+ * là lỗi (có thể do nút chuyển sang aria-disabled NGAY sau khi bấm, trước
+ * khi Playwright kịp xác nhận actionable) → clickWithOverlayDismiss cứ
+ * retry tiếp vào 1 nút giờ ĐÃ disabled (vì generation vừa bắt đầu) → mọi
+ * lần retry sau ĐỀU thất bại y hệt → cuối cùng throw dù job thật ra ĐÃ chạy.
+ * Trước MỖI lần thử/retry, kiểm tra xem đã có card mới xuất hiện chưa (dùng
+ * baselineCount đã chụp trước lúc bấm) — nếu có, coi như đã bấm thành công
+ * thật, dừng ngay, không click/retry thêm nữa.
+ */
+export async function clickGenerateButton(
+  page: Page,
+  button: Locator,
+  baselineCount: number,
+  timeoutPerAttemptMs = 4000,
+  maxAttempts = 5,
+): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await button.click({ timeout: timeoutPerAttemptMs });
+      return;
+    } catch (err) {
+      const alreadySucceeded = (await resultCardLocator(page).count()) > baselineCount;
+      if (alreadySucceeded) {
+        console.warn(
+          "[pollo] click Generate báo lỗi nhưng đã thấy card mới xuất hiện — coi như đã bấm thành công, bỏ qua lỗi.",
+        );
+        return;
+      }
+      if (attempt === maxAttempts) throw err;
+      await dismissBlockingOverlays(page);
+    }
+  }
+}
+
+/**
  * Nút Generate (prompt-generate-btn) có aria-disabled="true" (kèm class
  * aria-disabled:pointer-events-none) khi tài khoản ĐANG có generation khác
  * chạy đồng thời — xác nhận qua debug snapshot THẬT của đúng job lỗi
@@ -225,11 +266,20 @@ export async function clickWithOverlayDismiss(
  * thành công server-side nhưng bot không kịp phát hiện xong trước khi lỗi ở
  * bước khác, vd timeout mạng) — chờ nút hết disabled (tức các generation cũ
  * xong dần) thay vì cắm đầu click liên tục vào 1 nút không thể bấm được.
+ *
+ * timeoutMs mặc định = config.generationTimeoutMs (KHÔNG dùng con số cố định
+ * ngắn hơn) — theo xác nhận của user: hàng đợi ảnh và video chạy SONG SONG,
+ * dùng CHUNG 1 tài khoản pollo.ai, nên 2 slot đang bận là BÌNH THƯỜNG (1 ảnh
+ * + 1 video), không phải rác tồn đọng. Slot bận có thể mất tới hẳn 1 chu kỳ
+ * generationTimeoutMs để tự giải phóng (job kia cũng chờ tối đa từng đó) —
+ * xác nhận qua lỗi thật (job LOC_IMPERIAL_CITY_OUTER_ROAD): dùng con số cứng
+ * 20 phút TRÙNG với timeout 1 lượt generate khiến việc chờ luôn "suýt trượt"
+ * ở đúng ranh giới, hết hạn ngay trước khi job kia kịp xong.
  */
 export async function waitForGenerateButtonEnabled(
   page: Page,
   button: Locator,
-  timeoutMs = 20 * 60_000,
+  timeoutMs = config.generationTimeoutMs,
 ): Promise<void> {
   const start = Date.now();
   while (true) {
@@ -1567,7 +1617,7 @@ export async function generateVideo(
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
-      clickWithOverlayDismiss(page, generateButton),
+      clickGenerateButton(page, generateButton, baseline.count),
     );
     const generateClickedAtMs = Date.now();
 
