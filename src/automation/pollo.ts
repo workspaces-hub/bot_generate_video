@@ -246,6 +246,156 @@ export async function waitForGenerateButtonEnabled(
 }
 
 /**
+ * Bắt response request submit generate (POST /api/trpc/<xxx>.create — xxx
+ * tuỳ loại: text2Image, ref2Video,... KHÔNG cần biết tên chính xác, chỉ cần
+ * khớp ĐÚNG DẠNG response) NGAY LÚC bấm Generate, lấy "record id" (số) để
+ * poll trạng thái qua API (xem waitForGenerationApiStatus) thay vì dò DOM —
+ * xác nhận qua network trace THẬT (script test-pollo-network-trace, theo
+ * yêu cầu user "có cách nào check job gen xong hay chưa dựa vào videoID"):
+ * response trả về NGAY {"id":123894368,"status":"waiting","videoMeta":null},
+ * generic cho mọi loại generate (ảnh/video) vì cùng dùng chung 1 hệ thống
+ * generationPolling phía sau. Trả về null nếu không bắt được (lỗi mạng, hoặc
+ * pollo.ai đổi API) — caller PHẢI tự fallback về dò DOM như cũ, không coi
+ * null là lỗi.
+ *
+ * SỬA (xác nhận qua lỗi thật, 2 lần chạy test-pollo-generate-image liền
+ * nhau): body LUÔN là 1 MẢNG bọc ngoài (dạng batch link của tRPC, do chính
+ * pollo.ai gọi kèm "?batch=1" dù chỉ 1 procedure) — vd
+ * `[{"result":{"data":{"json":{"id":123899141,...}}}}]`, KHÔNG phải object
+ * trần. Bản đầu đọc thẳng `body.result...` (bỏ qua mảng bọc ngoài) nên `id`
+ * luôn undefined, khiến hàm này LUÔN trả về null một cách ÂM THẦM (fallback
+ * DOM vẫn chạy đúng nên job vẫn thành công, che mất bug này tới tận khi thêm
+ * log debug mới lộ ra). timeout 60s (không phải 15s bản đầu) giữ nguyên vì
+ * vẫn là 1 vấn đề thật riêng biệt (clickWithOverlayDismiss có thể retry tới
+ * ~20s), dù không phải nguyên nhân chính của lần lỗi này.
+ *
+ * SỬA LẦN 2 (xác nhận qua lỗi thật, generateVideo mode Reference to Video —
+ * xem docstring waitForNewResult trong file này): endpoint submit CỦA VIDEO
+ * tên là "recipe.submit", KHÔNG PHẢI "<xxx>.create" như ảnh — regex cũ chỉ
+ * khớp ".create" nên không bắt được gì ở nhánh video, luôn âm thầm trả về
+ * null (test-pollo-generate-video vẫn thành công qua fallback DOM, không có
+ * dòng log "API record" nào — phải trace lại qua network mới lộ ra). Response
+ * CÙNG DẠNG {id,status} (`[{"result":{"data":{"json":{"id":...,"status":
+ * "waiting","requestLimit":false}}}}]`) — chỉ cần khớp thêm ".submit" là đủ,
+ * không cần đọc thêm field nào khác.
+ */
+export async function captureGenerationRecordId(
+  page: Page,
+  clickAction: () => Promise<void>,
+): Promise<number | null> {
+  const responsePromise = page
+    .waitForResponse(
+      (res) =>
+        res.request().method() === "POST" &&
+        /\/api\/trpc\/[a-zA-Z0-9_]+\.(create|submit)(\?|$)/.test(res.url()),
+      { timeout: 60_000 },
+    )
+    .catch(() => null);
+
+  await clickAction();
+
+  const res = await responsePromise;
+  if (!res) return null;
+  const body = await res.json().catch(() => null);
+  const entry = Array.isArray(body) ? body[0] : body;
+  const id = entry?.result?.data?.json?.id;
+  return typeof id === "number" ? id : null;
+}
+
+/**
+ * Poll GET /api/trpc/generationPolling.fetchRecordsStatus (recordId từ
+ * captureGenerationRecordId) tới khi status rời khỏi các trạng thái CHƯA
+ * XONG đã biết — xác nhận qua test thật (script test-pollo-poll-status):
+ * status ban đầu "waiting" (kèm waiting.waitingIndex/waitingCount — hàng đợi
+ * CHUNG của pollo.ai, có lúc lên tới ~288, giải thích vì sao generate có thể
+ * mất khá lâu ngay cả khi không có gì bất thường), sau khi xong chuyển thành
+ * ĐÚNG CHUỖI "succeed" (không phải "success"/"completed"/"done").
+ *
+ * SỬA (xác nhận qua lỗi thật, generateVideo mode Reference to Video): còn có
+ * trạng thái TRUNG GIAN "processing" (queue đã xong, đang generate thật) —
+ * bản đầu coi "khác waiting là xong" nên dừng poll NGAY khi thấy
+ * "processing", trả về status sai (chưa xong thật) và caller hiểu nhầm là
+ * terminal. Danh sách CHƯA XONG giờ là {waiting, processing} — status nào
+ * khác 2 giá trị này mới coi là terminal. CHƯA có bằng chứng thật cho trạng
+ * thái lỗi (status khi thất bại) — trả nguyên văn status terminal đó ra cho
+ * caller tự log/xử lý, KHÔNG đoán bừa ý nghĩa; có thể còn trạng thái trung
+ * gian khác chưa gặp, sửa tiếp khi có bằng chứng mới.
+ *
+ * PHẢI gọi fetch qua page.evaluate (chạy như JS thật của chính trang), KHÔNG
+ * dùng page.context().request/page.request — xác nhận qua lỗi thật: gọi
+ * trực tiếp qua context.request bị Cloudflare trả 403 "Just a moment..."
+ * (cf-mitigated: challenge) dù cookie session hợp lệ, giống hệt lý do curl
+ * luôn bị chặn ở domain pollo.ai chính đã xác nhận trước đó — chỉ request
+ * phát ra THẬT SỰ từ trong page (đúng TLS/JS fingerprint trình duyệt) mới
+ * qua được.
+ */
+const NON_TERMINAL_GENERATION_STATUSES = new Set(["waiting", "processing"]);
+
+export async function waitForGenerationApiStatus(
+  page: Page,
+  recordId: number,
+  timeoutMs: number,
+  pollIntervalMs = 5000,
+): Promise<string | null> {
+  const url = new URL("/api/trpc/generationPolling.fetchRecordsStatus", config.polloBaseUrl);
+  url.searchParams.set("input", JSON.stringify({ json: { recordIds: [recordId] } }));
+  const urlStr = url.toString();
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const record = await page
+      .evaluate(async (u) => {
+        const res = await fetch(u, { credentials: "include" });
+        if (!res.ok) return null;
+        return res.json();
+      }, urlStr)
+      .then((body: any) => body?.result?.data?.json?.[0] ?? null)
+      .catch(() => null);
+
+    if (record && !NON_TERMINAL_GENERATION_STATUSES.has(record.status)) {
+      return record.status as string;
+    }
+    await page.waitForTimeout(pollIntervalMs);
+  }
+  return null;
+}
+
+/**
+ * Lấy chi tiết record đã xong (mediaUrl, videoId) qua GET
+ * /api/trpc/generation.queryRecordDetail — CHỈ dùng làm phương án dự phòng
+ * cuối (xem downloadResultImages/downloadResultVideo call site) khi DOM đã
+ * xác nhận KHÔNG hiện được kết quả dù API báo "succeed" (đúng kiểu bug đã
+ * gặp thật ở mode Reference to Video/chat_box — xem waitForNewResult trong
+ * pollo.ts). mediaUrl xác nhận qua test thật là URL CDN gốc ("ori/..."),
+ * dùng chung field name cho cả ảnh lẫn video (mediaType phân biệt loại) —
+ * CHƯA kiểm chứng riêng cho video, nên bọc null-safe, không throw nếu thiếu
+ * field.
+ */
+export async function fetchGenerationRecordDetail(
+  page: Page,
+  recordId: number,
+): Promise<{ mediaUrl: string | null; videoId: string | null } | null> {
+  const url = new URL("/api/trpc/generation.queryRecordDetail", config.polloBaseUrl);
+  url.searchParams.set("input", JSON.stringify({ json: { id: recordId } }));
+  const urlStr = url.toString();
+
+  const data = await page
+    .evaluate(async (u) => {
+      const res = await fetch(u, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    }, urlStr)
+    .then((body: any) => body?.result?.data?.json ?? null)
+    .catch(() => null);
+
+  if (!data) return null;
+  return {
+    mediaUrl: typeof data.mediaUrl === "string" ? data.mediaUrl : null,
+    videoId: typeof data.videoId === "string" ? data.videoId : null,
+  };
+}
+
+/**
  * Mở dialog Uploads qua nút toggle (data-testid="upload-card-asset-picker"/
  * uploadCardButtonByLabel — aria-haspopup="dialog", aria-expanded) — xác
  * nhận qua lỗi thật LẶP LẠI RẤT NHIỀU LẦN (hàng loạt job khác nhau, luôn
@@ -1416,15 +1566,47 @@ export async function generateVideo(
 
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
-    await clickWithOverlayDismiss(page, generateButton);
+    const recordId = await captureGenerationRecordId(page, () =>
+      clickWithOverlayDismiss(page, generateButton),
+    );
     const generateClickedAtMs = Date.now();
 
-    const { src: videoSrc, card: resultCard } = await waitForNewResult(
-      page,
-      baseline,
-      config.generationTimeoutMs,
-      generateClickedAtMs,
-    );
+    // Check trạng thái qua API song song với dò DOM — xem docstring
+    // waitForGenerationApiStatus. recordId null (bắt response thất bại) thì
+    // bỏ qua hẳn, dùng lại đúng cơ chế dò DOM cũ.
+    const apiStatus =
+      recordId !== null
+        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs)
+        : null;
+    if (recordId !== null) {
+      console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
+    }
+
+    let videoSrc: string;
+    let resultCard: Locator | null;
+    try {
+      ({ src: videoSrc, card: resultCard } = await waitForNewResult(
+        page,
+        baseline,
+        config.generationTimeoutMs,
+        generateClickedAtMs,
+      ));
+    } catch (err) {
+      // DOM không thấy video mới dù API đã xác nhận "succeed" — đúng dạng
+      // bug đã gặp thật ở mode Reference to Video/chat_box (xem docstring
+      // waitForNewResult phía trên): tải trực tiếp qua mediaUrl của API.
+      if (apiStatus === "succeed" && recordId !== null) {
+        const detail = await fetchGenerationRecordDetail(page, recordId);
+        if (detail?.mediaUrl) {
+          console.warn(
+            `[pollo] DOM không thấy video mới dù API xác nhận record ${recordId} đã "succeed" — tải trực tiếp qua mediaUrl.`,
+          );
+          const filePath = await downloadResultVideo(page, detail.mediaUrl, jobId);
+          return { filePath, polloResultId: detail.videoId };
+        }
+      }
+      throw err;
+    }
     const filePath = await downloadResultVideo(page, videoSrc, jobId);
     // resultCard null = kết quả chỉ tìm thấy qua /create (xem
     // findRecentVideoViaCreatePage), không có card nào trên page hiện tại để

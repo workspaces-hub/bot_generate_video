@@ -10,10 +10,13 @@ import {
   enableUnlimitedIfNotEnoughCredit,
   ensureComposerReadyOrThrow,
   ensureUploadDialogOpen,
+  captureGenerationRecordId,
+  fetchGenerationRecordDetail,
   gotoPolloWithRetry,
   resolveDownloadExtension,
   submitAssetUpload,
   waitForGenerateButtonEnabled,
+  waitForGenerationApiStatus,
 } from "./pollo";
 import {
   GenerationError,
@@ -262,10 +265,45 @@ export async function generateImage(
     await dismissBlockingOverlays(page);
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
-    await clickWithOverlayDismiss(page, generateButton);
+    const recordId = await captureGenerationRecordId(page, () =>
+      clickWithOverlayDismiss(page, generateButton),
+    );
     // await captureSnapshot(page, jobId, "after-click-generate");
 
-    const newCard = await waitForNewResult(page, baseline, config.generationTimeoutMs);
+    // Check trạng thái qua API song song với việc DOM tự cập nhật — xem
+    // docstring waitForGenerationApiStatus (pollo.ts). recordId null (bắt
+    // response thất bại) thì bỏ qua hẳn, dùng lại đúng cơ chế dò DOM cũ.
+    const apiStatus =
+      recordId !== null
+        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs)
+        : null;
+    if (recordId !== null) {
+      console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
+    }
+
+    let newCard: Locator;
+    try {
+      newCard = await waitForNewResult(page, baseline, config.generationTimeoutMs);
+    } catch (err) {
+      // DOM không thấy ảnh mới dù API đã xác nhận "succeed" — đúng dạng bug
+      // đã gặp thật ở mode Reference to Video/chat_box (xem waitForNewResult
+      // trong pollo.ts): tải trực tiếp qua mediaUrl của API thay vì bỏ cuộc.
+      if (apiStatus === "succeed" && recordId !== null) {
+        const detail = await fetchGenerationRecordDetail(page, recordId);
+        if (detail?.mediaUrl) {
+          console.warn(
+            `[pollo] DOM không thấy ảnh mới dù API xác nhận record ${recordId} đã "succeed" — tải trực tiếp qua mediaUrl.`,
+          );
+          await fs.promises.mkdir(config.downloadDir, { recursive: true });
+          const response = await fetchWithRetry(page, detail.mediaUrl);
+          const ext = resolveDownloadExtension(response, detail.mediaUrl);
+          const filePath = path.join(config.downloadDir, `${jobId}${ext}`);
+          await fs.promises.writeFile(filePath, await response.body());
+          return { filePaths: [filePath], polloResultId: detail.videoId };
+        }
+      }
+      throw err;
+    }
     const filePaths = await downloadResultImages(page, newCard, jobId);
     const polloResultId = await captureResultId(page, newCard);
     return { filePaths, polloResultId };
