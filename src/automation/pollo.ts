@@ -100,6 +100,25 @@ export function resolveDownloadExtension(
  * phòng riêng cho popup Trustpilot, phòng khi nút X đổi/không hiện.
  */
 export async function dismissBlockingOverlays(page: Page): Promise<void> {
+  // Banner xin cookie (thư viện vanilla-cookieconsent — nhận diện qua
+  // #cc-main/.cm-wrapper/.cm__desc) — xác nhận qua lỗi thật (job
+  // test_normal_2_CHAR_EMILY, user báo trực tiếp lúc đang xem live: "đang
+  // hiển thị popup accept cookie. click accept all rồi tiếp tục"): banner
+  // này che TOÀN BỘ khu vực composer, khiến cả click bật switch Unlimited
+  // lẫn click nút generate đều báo "<div id=\"cc-main\">…</div> subtree
+  // intercepts pointer events" và timeout dù element "visible, enabled and
+  // stable" — không phải popup coco-modal/Trustpilot nên button[aria-
+  // label="Close"] không khớp được. Bấm nút "Accept all" (data-cc="accept-
+  // all" theo đúng thư viện, kèm fallback theo text phòng khi site tùy biến
+  // lại attribute) TRƯỚC các bước dismiss khác.
+  const cookieAcceptButton = page
+    .locator('#cc-main button[data-cc="accept-all"], #cc-main button:has-text("Accept all")')
+    .first();
+  if (await cookieAcceptButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await cookieAcceptButton.click().catch(() => {});
+    await page.waitForTimeout(300);
+  }
+
   // .first() KHÔNG đủ — xác nhận qua lỗi thật (job microdrama_co_dau_phan_
   // boi_twist_prompt_SHOT_01_CLIP_01_VIDEO): trang thật có TỚI 3 nút khớp
   // button[aria-label="Close"] cùng lúc (drawer mobile ẩn/pointer-events-none
