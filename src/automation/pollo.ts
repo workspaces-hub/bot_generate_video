@@ -212,6 +212,40 @@ export async function clickWithOverlayDismiss(
 }
 
 /**
+ * Nút Generate (prompt-generate-btn) có aria-disabled="true" (kèm class
+ * aria-disabled:pointer-events-none) khi tài khoản ĐANG có generation khác
+ * chạy đồng thời — xác nhận qua debug snapshot THẬT của đúng job lỗi
+ * (test_normal_4_LOCATION_UNDERGROUND_PARKING_GARAGE): tại thời điểm
+ * clickWithOverlayDismiss timeout hẳn sau 5 lần thử, DOM cho thấy 2 card
+ * khác đang generate (36%, 29%) CÙNG prompt, và chính prompt-generate-btn có
+ * aria-disabled="true" thật — tức đây KHÔNG phải overlay che (click không
+ * bao giờ có thể thành công dù retry bao nhiêu lần vì nút bị vô hiệu hoá
+ * thật, dismissBlockingOverlays không giải quyết được). Nhiều khả năng do
+ * các lần chạy/restart trước để lại generation tồn đọng (click generate đã
+ * thành công server-side nhưng bot không kịp phát hiện xong trước khi lỗi ở
+ * bước khác, vd timeout mạng) — chờ nút hết disabled (tức các generation cũ
+ * xong dần) thay vì cắm đầu click liên tục vào 1 nút không thể bấm được.
+ */
+export async function waitForGenerateButtonEnabled(
+  page: Page,
+  button: Locator,
+  timeoutMs = 20 * 60_000,
+): Promise<void> {
+  const start = Date.now();
+  while (true) {
+    const disabled = await button.getAttribute("aria-disabled").catch(() => null);
+    if (disabled !== "true") return;
+    if (Date.now() - start >= timeoutMs) {
+      console.warn(
+        `[pollo] Nút Generate vẫn bị khoá (aria-disabled="true") sau ${timeoutMs}ms — có thể tài khoản đang tồn đọng nhiều generation cũ. Thử click luôn dù nhiều khả năng vẫn lỗi.`,
+      );
+      return;
+    }
+    await page.waitForTimeout(5000);
+  }
+}
+
+/**
  * Mở dialog Uploads qua nút toggle (data-testid="upload-card-asset-picker"/
  * uploadCardButtonByLabel — aria-haspopup="dialog", aria-expanded) — xác
  * nhận qua lỗi thật LẶP LẠI RẤT NHIỀU LẦN (hàng loạt job khác nhau, luôn
@@ -1205,6 +1239,33 @@ async function waitForNewResult(
       }
     }
 
+    // Fallback cho mode "Reference to Video" (deep-link, xem buildDeepLinkUrl)
+    // — xác nhận qua debug snapshot THẬT của đúng job bị timeout này
+    // (test_normal_3_SHOT_01_CLIP_01_VIDEO): video đã tạo XONG HẲN, hiện
+    // ngay trên page composer (poster + controls + src CDN thật với
+    // timestamp mới), NHƯNG [data-widget-name="project_content_card"]
+    // KHÔNG HỀ tồn tại trong DOM ở mode này (0 match) — giao diện "chat_box"
+    // của Reference to Video hiển thị kết quả trực tiếp qua thẻ
+    // video.vjs-tech (resultVideoLocator), không bọc trong project_content_
+    // card như /image hay /video thường — nên nhánh card phía trên KHÔNG
+    // BAO GIỜ kích hoạt được ở mode này, và job vẫn treo tới hết timeoutMs dù
+    // đã xong từ lâu. /create fallback (bên dưới) cũng không cứu được lần
+    // này (có thể do "Reference to Video" thuộc project riêng, không lên
+    // feed /create chung). Kiểm tra thẳng resultVideoLocator(page) mỗi vòng
+    // lặp — chỉ nhận nếu timestamp nhúng trong URL (extractAssetTimestampMs)
+    // MỚI HƠN lúc bấm Generate, tránh nhận nhầm video CŨ còn sót lại từ job
+    // trước trong cùng phiên chat.
+    const pageVideoSrc = await resultVideoLocator(page)
+      .first()
+      .getAttribute("src")
+      .catch(() => null);
+    if (pageVideoSrc) {
+      const ts = extractAssetTimestampMs(pageVideoSrc);
+      if (ts !== null && ts >= generateClickedAtMs - 60_000) {
+        return { src: pageVideoSrc, card: null };
+      }
+    }
+
     // Xác nhận qua lỗi thật (xem docstring creditPaywallLocator trong
     // polloSelectors.ts): bấm Generate khi không đủ credit KHÔNG tạo card mới
     // nào cả — nếu không phát hiện riêng, vòng lặp trên sẽ treo mãi mà không
@@ -1354,6 +1415,7 @@ export async function generateVideo(
     const baseline = await captureResultBaseline(page);
 
     const generateButton = generateButtonLocator(page).first();
+    await waitForGenerateButtonEnabled(page, generateButton);
     await clickWithOverlayDismiss(page, generateButton);
     const generateClickedAtMs = Date.now();
 

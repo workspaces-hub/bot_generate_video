@@ -13,6 +13,7 @@ import {
   gotoPolloWithRetry,
   resolveDownloadExtension,
   submitAssetUpload,
+  waitForGenerateButtonEnabled,
 } from "./pollo";
 import {
   GenerationError,
@@ -260,6 +261,7 @@ export async function generateImage(
     // await captureSnapshot(page, jobId, "before-click-generate");
     await dismissBlockingOverlays(page);
     const generateButton = generateButtonLocator(page).first();
+    await waitForGenerateButtonEnabled(page, generateButton);
     await clickWithOverlayDismiss(page, generateButton);
     // await captureSnapshot(page, jobId, "after-click-generate");
 
