@@ -999,6 +999,30 @@ export async function submitAssetUpload(
   const cards = assetPickerCardLocator(page);
   const fileInput = uploadDialogFileInputLocator(page);
 
+  // Bỏ chọn HẾT card còn đánh dấu data-selected="true" từ lần gọi TRƯỚC —
+  // xác nhận qua lỗi thật (job test_normal_7_rep_SHOT_04_CLIP_02_VIDEO) +
+  // script inspect-pollo-picker-selection: nút "Select" hiện "(1/9)" NGAY
+  // khi mở lại dialog cho ảnh reference THỨ 2 (trước khi bấm gì cả) — card
+  // của ảnh THỨ 1 vẫn còn data-selected="true" dù đã bấm Select+đóng dialog
+  // trước đó. Picker KHÔNG tự xoá selection cũ khi đóng/mở lại — mỗi lần
+  // upload+chọn ảnh mới trong loop referenceImagePaths (generateVideo) cứ
+  // thế TÍCH LŨY thêm 1 card được chọn. Tới lần thứ 3 ("Select (3/9)"),
+  // click Select kích hoạt 1 navigation thật của pollo.ai (canonical URL rơi
+  // về "/reference-to-video" không còn query deep-link, composer bị RESET
+  // sạch, mất hết ảnh/prompt đã nhập) — Playwright báo "waiting for
+  // scheduled navigations to finish" rồi timeout đúng vì navigation đó có
+  // thật, không phải lỗi giả. Dọn sạch TRƯỚC mỗi lần upload đảm bảo luôn
+  // chỉ có ĐÚNG 1 card được chọn khi bấm Select, khớp đúng thiết kế ban đầu
+  // (docstring uploadDialogSelectButtonLocator: "chỉ enable sau khi đã click
+  // thumbnail" — ngầm giả định single-select, không tính accumulation).
+  const selectedCards = page.locator('[data-testid="asset-picker-card"][data-selected="true"]');
+  const staleCount = await selectedCards.count().catch(() => 0);
+  for (let i = 0; i < staleCount; i++) {
+    // Luôn bấm .first() — mỗi lần bỏ chọn thành công, card đó rời khỏi tập
+    // hợp khớp selector này, .first() tự trỏ sang card kế tiếp còn sót.
+    await selectedCards.first().click({ timeout: 5000 }).catch(() => {});
+  }
+
   // await deleteStaleUploadedAssets(page).catch((err) => {
   //   console.warn("[pollo] deleteStaleUploadedAssets lỗi (bỏ qua, không chặn upload):", err);
   // });
