@@ -320,7 +320,28 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   }
   // await captureSnapshot(page, "before-click ask", "before-click ask");
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
-  await sendButton.click();
+  // ChatGPT điều hướng THẬT (từ "/" sang "/c/<id>") khi gửi tin nhắn ĐẦU
+  // TIÊN của 1 hội thoại mới — xác nhận qua lỗi thật ("click action done —
+  // waiting for scheduled navigations to finish" rồi timeout 30s): click ĐÃ
+  // THỰC SỰ xảy ra (log xác nhận "click action done"), chỉ là navigation đó
+  // không "settle" kịp trong thời gian actionability mặc định của
+  // Playwright. Cùng lớp lỗi đã gặp với pollo.ai (xem clickGenerateButton
+  // trong pollo.ts) — kiểm tra bằng chứng tin nhắn ĐÃ GỬI (ô nhập rỗng trở
+  // lại, hoặc nút Stop generating xuất hiện) trước khi coi là lỗi thật,
+  // thay vì luôn throw ngay khi click() timeout.
+  await sendButton.click({ timeout: 10_000 }).catch(async (err) => {
+    const textCleared = await textarea
+      .innerText()
+      .then((t) => t.trim() === "")
+      .catch(() => false);
+    const stopVisible = await firstVisible(stopGeneratingButtonCandidates(page), 3000)
+      .then(() => true)
+      .catch(() => false);
+    if (!textCleared && !stopVisible) throw err;
+    console.warn(
+      "[chatAI] Click Send báo lỗi (navigation timeout) nhưng có bằng chứng tin nhắn đã gửi (ô nhập rỗng/nút Stop xuất hiện) — bỏ qua lỗi.",
+    );
+  });
   // await captureSnapshot(page, "after-click ask", "after-click ask");
 
   // Chờ nút "Stop generating" xuất hiện (ChatAI bắt đầu trả lời) — best-effort,
