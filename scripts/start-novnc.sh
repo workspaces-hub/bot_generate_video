@@ -127,8 +127,8 @@ sleep 1
 
 echo "[start-novnc] Sẵn sàng — xem trực tiếp tại http://<ip-vps>:${NOVNC_PORT}/vnc.html"
 echo "[start-novnc] Khởi động bot (node dist/src/index.js)..."
-# node dist/src/index.js &
-# BOT_PID="$!"
-# PIDS+=("$BOT_PID")
+node dist/src/index.js &
+BOT_PID="$!"
+PIDS+=("$BOT_PID")
 
-# wait "$BOT_PID"
+wait "$BOT_PID"
