@@ -416,7 +416,7 @@ export async function waitForGenerationApiStatus(
     }
     if (Date.now() >= nextSnapshotAt) {
       snapshotSeq += 1;
-      await captureSnapshot(page, `${jobId}_progress-${snapshotSeq}`, "progress");
+      await captureSnapshot(page, `${jobId}_progress`, "progress");
       nextSnapshotAt += progressSnapshotIntervalMs;
     }
     await page.waitForTimeout(pollIntervalMs);
