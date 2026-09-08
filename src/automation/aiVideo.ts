@@ -1910,9 +1910,16 @@ export async function getFeedErrorMessage(
 
 async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
   await fs.promises.mkdir(config.debugDir, { recursive: true });
+  // timeout ngắn hơn mặc định (30s) — xác nhận qua log thật: dưới tải đồng
+  // thời (2 context ảnh/video cùng tài khoản), page.screenshot() có thể tự
+  // nó hết 30s ("waiting for fonts to load...") NGAY TRONG lúc xử lý lỗi,
+  // kéo dài thêm thời gian queue bị nghẽn cho 1 tác vụ debug phụ (không ảnh
+  // hưởng job đã lỗi từ trước) — thất bại nhanh, chấp nhận mất snapshot thay
+  // vì chờ hết 30s vô ích.
   await page.screenshot({
     path: path.join(config.debugDir, `${jobId}.png`),
     fullPage: true,
+    timeout: 10_000,
   });
   await fs.promises.writeFile(
     path.join(config.debugDir, `${jobId}.html`),

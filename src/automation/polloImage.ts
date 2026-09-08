@@ -283,7 +283,7 @@ export async function generateImage(
     // response thất bại) thì bỏ qua hẳn, dùng lại đúng cơ chế dò DOM cũ.
     const apiStatus =
       recordId !== null
-        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs)
+        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs, jobId)
         : null;
     if (recordId !== null) {
       console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);

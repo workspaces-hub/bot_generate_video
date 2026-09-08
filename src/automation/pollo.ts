@@ -386,13 +386,21 @@ export async function waitForGenerationApiStatus(
   page: Page,
   recordId: number,
   timeoutMs: number,
+  jobId: string,
   pollIntervalMs = 5000,
+  progressSnapshotIntervalMs = 30_000,
 ): Promise<string | null> {
   const url = new URL("/api/trpc/generationPolling.fetchRecordsStatus", config.polloBaseUrl);
   url.searchParams.set("input", JSON.stringify({ json: { recordIds: [recordId] } }));
   const urlStr = url.toString();
 
   const start = Date.now();
+  // Ảnh debug định kỳ để theo dõi tiến trình gen trong lúc đang chờ (theo
+  // yêu cầu người dùng) — mỗi lần chụp là 1 file riêng
+  // (storage/debug/<jobId>_progress-<n>.png), KHÔNG ghi đè lên nhau, để xem
+  // lại được toàn bộ diễn biến của 1 job thay vì chỉ trạng thái cuối cùng.
+  let snapshotSeq = 0;
+  let nextSnapshotAt = start + progressSnapshotIntervalMs;
   while (Date.now() - start < timeoutMs) {
     const record = await page
       .evaluate(async (u) => {
@@ -405,6 +413,11 @@ export async function waitForGenerationApiStatus(
 
     if (record && !NON_TERMINAL_GENERATION_STATUSES.has(record.status)) {
       return record.status as string;
+    }
+    if (Date.now() >= nextSnapshotAt) {
+      snapshotSeq += 1;
+      await captureSnapshot(page, `${jobId}_progress-${snapshotSeq}`, "progress");
+      nextSnapshotAt += progressSnapshotIntervalMs;
     }
     await page.waitForTimeout(pollIntervalMs);
   }
@@ -1332,9 +1345,20 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page, jobId: string
   console.warn(
     `[pollo] Credit hiện tại (${credit}) không đủ trả phí lượt tạo (${fee}) — tự bật "Unlimited".`,
   );
-  await switchLocator.click({ timeout: 5000 }).catch(async (err) => {
-    console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
-    await captureSnapshot(page, jobId + "_unlimited-switch-failed", "unlimited-switch-failed");
+  // Banner cookie-consent (#cc-main) có thể vẫn còn che switch tại thời điểm
+  // này (nó chỉ bị dismiss 1 lần lúc mới vào trang) và chặn click thật —
+  // xác nhận qua log thật ("<div class=\"cm-wrapper cc--anim\">… intercepts
+  // pointer events"), khiến switch KHÔNG bật được, generate dùng hết credit
+  // thật và job sau đó fail hẳn vì "không đủ credit" thay vì chỉ bỏ qua như
+  // comment best-effort ở dưới kỳ vọng. Dismiss trước khi click, và thử lại
+  // 1 lần sau khi dismiss nếu lần đầu vẫn bị chặn.
+  await dismissBlockingOverlays(page);
+  await switchLocator.click({ timeout: 5000 }).catch(async () => {
+    await dismissBlockingOverlays(page);
+    await switchLocator.click({ timeout: 5000 }).catch(async (err) => {
+      console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
+      await captureSnapshot(page, jobId + "_unlimited-switch-failed", "unlimited-switch-failed");
+    });
   });
 }
 
@@ -1714,7 +1738,7 @@ export async function generateVideo(
     // bỏ qua hẳn, dùng lại đúng cơ chế dò DOM cũ.
     const apiStatus =
       recordId !== null
-        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs)
+        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs, jobId)
         : null;
     if (recordId !== null) {
       console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
