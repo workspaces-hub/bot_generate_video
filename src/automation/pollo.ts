@@ -34,6 +34,7 @@ import {
   videoLengthOptionLocator,
   videoLengthSliderInputLocator,
 } from "./polloSelectors";
+import { sleep } from "./storyboardPipeline";
 
 /**
  * Map Content-Type → đuôi file — dùng cho resolveDownloadExtension bên dưới,
@@ -314,9 +315,26 @@ export async function waitForGenerateButtonEnabled(
   const start = Date.now();
   while (true) {
     const buttonExists = (await button.count().catch(() => 0)) > 0;
-    if (!buttonExists) {
+    // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_05_CLIP_01_VIDEO,
+    // 2026-09-08T07:00): chỉ check buttonExists KHÔNG đủ — snapshot cho
+    // thấy trang rơi về bản marketing/SEO nhưng DOM của nó VẪN có sẵn 1
+    // phần tử khớp data-testid="prompt-generate-btn" (bản SSR/skeleton
+    // tĩnh, aria-disabled="true" cố định, KHÔNG BAO GIỜ đổi vì JS thật
+    // (ProseMirror) chưa hydrate để tiếp quản) — buttonExists=true suốt,
+    // vòng lặp chờ hết timeoutMs rồi throw nhầm "vẫn bị khoá do tồn đọng
+    // generation" trong khi lỗi thật là trang hỏng. Dùng LẠI đúng tín hiệu
+    // waitForComposerReady (phần tử contenteditable="true" — CHỈ tồn tại
+    // sau khi ProseMirror hydrate xong, không có trong SSR shell) để phân
+    // biệt "trang thật đã hydrate" với "bản skeleton tĩnh trông giống thật".
+    const composerHydrated =
+      (await page
+        .locator('[data-testid="prompt-editor"] [contenteditable="true"]')
+        .first()
+        .count()
+        .catch(() => 0)) > 0;
+    if (!buttonExists || !composerHydrated) {
       throw new GenerationError(
-        "Nút Generate không còn tồn tại trên trang trong lúc đang chờ (aria-disabled) — trang có thể đã rơi về bản marketing/SEO chưa hydrate (JS chunks lỗi tải — có thể do CDN/mạng chập chờn, KHÔNG chắc do proxy), mất hết prompt/tham chiếu đã nhập.",
+        "Trang không còn ở trạng thái composer thật trong lúc đang chờ nút Generate (aria-disabled) — đã rơi về bản marketing/SEO chưa hydrate (JS chunks lỗi tải — có thể do CDN/mạng chập chờn, KHÔNG chắc do proxy), mất hết prompt/tham chiếu đã nhập.",
       );
     }
     const disabled = await button
@@ -1070,10 +1088,28 @@ export function withPolloAssetUploadLock<T>(fn: () => Promise<T>): Promise<T> {
   return settled;
 }
 
+/**
+ * confirmSelect (mặc định true) — có bấm nút "Select" để xác nhận NGAY sau
+ * khi check card hay không.
+ *
+ * SỬA (xác nhận qua test thật — script one-off, không lưu lại): "Select
+ * (N/9)" KHÔNG tự động chèn "@ mention" nào vào prompt cả — nó CHỈ xác nhận
+ * ảnh vào thư viện asset (URL/state), hoàn toàn TÁCH BIỆT với việc mention
+ * (mention luôn phải qua picker "@" riêng, xem insertMentionForFile). Test
+ * trực tiếp: upload+check 3 ảnh (KHÔNG bấm Select), rồi bấm Select ĐÚNG 1
+ * LẦN duy nhất — không có navigation nào xảy ra, URL không đổi (khác hẳn
+ * nghi vấn "Select N>1 gây navigation-reset" trước đó). Nghi vấn navigation
+ * thật ra đến từ việc bấm "Select" NHIỀU LẦN LIÊN TIẾP (mỗi ảnh reference
+ * gọi 1 lần) — không phải từ số lượng đang check. Vì vậy: generateVideo()
+ * giờ gọi confirmSelect=false cho từng ảnh trong loop, rồi gọi
+ * confirmAssetPickerSelection() ĐÚNG 1 LẦN sau khi cả N ảnh đã upload+check
+ * xong, trước khi chạy loop "@ mention" riêng.
+ */
 export async function submitAssetUpload(
   page: Page,
   imagePath: string,
   reopenDialog: () => Promise<void>,
+  confirmSelect = true,
 ): Promise<string> {
   const cards = assetPickerCardLocator(page);
   const fileInput = uploadDialogFileInputLocator(page);
@@ -1090,15 +1126,9 @@ export async function submitAssetUpload(
       .catch(() => false);
     if (stillThere) {
       await existingCard.click({ timeout: 10_000 });
-      // timeout dài hơn hẳn (30s, không phải 10s) — xác nhận qua log thật
-      // production (job test_normal_7_2_SHOT_01_CLIP_01_VIDEO): từ khi bỏ
-      // dedupe chọn tồn đọng (xem chú thích đầu hàm — dedupe cũ xoá nhầm
-      // mention), "Select (N/9)" với N > 1 kích hoạt 1 navigation THẬT của
-      // pollo.ai (xác nhận nhu cầu này thật, không phải bug giả) cần nhiều
-      // thời gian hơn 10s để hoàn tất, nhất là lúc VPS tải cao — 10s khiến
-      // Playwright timeout ngay giữa "waiting for scheduled navigations to
-      // finish" dù thao tác vẫn đang xử lý bình thường.
-      await uploadDialogSelectButtonLocator(page).click({ timeout: 60_000 });
+      if (confirmSelect) {
+        await confirmAssetPickerSelection(page);
+      }
       return cachedUrl;
     }
     // Không còn thấy nữa — rơi xuống upload lại bình thường bên dưới.
@@ -1138,9 +1168,9 @@ export async function submitAssetUpload(
           .catch(() => 0)) > 0;
       if (!stillUploading) {
         await cards.first().click({ timeout: 10_000 });
-        // timeout dài hơn hẳn (30s) — xem chú thích ở nhánh cache phía trên
-        // (cùng lý do: "Select (N/9)" với N > 1 kích hoạt navigation THẬT).
-        await uploadDialogSelectButtonLocator(page).click({ timeout: 30_000 });
+        if (confirmSelect) {
+          await confirmAssetPickerSelection(page);
+        }
         rememberUploadedAsset(imagePath, currentUrl);
         return currentUrl;
       }
@@ -1167,6 +1197,20 @@ export async function submitAssetUpload(
   throw new GenerationError(
     "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 45s (đã thử mở lại dialog).",
   );
+}
+
+/**
+ * Bấm nút "Select" để xác nhận HẾT các card đang được check trong dialog
+ * Upload Media, đóng dialog lại — gọi ĐÚNG 1 LẦN sau khi đã upload+check
+ * xong TOÀN BỘ ảnh tham chiếu cần dùng (xem confirmSelect trong
+ * submitAssetUpload), KHÔNG gọi lặp lại nhiều lần liên tiếp (nghi vấn chính
+ * gây ra navigation-reset composer trước đây — xem docstring
+ * submitAssetUpload). timeout dài (60s, không phải mặc định) vì đây có thể
+ * là 1 thao tác xử lý nhiều ảnh cùng lúc phía server, cần thêm thời gian so
+ * với 1 click thường.
+ */
+export async function confirmAssetPickerSelection(page: Page): Promise<void> {
+  await uploadDialogSelectButtonLocator(page).click({ timeout: 60_000 });
 }
 
 /**
@@ -1200,11 +1244,12 @@ async function uploadFrameImage(
 async function uploadReferenceVideoImage(
   page: Page,
   imagePath: string,
+  confirmSelect = true,
 ): Promise<string> {
   const openDialog = () =>
     ensureUploadDialogOpen(page, uploadCardButtonForImage(page).first());
   await openDialog();
-  return submitAssetUpload(page, imagePath, openDialog);
+  return submitAssetUpload(page, imagePath, openDialog, confirmSelect);
 }
 
 /**
@@ -1870,25 +1915,24 @@ export async function generateVideo(
     // Reference to Video BẮT BUỘC "@ mention" từng ảnh vào prompt thì model
     // mới thực sự dùng ảnh đó — xem chú thích đầu file/insertMentionForFile.
     // Upload rồi mention NGAY từng ảnh 1 (KHÔNG upload hết cả loạt rồi mới
-    // mention hết cả loạt như trước) — xác nhận qua lỗi thật (job
-    // cay_khe_rm_end_SHOT_01_CLIP_02_VIDEO): ảnh CHAR_OLDER_BROTHER upload
-    // thành công nhưng biến mất khỏi picker "@ mention" trước khi kịp tới
-    // lượt mention nó. Picker chỉ hiện ĐÚNG vài upload GẦN NHẤT của CẢ tài
-    // khoản (không phải riêng job này — job Pollo khác, vd hàng đợi ảnh, chạy
-    // song song trên CÙNG tài khoản cũng tính), nên khoảng hở giữa lúc upload
-    // xong và lúc mention càng dài càng dễ bị đẩy khỏi danh sách. Mention
-    // ngay sau khi upload xong để giảm tối đa khoảng hở đó.
-    //
-    // SỬA (xác nhận qua lỗi thật, job
-    // test_normal_7_rep_SHOT_01_CLIP_01_VIDEO, 2026-09-07): "mention ngay sau
-    // upload" chỉ GIẢM khoảng hở chứ không loại bỏ được — vẫn đủ thời gian để
-    // 1 job Pollo khác (hàng đợi ảnh) chen 1-2 upload của riêng nó vào giữa,
-    // đẩy ảnh job này khỏi picker trước khi insertMentionForFile kịp tìm thấy
-    // (hết cả 4 lần retry). Bọc CẢ upload lẫn mention trong 1 lần giữ
-    // withPolloAssetUploadLock (xem docstring hàm đó, khai báo cùng
-    // submitAssetUpload) — đảm bảo không job nào khác chen upload vào khoảng
-    // hở này nữa, loại bỏ hẳn race thay vì chỉ rút ngắn nó.
+    // mention hết cả loạt) — xác nhận LẠI qua test thật (2026-09-08): batch
+    // (upload hết N ảnh → Select 1 lần → mention hết N ảnh) từng được thử vì
+    // nghi ngờ Select gọi nhiều lần gây navigation-reset, nhưng lại lộ ra vấn
+    // đề KHÁC nặng hơn — cùng 1 assetUrl cache từ 1 ảnh đã upload TỪ TRƯỚC
+    // vẫn fail mention y hệt: picker "@ mention" có cửa sổ "gần đây" RẤT
+    // HẸP (hẹp hơn hẳn danh sách chung trong dialog Upload Media, nơi ảnh đó
+    // vẫn còn thấy được để re-select từ cache) — chỉ cần xen thêm 2 upload
+    // khác (2 ảnh còn lại trong CHÍNH batch này) ở giữa là ảnh đầu đã bị đẩy
+    // khỏi cửa sổ đó. Nới thời gian chờ index cũng không cứu được. Kết luận:
+    // khoảng hở giữa lúc 1 ảnh upload xong và lúc mention nó phải NGẮN NHẤT
+    // có thể — quay lại xen kẽ từng ảnh, chấp nhận rủi ro Select gọi lại
+    // nhiều lần (đã có sẵn timeout 60s cho từng lần, xem confirmAssetPickerSelection),
+    // nhưng THÊM kiểm tra composer có bị navigation-reset sau mỗi lần Select
+    // hay không (so sánh độ dài prompt trước/sau — reset thật sẽ làm prompt
+    // rớt về rỗng) để throw rõ ràng ngay, thay vì tiếp tục generate với
+    // composer đã hỏng.
     if (!startFramePath && referenceImagePaths.length > 0) {
+      const promptTextBeforeRefs = await editor.innerText().catch(() => "");
       for (const refPath of referenceImagePaths) {
         await withPolloAssetUploadLock(async () => {
           // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc
@@ -1900,6 +1944,32 @@ export async function generateVideo(
           // lỗi nếu không có gì để đóng.
           await dismissBlockingOverlays(page);
           const assetUrl = await uploadReferenceVideoImage(page, refPath);
+
+          // SỬA (xác nhận qua test thật — người dùng quan sát trực tiếp):
+          // click "Select" xong không có nghĩa là navigation (nếu có) đã
+          // hoàn tất hẳn — chờ thêm 10s NGAY SAU Select trước khi kiểm tra
+          // composer/mention giúp loại bỏ hẳn hiện tượng "composer bị clear"
+          // (không còn tái hiện được sau khi thêm chờ này, trong khi không
+          // chờ thì tái hiện được). Chấp nhận tốn thêm 10s/ảnh — rẻ hơn hẳn
+          // so với generate hỏng vì thiếu tham chiếu.
+          await page.waitForTimeout(10_000);
+
+          // Xác nhận composer chưa bị navigation-reset SAU KHI Select (bên
+          // trong uploadReferenceVideoImage) — kiểm tra NGAY trước khi mention,
+          // tránh mention vào 1 editor đã rỗng/sai (throw sẽ mơ hồ hơn hẳn ở
+          // đây so với để lọt xuống insertMentionForFile).
+          const promptTextAfterSelect = await editor
+            .innerText()
+            .catch(() => "");
+          if (
+            promptTextBeforeRefs.length > 0 &&
+            promptTextAfterSelect.length < promptTextBeforeRefs.length
+          ) {
+            throw new GenerationError(
+              `Composer có dấu hiệu bị reset (navigation thật của pollo.ai) ngay sau khi Select ảnh "${refPath}" — prompt trước ${promptTextBeforeRefs.length} ký tự, sau chỉ còn ${promptTextAfterSelect.length} ký tự.`,
+            );
+          }
+
           await editor.focus();
           // SỬA (theo yêu cầu người dùng: xác nhận "đã chọn đủ ảnh tham
           // chiếu chưa" — job test_normal_6_rep_SHOT_05_CLIP_01_VIDEO):
@@ -1926,7 +1996,7 @@ export async function generateVideo(
           }
         });
       }
-
+      await sleep(5_000);
       // Theo yêu cầu người dùng: chụp ảnh xác nhận đã upload/mention ĐỦ hết
       // referenceImagePaths trước khi generate — bằng chứng trực quan (ảnh)
       // dễ đối chiếu hơn số liệu trong log, đặc biệt lúc cần xem lại sau khi
@@ -1973,11 +2043,13 @@ export async function generateVideo(
         );
       }
     }
-
+    await sleep(10_000);
     await enableUnlimitedIfNotEnoughCredit(page, jobId);
 
     const baseline = await captureResultBaseline(page);
+    await sleep(10_000);
     const generateButton = generateButtonLocator(page).first();
+    await sleep(10_000);
     await waitForGenerateButtonEnabled(page, generateButton, 60_000);
     const recordId = await captureGenerationRecordId(page, () =>
       clickGenerateButton(page, generateButton, baseline.count),
