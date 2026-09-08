@@ -834,9 +834,10 @@ const STALE_ASSET_THRESHOLD_MS = 60 * 60 * 1000;
  * CHỈ xoá card có timestamp (nhúng trong data-asset-url, xem
  * extractAssetTimestampMs) CŨ HƠN STALE_ASSET_THRESHOLD_MS so với thời điểm
  * gọi — KHÔNG xoá "tất cả ảnh khác" ngay lập tức. Lý do: processPolloVideoQueue
- * và processPolloImageQueue chạy SONG SONG ĐỘC LẬP trên CÙNG 1 tài khoản (2
- * context riêng, xem polloBrowser.ts) — xoá ngay ảnh vừa upload xong của 1
- * job KHÁC đang chạy cùng lúc (video hoặc ảnh) sẽ làm hỏng job đó giữa chừng,
+ * và processPolloImageQueue chạy SONG SONG ĐỘC LẬP trên CÙNG 1 tài khoản (1
+ * BrowserContext dùng chung, mỗi job 1 tab riêng — xem polloBrowser.ts) — xoá
+ * ngay ảnh vừa upload xong của 1 job KHÁC đang chạy cùng lúc (video hoặc ảnh)
+ * sẽ làm hỏng job đó giữa chừng,
  * mà xoá trên pollo.ai KHÔNG THỂ hoàn tác (xác nhận qua popup thật:
  * "Are you sure you want to delete? This can't be undone." — xem
  * scripts/inspect-pollo-asset-delete-confirm.ts). Ngưỡng 60 phút (đã tăng từ
@@ -967,8 +968,8 @@ function rememberUploadedAsset(imagePath: string, assetUrl: string): void {
  * mode "Reference to Video", CẢ bước "@ mention" tiếp theo
  * (insertMentionForFile) — dùng chung giữa pollo.ts (video) VÀ polloImage.ts
  * (ảnh CHARACTER/LOCATION), vì processPolloVideoQueue/processPolloImageQueue
- * chạy SONG SONG trên CÙNG 1 tài khoản pollo.ai (2 context riêng, xem
- * polloBrowser.ts).
+ * chạy SONG SONG trên CÙNG 1 tài khoản pollo.ai (1 BrowserContext dùng
+ * chung, mỗi job 1 tab riêng — xem polloBrowser.ts).
  *
  * XÁC NHẬN QUA LỖI THẬT (job test_normal_7_rep_SHOT_01_CLIP_01_VIDEO,
  * 2026-09-07): insertMentionForFile hết 4 lần retry vẫn không tìm thấy ảnh

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
-import { getPolloImageBrowserContext } from "./polloBrowser";
+import { getPolloBrowserContext } from "./polloBrowser";
 import {
   captureResultId,
   dismissBlockingOverlays,
@@ -234,7 +234,7 @@ export async function generateImage(
   { referenceImagePaths = [] }: PolloGenerateImageOptions,
   jobId: string,
 ): Promise<PolloGenerateImageResult> {
-  const context = await getPolloImageBrowserContext();
+  const context = await getPolloBrowserContext();
   const page = await context.newPage();
   try {
     const url = new URL("/image", config.polloBaseUrl).toString();
