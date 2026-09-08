@@ -1,10 +1,10 @@
 import { config } from "../src/config";
-import { getPolloImageBrowserContext } from "../src/automation/polloBrowser";
+import { getPolloBrowserContext } from "../src/automation/polloBrowser";
 import { dismissBlockingOverlays, gotoPolloWithRetry, waitForComposerReady } from "../src/automation/pollo";
 
 /** Test đúng luồng thật của generateImage() (goto retry + composer-ready + reload fallback) để xem có vượt qua được tình trạng proxy hiện tại không. */
 async function main(): Promise<void> {
-  const context = await getPolloImageBrowserContext();
+  const context = await getPolloBrowserContext();
   const page = await context.newPage();
   try {
     const url = new URL("/image", config.polloBaseUrl).toString();

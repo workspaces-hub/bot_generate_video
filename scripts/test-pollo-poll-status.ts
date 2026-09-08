@@ -1,5 +1,5 @@
 import { config } from "../src/config";
-import { getPolloImageBrowserContext } from "../src/automation/polloBrowser";
+import { getPolloBrowserContext } from "../src/automation/polloBrowser";
 
 /**
  * Test THẬT: poll thẳng API generationPolling.fetchRecordsStatus (không mở
@@ -10,7 +10,7 @@ import { getPolloImageBrowserContext } from "../src/automation/polloBrowser";
  * trạng thái terminal trước khi viết code chính thức (không đoán bừa).
  */
 async function main(): Promise<void> {
-  const context = await getPolloImageBrowserContext();
+  const context = await getPolloBrowserContext();
   const recordIds = [123893038, 123894368];
   const url = new URL(
     "/api/trpc/generationPolling.fetchRecordsStatus",
