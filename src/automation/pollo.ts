@@ -1907,6 +1907,18 @@ export async function generateVideo(
       await selectDurationIfNeeded(page, duration);
     }
 
+    // Bật "Unlimited" (nếu cần) TRƯỚC KHI gõ prompt/mention ảnh — xác nhận
+    // qua báo cáo thật (2026-09-08): "nhập prompt xong rồi đến khi click
+    // unlimited thì lại clear hết prompt". Switch này cũng là 1 control thật
+    // (không phải nút tĩnh) — khi tài khoản hết credit, bấm nó rất có thể
+    // kích hoạt cùng loại "client-side navigation reset" đã xác nhận với nút
+    // Select (xem comment dài ở vòng lặp mention bên dưới), chỉ khác là trước
+    // đây gọi hàm này SAU CÙNG (ngay trước lúc bấm Generate) nên mất trắng cả
+    // prompt lẫn toàn bộ mention vừa chèn. Chuyển lên gọi NGAY ĐẦU, trước khi
+    // có bất kỳ nội dung gì trong composer, để nếu nó có reset trang thì
+    // không mất gì cả — không cần thêm cơ chế phát hiện/khôi phục.
+    await enableUnlimitedIfNotEnoughCredit(page, jobId);
+
     const editor = promptEditorLocator(page).first();
     await editor.focus();
     await page.keyboard.insertText(prompt);
@@ -2043,14 +2055,9 @@ export async function generateVideo(
         );
       }
     }
-    await sleep(10_000);
-    await enableUnlimitedIfNotEnoughCredit(page, jobId);
-
     const baseline = await captureResultBaseline(page);
-    await sleep(10_000);
     const generateButton = generateButtonLocator(page).first();
-    await sleep(10_000);
-    await waitForGenerateButtonEnabled(page, generateButton, 60_000);
+    await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
       clickGenerateButton(page, generateButton, baseline.count),
     );
