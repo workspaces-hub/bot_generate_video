@@ -1,18 +1,19 @@
 import { config } from "../src/config";
-import { getPolloBrowserContext } from "../src/automation/polloBrowser";
+import { getPolloBrowserContext, getPolloImageBrowserContext } from "../src/automation/polloBrowser";
 import { captureErrorSnapshot, captureSnapshot } from "../src/automation/aiVideo";
 import { signInIndicatorCandidates } from "../src/automation/polloSelectors";
 import { firstVisible } from "../src/automation/selectors";
 
-/** One-off: mở 2 TAB (page) trên CÙNG 1 BrowserContext dùng chung
- * (getPolloBrowserContext — sau khi gộp ảnh+video về 1 profile, xem
- * polloBrowser.ts) CÙNG LÚC — kiểm tra xem có bị đăng xuất/xung đột gì không
- * khi cả 2 tab cùng hoạt động song song. Miễn phí, chỉ điều hướng + kiểm tra
- * trạng thái đăng nhập, KHÔNG generate gì. */
+/** One-off: mở 2 BrowserContext RIÊNG (getPolloBrowserContext cho video,
+ * getPolloImageBrowserContext cho ảnh) CÙNG LÚC, cùng đăng nhập 1 tài khoản
+ * pollo.ai (đọc chung storageState) — kiểm tra xem có bị đăng xuất/xung đột
+ * gì không khi cả 2 cùng hoạt động song song. Miễn phí, chỉ điều hướng +
+ * kiểm tra trạng thái đăng nhập, KHÔNG generate gì. */
 async function main(): Promise<void> {
-  const context = await getPolloBrowserContext();
-  const videoPage = await context.newPage();
-  const imagePage = await context.newPage();
+  const videoContext = await getPolloBrowserContext();
+  const imageContext = await getPolloImageBrowserContext();
+  const videoPage = await videoContext.newPage();
+  const imagePage = await imageContext.newPage();
   try {
     console.log("Navigating BOTH pages concurrently...");
     await Promise.all([

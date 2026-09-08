@@ -834,10 +834,9 @@ const STALE_ASSET_THRESHOLD_MS = 60 * 60 * 1000;
  * CHỈ xoá card có timestamp (nhúng trong data-asset-url, xem
  * extractAssetTimestampMs) CŨ HƠN STALE_ASSET_THRESHOLD_MS so với thời điểm
  * gọi — KHÔNG xoá "tất cả ảnh khác" ngay lập tức. Lý do: processPolloVideoQueue
- * và processPolloImageQueue chạy SONG SONG ĐỘC LẬP trên CÙNG 1 tài khoản (1
- * BrowserContext dùng chung, mỗi job 1 tab riêng — xem polloBrowser.ts) — xoá
- * ngay ảnh vừa upload xong của 1 job KHÁC đang chạy cùng lúc (video hoặc ảnh)
- * sẽ làm hỏng job đó giữa chừng,
+ * và processPolloImageQueue chạy SONG SONG ĐỘC LẬP trên CÙNG 1 tài khoản (2
+ * context riêng, xem polloBrowser.ts) — xoá ngay ảnh vừa upload xong của 1
+ * job KHÁC đang chạy cùng lúc (video hoặc ảnh) sẽ làm hỏng job đó giữa chừng,
  * mà xoá trên pollo.ai KHÔNG THỂ hoàn tác (xác nhận qua popup thật:
  * "Are you sure you want to delete? This can't be undone." — xem
  * scripts/inspect-pollo-asset-delete-confirm.ts). Ngưỡng 60 phút (đã tăng từ
@@ -968,8 +967,8 @@ function rememberUploadedAsset(imagePath: string, assetUrl: string): void {
  * mode "Reference to Video", CẢ bước "@ mention" tiếp theo
  * (insertMentionForFile) — dùng chung giữa pollo.ts (video) VÀ polloImage.ts
  * (ảnh CHARACTER/LOCATION), vì processPolloVideoQueue/processPolloImageQueue
- * chạy SONG SONG trên CÙNG 1 tài khoản pollo.ai (1 BrowserContext dùng
- * chung, mỗi job 1 tab riêng — xem polloBrowser.ts).
+ * chạy SONG SONG trên CÙNG 1 tài khoản pollo.ai (2 context riêng, xem
+ * polloBrowser.ts).
  *
  * XÁC NHẬN QUA LỖI THẬT (job test_normal_7_rep_SHOT_01_CLIP_01_VIDEO,
  * 2026-09-07): insertMentionForFile hết 4 lần retry vẫn không tìm thấy ảnh
@@ -1351,16 +1350,31 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page, jobId: string
   // xác nhận qua log thật ("<div class=\"cm-wrapper cc--anim\">… intercepts
   // pointer events"), khiến switch KHÔNG bật được, generate dùng hết credit
   // thật và job sau đó fail hẳn vì "không đủ credit" thay vì chỉ bỏ qua như
-  // comment best-effort ở dưới kỳ vọng. Dismiss trước khi click, và thử lại
-  // 1 lần sau khi dismiss nếu lần đầu vẫn bị chặn.
-  await dismissBlockingOverlays(page);
-  await switchLocator.click({ timeout: 5000 }).catch(async () => {
+  // comment best-effort ở dưới kỳ vọng.
+  //
+  // SỬA (xác nhận qua lỗi thật SAU KHI đã thêm dismiss+thử lại 1 lần cố định
+  // — vẫn còn timeout lặp lại, lúc đó đang thử nghiệm gộp ảnh+video về 1
+  // BrowserContext dùng chung, xem polloBrowser.ts — đã REVERT lại 2 context
+  // riêng vì nghi chính là nguồn gây race này, nhưng giữ lại retry mạnh hơn
+  // ở đây vì tự nó vẫn đúng/an toàn hơn bất kể nguyên nhân gốc là gì): thử
+  // đúng 1 lần lại là chưa đủ, và click() không throw KHÔNG chắc đã thật sự
+  // bật (UI có thể re-render đúng lúc click vì lý do khác — proxy chập
+  // chờn, banner khác bật lại...). Lặp lại tối đa maxAttempts lần, LUÔN đọc
+  // lại aria-checked thật sau mỗi lần click để xác nhận thay vì tin click()
+  // không throw là đã xong.
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await dismissBlockingOverlays(page);
-    await switchLocator.click({ timeout: 5000 }).catch(async (err) => {
-      console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
-      await captureSnapshot(page, jobId + "_unlimited-switch-failed", "unlimited-switch-failed");
-    });
-  });
+    await switchLocator.click({ timeout: 5000 }).catch(() => {});
+    const nowOn =
+      (await switchLocator.getAttribute("aria-checked").catch(() => null)) === "true";
+    if (nowOn) return;
+    if (attempt < maxAttempts) await page.waitForTimeout(1000);
+  }
+  console.warn(
+    "[pollo] Bật switch Unlimited lỗi sau nhiều lần thử (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường).",
+  );
+  await captureSnapshot(page, jobId + "_unlimited-switch-failed", "unlimited-switch-failed");
 }
 
 /**

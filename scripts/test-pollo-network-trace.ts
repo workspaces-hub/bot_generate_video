@@ -1,5 +1,5 @@
 import { config } from "../src/config";
-import { getPolloBrowserContext } from "../src/automation/polloBrowser";
+import { getPolloImageBrowserContext } from "../src/automation/polloBrowser";
 import {
   clickWithOverlayDismiss,
   dismissBlockingOverlays,
@@ -25,7 +25,7 @@ import {
 const STATIC_ASSET_RE = /\.(png|jpe?g|webp|mp4|css|js|woff2?|ico|svg|gif)(\?|$)/i;
 
 async function main(): Promise<void> {
-  const context = await getPolloBrowserContext();
+  const context = await getPolloImageBrowserContext();
   const page = await context.newPage();
 
   const logs: string[] = [];
