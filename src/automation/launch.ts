@@ -88,6 +88,25 @@ export async function launchRealChrome(
     // video nặng (tính năng Omni Reference). Chuyển sang dùng /tmp thay vì
     // /dev/shm để tránh giới hạn này.
     "--disable-dev-shm-usage",
+    // Theo yêu cầu người dùng (VPS 100% CPU khi gen ảnh+video chạy song
+    // song — xem htop: mỗi browser instance (AIVideo ảnh/video, Pollo
+    // ảnh/video — 4 context độc lập, xem browser.ts/polloBrowser.ts) sinh
+    // hàng chục renderer process con do Chrome mặc định cô lập MỖI origin
+    // (site isolation) — trang chính pollo.ai + mỗi domain CDN/analytics/
+    // font/iframe khác nhau đều bị tách thành 1 process OS riêng, dù chỉ
+    // đang mở ĐÚNG 1 tab/page (đã xác nhận qua storyboardPipeline.ts: mỗi
+    // hàng đợi xử lý entry TUẦN TỰ, không Promise.all). Site isolation vốn
+    // để cô lập bảo mật giữa các trang KHÔNG tin cậy lẫn nhau trong 1 trình
+    // duyệt nhiều người dùng — không cần thiết ở đây (chỉ 1 page tự động
+    // hoá, không có nội dung người dùng khác chia sẻ tiến trình). Gộp lại
+    // còn tối đa renderer-process-limit process render mỗi browser giảm hẳn
+    // số process OS (giảm overhead khởi tạo/GC/JIT lặp lại theo process),
+    // đổi lại 1 process render dùng chung nếu crash sẽ mất luôn mọi frame
+    // đang tải trong CÙNG page đó thay vì chỉ mất 1 frame lẻ — chấp nhận
+    // được vì code đã có sẵn cơ chế tự phục hồi khi context/browser chết
+    // (xem browser.ts, sự kiện "disconnected").
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--renderer-process-limit=1",
   ];
   if (disableHttp2AndQuic) {
     args.push("--disable-quic", "--disable-http2");
