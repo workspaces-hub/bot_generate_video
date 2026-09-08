@@ -1578,7 +1578,12 @@ async function waitForNewVideo(
   baseline: VideoBaseline,
 ): Promise<Locator> {
   const videos = historyVideoLocator(page);
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer (query DOM mỗi lần)
+  // trong lúc queue khác đang tranh CPU. Vòng lặp này chạy suốt lúc chờ
+  // video xong (không giới hạn thời gian sau khi phát hiện đang generate) —
+  // cùng lý do đã áp dụng cho pollIntervalMs của Pollo/ChatAI (xem
+  // waitForGenerationApiStatus trong pollo.ts, sendMessage trong chatAI.ts).
+  const pollIntervalMs = 10_000;
   let trackedFeedId: string | null = null;
   let sawGeneratingOnTrackedEntry = false;
 

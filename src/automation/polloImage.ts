@@ -117,7 +117,10 @@ async function waitForNewResult(
 ): Promise<Locator> {
   const cards = resultCardLocator(page);
   const start = Date.now();
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer trong lúc queue khác
+  // đang tranh CPU, cùng lý do đã áp dụng cho waitForGenerationApiStatus
+  // trong pollo.ts.
+  const pollIntervalMs = 10_000;
   let sawGeneratingCard = false;
 
   while (true) {

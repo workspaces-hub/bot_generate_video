@@ -1752,7 +1752,10 @@ async function waitForNewResult(
 ): Promise<VideoResult> {
   const cards = resultCardLocator(page);
   const start = Date.now();
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer trong lúc queue khác
+  // đang tranh CPU, cùng lý do đã áp dụng cho waitForGenerationApiStatus
+  // (đường API chính) ở trên trong file này.
+  const pollIntervalMs = 10_000;
   const createCheckEveryMs = 45_000;
   let lastCreateCheckAt = 0;
   let sawGeneratingCard = false;
