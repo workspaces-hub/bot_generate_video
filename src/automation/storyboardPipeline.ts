@@ -134,14 +134,15 @@ async function generateWithContentViolationRetry<T>(
   try {
     return await attempt();
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    const revised = await reviseEntryPromptIfContentViolation(
-      entry,
-      errorMessage,
-      jobId,
-    );
-    if (!revised) throw err;
-    return await attempt();
+    throw err;
+    // const errorMessage = err instanceof Error ? err.message : String(err);
+    // const revised = await reviseEntryPromptIfContentViolation(
+    //   entry,
+    //   errorMessage,
+    //   jobId,
+    // );
+    // if (!revised) throw err;
+    // return await attempt();
   }
 }
 
