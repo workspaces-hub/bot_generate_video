@@ -401,6 +401,7 @@ export async function waitForGenerationApiStatus(
   // lại được toàn bộ diễn biến của 1 job thay vì chỉ trạng thái cuối cùng.
   let snapshotSeq = 0;
   let nextSnapshotAt = start + progressSnapshotIntervalMs;
+  timeoutMs = timeoutMs * 1.2
   while (Date.now() - start < timeoutMs) {
     const record = await page
       .evaluate(async (u) => {
