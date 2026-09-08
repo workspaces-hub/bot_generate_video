@@ -1090,7 +1090,15 @@ export async function submitAssetUpload(
       .catch(() => false);
     if (stillThere) {
       await existingCard.click({ timeout: 10_000 });
-      await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
+      // timeout dài hơn hẳn (30s, không phải 10s) — xác nhận qua log thật
+      // production (job test_normal_7_2_SHOT_01_CLIP_01_VIDEO): từ khi bỏ
+      // dedupe chọn tồn đọng (xem chú thích đầu hàm — dedupe cũ xoá nhầm
+      // mention), "Select (N/9)" với N > 1 kích hoạt 1 navigation THẬT của
+      // pollo.ai (xác nhận nhu cầu này thật, không phải bug giả) cần nhiều
+      // thời gian hơn 10s để hoàn tất, nhất là lúc VPS tải cao — 10s khiến
+      // Playwright timeout ngay giữa "waiting for scheduled navigations to
+      // finish" dù thao tác vẫn đang xử lý bình thường.
+      await uploadDialogSelectButtonLocator(page).click({ timeout: 60_000 });
       return cachedUrl;
     }
     // Không còn thấy nữa — rơi xuống upload lại bình thường bên dưới.
@@ -1130,7 +1138,9 @@ export async function submitAssetUpload(
           .catch(() => 0)) > 0;
       if (!stillUploading) {
         await cards.first().click({ timeout: 10_000 });
-        await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
+        // timeout dài hơn hẳn (30s) — xem chú thích ở nhánh cache phía trên
+        // (cùng lý do: "Select (N/9)" với N > 1 kích hoạt navigation THẬT).
+        await uploadDialogSelectButtonLocator(page).click({ timeout: 30_000 });
         rememberUploadedAsset(imagePath, currentUrl);
         return currentUrl;
       }
