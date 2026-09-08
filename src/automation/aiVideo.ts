@@ -1919,7 +1919,7 @@ async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
   await page.screenshot({
     path: path.join(config.debugDir, `${jobId}.png`),
     fullPage: true,
-    timeout: 10_000,
+    timeout: 30_000,
   });
   await fs.promises.writeFile(
     path.join(config.debugDir, `${jobId}.html`),
@@ -1940,7 +1940,14 @@ export async function captureSnapshot(
     //   `[aiVideo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
     // );
   } catch (debugErr) {
-    console.error("[aiVideo] Không thể lưu debug snapshot:", debugErr);
+    // console.warn (KHÔNG console.error) — hàm này tự mô tả "KHÔNG có nghĩa
+    // là job lỗi" (khác captureErrorSnapshot bên dưới, dùng khi job THẬT SỰ
+    // lỗi). Xác nhận qua log thật: gọi định kỳ trong lúc chờ generate (xem
+    // waitForGenerationApiStatus, pollo.ts) — page đang bận decode/render
+    // dưới tải cao nên page.screenshot() timeout thỉnh thoảng là BÌNH
+    // THƯỜNG, không phải dấu hiệu job đang gặp sự cố; log ở mức error dễ bị
+    // đọc nhầm thành lỗi thật trong khi job vẫn tiếp tục chạy bình thường.
+    console.warn("[aiVideo] Không thể lưu debug snapshot (best-effort, không ảnh hưởng job):", debugErr);
   }
 }
 
