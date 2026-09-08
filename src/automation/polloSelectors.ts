@@ -305,3 +305,17 @@ export const mentionPickerItemByUrlLocator = (page: Page, assetUrl: string): Loc
   page
     .locator('[data-testid="asset-item-upload"]')
     .filter({ has: page.locator(`img[src="${assetUrl}"]`) });
+
+/**
+ * Số ảnh tham chiếu ĐÃ THỰC SỰ gắn vào composer (hiện thành thumbnail phía
+ * trên ô nhập prompt, mode "Reference to Video") — xác nhận qua DOM thật
+ * (storage/debug/..._progress.html của job SHOT_05_CLIP_01_VIDEO, quan sát
+ * trực tiếp qua VNC kèm bằng chứng): `[data-testid="chat-reference-uploader"]`
+ * xuất hiện 2 LẦN trên trang (lần 1 = khối ảnh tham chiếu, lần 2 = khối audio
+ * — `data-testid="chat-audio-slot"` bên trong), PHẢI `.first()` để chỉ lấy
+ * đúng khối ảnh. Mỗi ảnh đã gắn là 1 `<img alt="image">` bên trong khối đó.
+ * Dùng để XÁC NHẬN insertMentionForFile (pollo.ts) đã thật sự chèn được
+ * mention — click() không throw KHÔNG đủ để tin cậy (xem docstring hàm đó).
+ */
+export const attachedReferenceImageLocator = (page: Page): Locator =>
+  page.locator('[data-testid="chat-reference-uploader"]').first().locator('img[alt="image"]');

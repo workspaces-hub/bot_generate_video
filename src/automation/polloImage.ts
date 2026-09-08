@@ -289,6 +289,33 @@ export async function generateImage(
       console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
     }
 
+    const downloadViaMediaUrl = async (mediaUrl: string): Promise<string> => {
+      await fs.promises.mkdir(config.downloadDir, { recursive: true });
+      const response = await fetchWithRetry(page, mediaUrl);
+      const ext = resolveDownloadExtension(response, mediaUrl);
+      const filePath = path.join(config.downloadDir, `${jobId}${ext}`);
+      await fs.promises.writeFile(filePath, await response.body());
+      return filePath;
+    };
+
+    // API (generation.queryRecordDetail — xem fetchGenerationRecordDetail)
+    // trả THẲNG mediaUrl (link CDN gốc, tải được ngay) + videoId — KHÔNG cần
+    // chờ DOM cập nhật chút nào nếu generationPolling đã xác nhận "succeed".
+    // SỬA (xác nhận qua log thật production — job in "API record ... status:
+    // succeed" rồi ĐỨNG YÊN rất lâu, cùng lỗi đã sửa cho generateVideo trong
+    // pollo.ts): dùng THẲNG mediaUrl ngay khi biết "succeed" thay vì vẫn chờ
+    // waitForNewResult (dò DOM) chạy trước — chỉ dò DOM khi KHÔNG có
+    // recordId/API không xác nhận được (giữ nguyên đường cũ làm fallback).
+    if (apiStatus === "succeed" && recordId !== null) {
+      const detail = await fetchGenerationRecordDetail(page, recordId);
+      if (detail?.mediaUrl) {
+        const filePath = await downloadViaMediaUrl(detail.mediaUrl);
+        return { filePaths: [filePath], polloResultId: detail.videoId };
+      }
+      // API báo "succeed" nhưng không đọc được mediaUrl (site đổi cấu trúc?)
+      // — rơi xuống dò DOM như bình thường thay vì bỏ cuộc ngay.
+    }
+
     let newCard: Locator;
     try {
       newCard = await waitForNewResult(page, baseline, config.generationTimeoutMs);
@@ -302,11 +329,7 @@ export async function generateImage(
           console.warn(
             `[pollo] DOM không thấy ảnh mới dù API xác nhận record ${recordId} đã "succeed" — tải trực tiếp qua mediaUrl.`,
           );
-          await fs.promises.mkdir(config.downloadDir, { recursive: true });
-          const response = await fetchWithRetry(page, detail.mediaUrl);
-          const ext = resolveDownloadExtension(response, detail.mediaUrl);
-          const filePath = path.join(config.downloadDir, `${jobId}${ext}`);
-          await fs.promises.writeFile(filePath, await response.body());
+          const filePath = await downloadViaMediaUrl(detail.mediaUrl);
           return { filePaths: [filePath], polloResultId: detail.videoId };
         }
       }
