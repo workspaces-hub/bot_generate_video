@@ -327,7 +327,9 @@ export async function waitForGenerateButtonEnabled(
       console.warn(
         `[pollo] Nút Generate vẫn bị khoá (aria-disabled="true") sau ${timeoutMs}ms — có thể tài khoản đang tồn đọng nhiều generation cũ. Thử click luôn dù nhiều khả năng vẫn lỗi.`,
       );
-      return;
+      throw new Error(
+        "Nút Generate vẫn bị khoá sau khi chờ quá thời gian cho phép.",
+      );
     }
     await page.waitForTimeout(5000);
   }
@@ -1075,7 +1077,6 @@ export async function submitAssetUpload(
 ): Promise<string> {
   const cards = assetPickerCardLocator(page);
   const fileInput = uploadDialogFileInputLocator(page);
-
 
   // Đã upload file NÀY trước đó (còn hạn cache) — thử CHỌN LẠI đúng card cũ
   // thay vì setInputFiles lại từ đầu. Vẫn xác minh card còn thật trong picker
@@ -1941,7 +1942,9 @@ export async function generateVideo(
       // (promptEditorLocator) trước khi kết luận "thiếu mention thật", tránh
       // báo sai chẩn đoán khiến người đọc log đi sửa nhầm hướng.
       const composerStillAlive =
-        (await promptEditorLocator(page).count().catch(() => 0)) > 0;
+        (await promptEditorLocator(page)
+          .count()
+          .catch(() => 0)) > 0;
       if (!composerStillAlive) {
         await captureSnapshot(page, `${jobId}_ref-check`, "composer-gone");
         throw new GenerationError(
@@ -1965,7 +1968,7 @@ export async function generateVideo(
 
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();
-    await waitForGenerateButtonEnabled(page, generateButton);
+    await waitForGenerateButtonEnabled(page, generateButton, 60_000);
     const recordId = await captureGenerationRecordId(page, () =>
       clickGenerateButton(page, generateButton, baseline.count),
     );
