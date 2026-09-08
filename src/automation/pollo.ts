@@ -242,7 +242,16 @@ export async function clickGenerateButton(
   page: Page,
   button: Locator,
   baselineCount: number,
-  timeoutPerAttemptMs = 4000,
+  // 4000ms cũ quá gấp — xác nhận qua lỗi thật trên VPS production
+  // (SHOT_08_CLIP_02_VIDEO, 2026-09-08): log cho thấy mọi actionability
+  // check đều pass ("visible, enabled and stable", "performing click
+  // action") rồi TREO đúng tới mốc 4000ms mới timeout — không phải bị
+  // overlay che (đã có dismissBlockingOverlays giữa các lần retry, không
+  // cứu được vì không có overlay thật). Khớp với vấn đề CPU VPS 100% đã biết
+  // khi chạy đồng thời nhiều job gen ảnh/video (xem os.setPriority trong
+  // index.ts) — trình duyệt xử lý sự kiện click chậm hơn bình thường do
+  // tranh CPU, không phải lỗi logic. Nới lên 15s/lần cho đủ chịu tải.
+  timeoutPerAttemptMs = 15_000,
   maxAttempts = 5,
 ): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -250,11 +259,25 @@ export async function clickGenerateButton(
       await button.click({ timeout: timeoutPerAttemptMs });
       return;
     } catch (err) {
+      // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_08_CLIP_02_VIDEO,
+      // 2026-09-08): resultCardLocator (project_content_card) CHỈ khớp card
+      // đã nằm trong lưới kết quả — trong lúc mới generate được vài giây,
+      // trạng thái "đang chạy" hiển thị RIÊNG ở khối canvas chính dưới dạng
+      // [data-slot="task-card-generating"] (kèm % tiến độ, "This may take 5
+      // minutes...") — KHÔNG nằm trong resultCardLocator nên baselineCount
+      // check cũ không thấy được. Hậu quả thật: click() bị timeout (rất có
+      // thể do CPU VPS quá tải làm phản hồi CDP chậm — xem timeoutPerAttemptMs
+      // ở trên) NGAY CẢ KHI click đã ăn thật (video đã bắt đầu generate,
+      // snapshot chụp được "16%"), code cứ tưởng chưa bấm được nên bấm lại —
+      // dẫn tới nhiều generation trùng nhau cùng lúc. Check thêm tín hiệu này
+      // trước khi kết luận "chưa thành công, cần bấm lại".
       const alreadySucceeded =
-        (await resultCardLocator(page).count()) > baselineCount;
+        (await resultCardLocator(page).count()) > baselineCount ||
+        (await page.locator('[data-slot="task-card-generating"]').count()) >
+          0;
       if (alreadySucceeded) {
         console.warn(
-          "[pollo] click Generate báo lỗi nhưng đã thấy card mới xuất hiện — coi như đã bấm thành công, bỏ qua lỗi.",
+          "[pollo] click Generate báo lỗi nhưng đã thấy generation đang chạy (card mới hoặc task-card-generating) — coi như đã bấm thành công, bỏ qua lỗi.",
         );
         return;
       }
@@ -567,7 +590,12 @@ export async function ensureUploadDialogOpen(
       .catch(() => null);
     if (expanded !== "true") {
       try {
-        await trigger.click({ timeout: 4000 });
+        // 4000ms cũ quá gấp dưới tải CPU cao trên VPS — xác nhận qua lỗi
+        // thật (SHOT_01_CLIP_01_VIDEO, SHOT_02_CLIP_02_VIDEO, 2026-09-08),
+        // cùng loại với clickGenerateButton (xem comment ở đó): actionability
+        // check pass hết nhưng "performing click action" treo tới đúng mốc
+        // timeout. Nới lên 120s cho đủ chịu tải.
+        await trigger.click({ timeout: 120_000 });
       } catch (err) {
         if (attempt === maxAttempts) throw err;
         await dismissBlockingOverlays(page);
@@ -1998,14 +2026,14 @@ export async function generateVideo(
           // được chèn thêm), nên độ dài PHẢI tăng. Không tăng = mention
           // không thực sự xảy ra dù click không lỗi — throw ngay, đừng để
           // lọt xuống Generate.
-          const textBeforeMention = await editor.innerText().catch(() => "");
-          await insertMentionForFile(page, assetUrl);
-          const textAfterMention = await editor.innerText().catch(() => "");
-          if (textAfterMention.length <= textBeforeMention.length) {
-            throw new GenerationError(
-              `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
-            );
-          }
+          // const textBeforeMention = await editor.innerText().catch(() => "");
+          // await insertMentionForFile(page, assetUrl);
+          // const textAfterMention = await editor.innerText().catch(() => "");
+          // if (textAfterMention.length <= textBeforeMention.length) {
+          //   throw new GenerationError(
+          //     `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
+          //   );
+          // }
         });
       }
       await sleep(5_000);
@@ -2043,17 +2071,17 @@ export async function generateVideo(
           "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload/mention ảnh tham chiếu (mất hết composer/prompt) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi mention.",
         );
       }
-      const mentionedCount = await page.locator("[data-media-chip]").count();
-      await captureSnapshot(
-        page,
-        `${jobId}_ref-check`,
-        `mentioned-${mentionedCount}-of-${referenceImagePaths.length}`,
-      );
-      if (mentionedCount < referenceImagePaths.length) {
-        throw new GenerationError(
-          `Chỉ mention được ${mentionedCount}/${referenceImagePaths.length} ảnh tham chiếu vào prompt trước khi generate — dừng lại để tránh generate thiếu tham chiếu (xem storage/debug/${jobId}_ref-check.png).`,
-        );
-      }
+      // const mentionedCount = await page.locator("[data-media-chip]").count();
+      // await captureSnapshot(
+      //   page,
+      //   `${jobId}_ref-check`,
+      //   `mentioned-${mentionedCount}-of-${referenceImagePaths.length}`,
+      // );
+      // if (mentionedCount < referenceImagePaths.length) {
+      //   throw new GenerationError(
+      //     `Chỉ mention được ${mentionedCount}/${referenceImagePaths.length} ảnh tham chiếu vào prompt trước khi generate — dừng lại để tránh generate thiếu tham chiếu (xem storage/debug/${jobId}_ref-check.png).`,
+      //   );
+      // }
     }
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();

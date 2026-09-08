@@ -1910,17 +1910,25 @@ export async function getFeedErrorMessage(
 
 async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
   await fs.promises.mkdir(config.debugDir, { recursive: true });
-  // timeout ngắn hơn mặc định (30s) — xác nhận qua log thật: dưới tải đồng
-  // thời (2 context ảnh/video cùng tài khoản), page.screenshot() có thể tự
-  // nó hết 30s ("waiting for fonts to load...") NGAY TRONG lúc xử lý lỗi,
-  // kéo dài thêm thời gian queue bị nghẽn cho 1 tác vụ debug phụ (không ảnh
-  // hưởng job đã lỗi từ trước) — thất bại nhanh, chấp nhận mất snapshot thay
-  // vì chờ hết 30s vô ích.
-  await page.screenshot({
-    path: path.join(config.debugDir, `${jobId}.png`),
-    fullPage: true,
-    timeout: 30_000,
-  });
+  // timeout ngắn hơn mặc định (30s) — xác nhận qua log thật (2026-09-08,
+  // nhiều job liên tiếp): dưới tải đồng thời (2 context ảnh/video cùng tài
+  // khoản), page.screenshot() có thể tự nó hết 30s ("waiting for fonts to
+  // load...") NGAY TRONG lúc xử lý lỗi. captureSnapshot còn bị gọi ĐỊNH KỲ
+  // mỗi progressSnapshotIntervalMs (xem waitForGenerationApiStatus) VÀ được
+  // await NGAY TRONG vòng lặp poll trạng thái — nếu vẫn để 30s, mỗi lần
+  // chụp lỗi dưới tải cao sẽ chặn luôn việc poll trạng thái thêm gần gấp đôi
+  // thời gian, càng làm chậm phát hiện job đã xong. Rút xuống hẳn 5s: gần
+  // như luôn đủ khi tải bình thường, thất bại nhanh khi tải cao thay vì kéo
+  // dài vô ích (đây chỉ là debug best-effort, mất snapshot không ảnh hưởng
+  // job).
+
+  try {
+    await page.screenshot({
+      path: path.join(config.debugDir, `${jobId}.png`),
+      fullPage: true,
+      timeout: 5_000,
+    });
+  } catch {}
   await fs.promises.writeFile(
     path.join(config.debugDir, `${jobId}.html`),
     await page.content(),
@@ -1947,7 +1955,10 @@ export async function captureSnapshot(
     // dưới tải cao nên page.screenshot() timeout thỉnh thoảng là BÌNH
     // THƯỜNG, không phải dấu hiệu job đang gặp sự cố; log ở mức error dễ bị
     // đọc nhầm thành lỗi thật trong khi job vẫn tiếp tục chạy bình thường.
-    console.warn("[aiVideo] Không thể lưu debug snapshot (best-effort, không ảnh hưởng job):", debugErr);
+    console.warn(
+      "[aiVideo] Không thể lưu debug snapshot (best-effort, không ảnh hưởng job):",
+      debugErr,
+    );
   }
 }
 
