@@ -481,11 +481,11 @@ export async function waitForGenerationApiStatus(
   const urlStr = url.toString();
 
   const start = Date.now();
-  // Ảnh debug định kỳ để theo dõi tiến trình gen trong lúc đang chờ (theo
-  // yêu cầu người dùng) — mỗi lần chụp là 1 file riêng
-  // (storage/debug/<jobId>_progress-<n>.png), KHÔNG ghi đè lên nhau, để xem
-  // lại được toàn bộ diễn biến của 1 job thay vì chỉ trạng thái cuối cùng.
-  let snapshotSeq = 0;
+  // Log % tiến độ định kỳ trong lúc chờ generate (theo yêu cầu người dùng) —
+  // đọc thẳng span % hiển thị trong [data-slot="task-card-generating"] (xác
+  // nhận qua ảnh debug thật "16%", 2026-09-08) thay vì chụp ảnh/dump HTML
+  // (tốn CPU hơn hẳn dưới tải cao — xem lịch sử comment cũ ở đây trước khi
+  // đổi sang console.log).
   let nextSnapshotAt = start + progressSnapshotIntervalMs;
   while (Date.now() - start < timeoutMs) {
     const record = await page
@@ -501,8 +501,14 @@ export async function waitForGenerationApiStatus(
       return record.status as string;
     }
     if (Date.now() >= nextSnapshotAt) {
-      snapshotSeq += 1;
-      await captureSnapshot(page, `${jobId}_progress`, "progress");
+      const progressText = await page
+        .locator('[data-slot="task-card-generating"] span.tabular-nums')
+        .first()
+        .innerText()
+        .catch(() => null);
+      console.log(
+        `[pollo] ${jobId} đang generate: ${progressText ?? "(không đọc được %)"}`,
+      );
       nextSnapshotAt += progressSnapshotIntervalMs;
     }
     await page.waitForTimeout(pollIntervalMs);
@@ -1582,6 +1588,7 @@ export async function enableUnlimitedIfNotEnoughCredit(
     page,
     jobId + "_unlimited-switch-failed",
     "unlimited-switch-failed",
+    { fullPage: true, includeHtml: true },
   );
 }
 
@@ -2066,7 +2073,10 @@ export async function generateVideo(
           .count()
           .catch(() => 0)) > 0;
       if (!composerStillAlive) {
-        await captureSnapshot(page, `${jobId}_ref-check`, "composer-gone");
+        await captureSnapshot(page, `${jobId}_ref-check`, "composer-gone", {
+          fullPage: true,
+          includeHtml: true,
+        });
         throw new GenerationError(
           "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload/mention ảnh tham chiếu (mất hết composer/prompt) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi mention.",
         );

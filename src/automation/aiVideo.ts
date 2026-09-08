@@ -1908,7 +1908,27 @@ export async function getFeedErrorMessage(
   }
 }
 
-async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
+interface SnapshotOptions {
+  /** fullPage: true render/encode TOÀN BỘ trang (kể cả khối marketing/SEO
+   * dài ~13000px phía dưới composer, không ai cần xem) — tốn CPU/thời gian
+   * hơn hẳn so với chỉ chụp viewport hiện tại (nơi composer/nút Generate/%
+   * tiến độ luôn nằm trong đó — đủ để chẩn đoán "trang có hydrate đúng
+   * không" mà không cần cuộn xuống hết trang). Mặc định true cho lúc job
+   * THẬT SỰ lỗi (captureErrorSnapshot) — muốn nhiều chi tiết nhất có thể;
+   * false cho các lần chụp định kỳ (progress) — xem lý do ở captureSnapshot.
+   */
+  fullPage?: boolean;
+  /** page.content() dump cả DOM — cùng lý do tốn kém như fullPage, và
+   * KHÔNG phụ thuộc fullPage (viewport hay full page đều lấy full DOM như
+   * nhau). Mặc định true, tắt hẳn cho các lần chụp progress định kỳ. */
+  includeHtml?: boolean;
+}
+
+async function writeSnapshotFiles(
+  page: Page,
+  jobId: string,
+  { fullPage = true, includeHtml = true }: SnapshotOptions = {},
+): Promise<void> {
   await fs.promises.mkdir(config.debugDir, { recursive: true });
   // timeout ngắn hơn mặc định (30s) — xác nhận qua log thật (2026-09-08,
   // nhiều job liên tiếp): dưới tải đồng thời (2 context ảnh/video cùng tài
@@ -1925,25 +1945,39 @@ async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
   try {
     await page.screenshot({
       path: path.join(config.debugDir, `${jobId}.png`),
-      fullPage: true,
+      fullPage,
       timeout: 5_000,
     });
   } catch {}
-  await fs.promises.writeFile(
-    path.join(config.debugDir, `${jobId}.html`),
-    await page.content(),
-    "utf-8",
-  );
+  if (includeHtml) {
+    await fs.promises.writeFile(
+      path.join(config.debugDir, `${jobId}.html`),
+      await page.content(),
+      "utf-8",
+    );
+  }
 }
 
-/** Chụp trạng thái trang giữa luồng để debug — KHÔNG có nghĩa là job lỗi. */
+/**
+ * Chụp trạng thái trang giữa luồng để debug — KHÔNG có nghĩa là job lỗi.
+ *
+ * opts mặc định giữ NGUYÊN hành vi cũ (fullPage/includeHtml true, xem
+ * SnapshotOptions/writeSnapshotFiles) để KHÔNG âm thầm đổi hành vi của các
+ * pipeline khác đang gọi hàm này (chatAI, aiVideoImage...). Caller nào cần
+ * chụp NHẸ (vd pollo.ts gọi định kỳ mỗi progressSnapshotIntervalMs ngay
+ * trong vòng lặp chờ generate — có thể tới 60+ lần cho 1 video dài, chỉ cần
+ * liếc viewport hiện tại là đủ trả lời "còn đang chạy không", không cần
+ * render hết ~13000px trang lẫn dump ~1MB HTML mỗi lần) tự truyền
+ * { fullPage: false, includeHtml: false } ở nơi gọi.
+ */
 export async function captureSnapshot(
   page: Page,
   jobId: string,
   label: string,
+  opts?: SnapshotOptions,
 ): Promise<void> {
   try {
-    await writeSnapshotFiles(page, jobId);
+    await writeSnapshotFiles(page, jobId, opts);
     // console.log(
     //   `[aiVideo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
     // );
