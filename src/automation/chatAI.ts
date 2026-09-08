@@ -384,7 +384,13 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // file đính kèm hiện ra (fileAttachmentLocator), coi đó là dấu hiệu xong
   // THAY THẾ cho việc chờ nút Stop biến mất.
   const stableRequiredMs = 30000;
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer (query DOM mỗi lần)
+  // trong lúc queue ảnh/video khác đang tranh CPU. Vòng lặp này KHÔNG giới
+  // hạn thời gian tổng (chờ tới khi ChatAI thật sự trả lời xong), nên với
+  // model reasoning nặng có thể poll rất nhiều lần liên tục — cùng lý do đã
+  // áp dụng cho pollIntervalMs của Pollo (xem waitForGenerationApiStatus,
+  // pollo.ts).
+  const pollIntervalMs = 10_000;
   // Xác nhận qua debug thật (job d077805e, chatAIImage.ts): ChatAI đôi khi báo
   // lỗi THẬT ("Something went wrong. Please try again." kèm nút Retry,
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.

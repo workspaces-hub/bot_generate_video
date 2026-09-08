@@ -372,7 +372,10 @@ export async function waitForGenerateButtonEnabled(
         "Nút Generate vẫn bị khoá sau khi chờ quá thời gian cho phép.",
       );
     }
-    await page.waitForTimeout(5000);
+    // 10s thay vì 5s — giảm tần suất đánh thức renderer (3 query DOM/lần)
+    // trong lúc queue kia (ảnh/video) đang tranh CPU; vòng này có thể chạy
+    // dài nếu tài khoản tồn đọng nhiều generation cũ (xem comment ở trên).
+    await page.waitForTimeout(10_000);
   }
 }
 
@@ -467,7 +470,12 @@ export async function waitForGenerationApiStatus(
   recordId: number,
   timeoutMs: number,
   jobId: string,
-  pollIntervalMs = 5000,
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer qua page.evaluate(fetch)
+  // trong suốt lúc chờ generate (tới 30 phút/job, ~360 lần ở mức 5s cũ),
+  // ngay trong lúc queue kia (ảnh/video) đang tranh CPU. KHÔNG thể chuyển
+  // request này ra Node-side fetch (đã thử, bị Cloudflare 403 — xem docstring
+  // trên) nên chỉ còn cách giảm tần suất.
+  pollIntervalMs = 10_000,
   progressSnapshotIntervalMs = 30_000,
 ): Promise<string | null> {
   const url = new URL(
