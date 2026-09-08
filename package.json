@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/src/index.js",
     "start:xvfb": "xvfb-run -a --server-args='-screen 0 1920x1080x24 -dpi 96 +extension RANDR +extension GLX +render' node dist/src/index.js",
+    "start:novnc": "bash scripts/start-novnc.sh",
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "login": "tsx scripts/login.ts",
     "login-chatai": "tsx scripts/login-chatai.ts",
