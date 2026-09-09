@@ -93,12 +93,6 @@ export async function launchRealChrome(
 
   const args = [
     "--disable-blink-features=AutomationControlled",
-    // /dev/shm mặc định rất nhỏ trên nhiều VPS/container (thường 64MB) —
-    // Chrome dùng /dev/shm cho shared memory khi decode/render video, dễ
-    // gây "Target crashed" (crash cả tiến trình renderer) khi xử lý file
-    // video nặng (tính năng Omni Reference). Chuyển sang dùng /tmp thay vì
-    // /dev/shm để tránh giới hạn này.
-    "--disable-dev-shm-usage",
     // VPS chạy qua Xvfb (X server ẢO, không có GPU thật) — mặc định Chrome
     // vẫn tự bật 1 process "gpu-process" riêng dùng SwiftShader (giả lập
     // GPU BẰNG CHÍNH CPU, xem --enable-unsafe-swiftshader/--use-angle=
@@ -141,39 +135,11 @@ export async function launchRealChrome(
   }
 
   return chromium.launch({
-    // "chromium" = dùng bản Chromium bundled sẵn của Playwright thay vì đòi
-    // hỏi Google Chrome đã cài trên máy (tiện cho VPS chỉ tái sử dụng session).
     channel:
       config.browserChannel === "chromium" ? undefined : config.browserChannel,
     headless: config.headless,
     args,
-    // "--enable-unsafe-swiftshader" là cờ MẶC ĐỊNH của chính Playwright
-    // (KHÔNG có trong args tự thêm ở trên) — chủ động ép bật GPU giả lập
-    // bằng phần mềm (SwiftShader) để hỗ trợ WebGL dù không có GPU thật. Xác
-    // nhận qua log thật (2026-09-09): dù đã thêm "--disable-gpu" vào args,
-    // gpu-process VẪN cứ tự spawn lại (25%+ CPU) — vì cờ mặc định này của
-    // Playwright ghi đè ý định "--disable-gpu" của mình. Loại bỏ nó qua
-    // ignoreDefaultArgs để "--disable-gpu" thực sự có hiệu lực.
-    //
-    // "--enable-features=CDPScreenshotNewSurface" — cờ mặc định khác của
-    // Playwright, chủ động BẬT 1 compositor surface riêng chỉ để phục vụ
-    // page.screenshot() qua CDP — nghi đây là 1 phần lý do gpu-process vẫn
-    // tồn tại/ăn CPU dù đã tắt GPU. Đã giảm hẳn tần suất/kích thước
-    // screenshot (viewport-only, ít lần hơn — xem writeSnapshotFiles), nên
-    // bỏ luôn tính năng này.
-    //
-    // "--disable-background-timer-throttling"/"--disable-backgrounding-
-    // occluded-windows"/"--disable-renderer-backgrounding" — 3 cờ mặc định
-    // CHỦ ĐỘNG TẮT cơ chế Chrome tự tiết kiệm CPU/RAM cho window/tab không ở
-    // foreground (giữ hành vi automation "luôn full tốc" bất kể có đang bị
-    // che hay không). Đã kiểm tra: Xvfb ở đây chạy KHÔNG kèm window manager
-    // (xvfb-run thuần, xem package.json "start:xvfb") nên rủi ro thấp — và
-    // phần code phụ thuộc timer nội bộ của TRANG (không phải
-    // page.waitForTimeout, chạy ở Node, không bị ảnh hưởng) chỉ có các hàm
-    // dò DOM dự phòng (waitForNewResult/waitForNewVideo/waitForNewImageEntry)
-    // — tối đa bị CHẬM thêm, không sai logic. Bỏ 3 cờ này để Chrome được tự
-    // do throttle nếu thấy phù hợp, tiết kiệm thêm RAM/CPU khi nhiều browser
-    // chạy song song.
+
     ignoreDefaultArgs: [
       "--enable-automation",
       "--enable-unsafe-swiftshader",
@@ -181,7 +147,13 @@ export async function launchRealChrome(
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
+
+      // Playwright mặc định thêm flag này.
+      // VPS hiện có /dev/shm = 2GB, trong khi /tmp là tmpfs cũng dùng RAM.
+      // Bỏ flag để Chrome quay lại sử dụng /dev/shm đúng mục đích.
+      "--disable-dev-shm-usage",
     ],
+
     proxy:
       useProxy && config.proxyServer
         ? {
