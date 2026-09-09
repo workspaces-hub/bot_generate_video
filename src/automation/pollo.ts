@@ -1191,9 +1191,19 @@ export async function submitAssetUpload(
   // vẫn đang xử lý bình thường phía server. Phát hiện dialog đóng giữa
   // chừng thì MỞ LẠI (không nộp lại file) để đọc trạng thái mới nhất, thay
   // vì cứ chờ 1 selector không bao giờ khớp lại được nữa.
-  const deadlineMs = Date.now() + 60_000;
-  let reopenedOnce = false;
-  let resubmittedOnce = false;
+  // Nới từ 1 lần mở lại + 1 lần nộp lại lên 3 lần mỗi loại (theo yêu cầu
+  // người dùng, sau 1 lần upload thất bại thật dù composer vẫn hydrate bình
+  // thường — không phải bug marketing-shell, nghi mạng/server pollo.ai chập
+  // chờn thoáng qua lúc nhận file). Mở lại dialog TỐI ĐA maxReopenAttempts
+  // lần trước khi thử nộp lại file; sau mỗi lần nộp lại, cho phép mở lại
+  // dialog thêm 1 đợt nữa (reset reopenAttempts) — tổng cộng tối đa
+  // maxResubmitAttempts lần nộp lại file. Deadline nới theo (180s thay vì
+  // 60s) để đủ thời gian cho nhiều đợt thử.
+  const deadlineMs = Date.now() + 180_000;
+  const maxReopenAttempts = 3;
+  const maxResubmitAttempts = 3;
+  let reopenAttempts = 0;
+  let resubmitAttempts = 0;
   while (Date.now() < deadlineMs) {
     const currentUrl = await cards
       .first()
@@ -1243,13 +1253,16 @@ export async function submitAssetUpload(
           "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload ảnh (mất hết composer/dialog Upload) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi upload chậm.",
         );
       }
-      if (!reopenedOnce) {
-        reopenedOnce = true;
+      if (reopenAttempts < maxReopenAttempts) {
+        reopenAttempts++;
         await reopenDialog().catch(() => {});
-      } else if (!resubmittedOnce) {
-        // Mở lại 1 lần mà dialog vẫn đóng/không thấy ảnh mới — thử nộp lại
-        // file đúng 1 lần (dialog đã mở lại từ bước trên) trước khi chịu thua.
-        resubmittedOnce = true;
+      } else if (resubmitAttempts < maxResubmitAttempts) {
+        // Mở lại tối đa maxReopenAttempts lần mà dialog vẫn đóng/không thấy
+        // ảnh mới — thử nộp lại file (dialog đã mở lại từ bước trên). Reset
+        // reopenAttempts để đợt tiếp theo (nếu vẫn đóng) được mở lại dialog
+        // thêm 1 đợt nữa trước khi chịu thua hẳn.
+        resubmitAttempts++;
+        reopenAttempts = 0;
         await fileInput
           .setInputFiles(imagePath, { timeout: 10_000 })
           .catch(() => {});
@@ -1260,7 +1273,7 @@ export async function submitAssetUpload(
   }
 
   throw new GenerationError(
-    "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 60s (đã thử mở lại dialog).",
+    "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 180s (đã thử mở lại dialog/nộp lại file nhiều lần).",
   );
 }
 
