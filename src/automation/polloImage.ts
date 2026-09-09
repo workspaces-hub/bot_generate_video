@@ -25,7 +25,7 @@ import {
   captureSnapshot,
   fetchWithRetry,
 } from "./aiVideo";
-import { firstVisible } from "./selectors";
+import { firstVisible, isPageCrashError } from "./selectors";
 import {
   creditPaywallLocator,
   generateButtonLocator,
@@ -232,7 +232,35 @@ export interface PolloGenerateImageResult {
  * Tạo ảnh từ prompt + tối đa vài ảnh tham chiếu (tuỳ chọn) qua pollo.ai
  * (mode "Text/Image to Image", mặc định của trang /image).
  */
+/**
+ * Retry 1 lần khi Chrome renderer crash thật ("Target crashed" — cùng lý do
+ * đã sửa cho generateVideo trong pollo.ts, xem docstring ở đó) — submitAssetUpload/
+ * confirmAssetPickerSelection dùng chung với video nên cùng chịu rủi ro crash
+ * này khi upload/chọn ảnh tham chiếu.
+ */
 export async function generateImage(
+  prompt: string,
+  options: PolloGenerateImageOptions,
+  jobId: string,
+): Promise<PolloGenerateImageResult> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptGenerateImage(prompt, options, jobId);
+    } catch (err) {
+      if (isPageCrashError(err) && attempt < maxCrashRetries) {
+        console.warn(
+          `[polloImage] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function attemptGenerateImage(
   prompt: string,
   { referenceImagePaths = [] }: PolloGenerateImageOptions,
   jobId: string,

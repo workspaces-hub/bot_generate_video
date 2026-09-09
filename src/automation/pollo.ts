@@ -9,7 +9,7 @@ import {
   captureSnapshot,
   fetchWithRetry,
 } from "./aiVideo";
-import { firstVisible } from "./selectors";
+import { firstVisible, isPageCrashError } from "./selectors";
 import {
   assetPickerCardByUrlLocator,
   assetPickerCardLocator,
@@ -1191,7 +1191,7 @@ export async function submitAssetUpload(
   // vẫn đang xử lý bình thường phía server. Phát hiện dialog đóng giữa
   // chừng thì MỞ LẠI (không nộp lại file) để đọc trạng thái mới nhất, thay
   // vì cứ chờ 1 selector không bao giờ khớp lại được nữa.
-  const deadlineMs = Date.now() + 45_000;
+  const deadlineMs = Date.now() + 60_000;
   let reopenedOnce = false;
   let resubmittedOnce = false;
   while (Date.now() < deadlineMs) {
@@ -1220,6 +1220,29 @@ export async function submitAssetUpload(
 
     const dialogClosed = (await cards.count().catch(() => 0)) === 0;
     if (dialogClosed) {
+      // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_01_CLIP_01_VIDEO,
+      // 2026-09-09): snapshot lỗi lúc hết 45s cho thấy trang đã rơi hẳn về
+      // bản marketing/SEO tĩnh chưa hydrate (h2 "Maintain Perfect Subject
+      // Consistency Across Frames" RENDER THẬT, không chỉ nằm trong i18n
+      // dict — trong khi prompt-editor/prompt-generate-btn/upload-card-
+      // asset-picker đều 0) — CÙNG bug đã gặp ở waitForGenerateButtonEnabled/
+      // ref-check, KHÔNG phải "upload chậm thật". dialogClosed=true trước
+      // giờ coi mọi trường hợp là "dialog tự đóng" rồi cứ mở lại/nộp lại vô
+      // ích tới hết 45s, ném ra thông báo "Upload timeout" sai lệch hướng
+      // chẩn đoán. Check thêm tín hiệu composer hydrate (giống
+      // waitForGenerateButtonEnabled) — nếu mất hẳn, throw rõ ràng NGAY,
+      // không phí thời gian retry vô vọng.
+      const composerHydrated =
+        (await page
+          .locator('[data-testid="prompt-editor"] [contenteditable="true"]')
+          .first()
+          .count()
+          .catch(() => 0)) > 0;
+      if (!composerHydrated) {
+        throw new GenerationError(
+          "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload ảnh (mất hết composer/dialog Upload) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi upload chậm.",
+        );
+      }
       if (!reopenedOnce) {
         reopenedOnce = true;
         await reopenDialog().catch(() => {});
@@ -1237,7 +1260,7 @@ export async function submitAssetUpload(
   }
 
   throw new GenerationError(
-    "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 45s (đã thử mở lại dialog).",
+    "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 60s (đã thử mở lại dialog).",
   );
 }
 
@@ -1883,7 +1906,42 @@ export interface PolloGenerateVideoResult {
   polloResultId: string | null;
 }
 
+/**
+ * Xác nhận qua log lỗi thật (SHOT_03_CLIP_01_VIDEO/SHOT_04_CLIP_01_VIDEO,
+ * 2026-09-09): Chrome renderer của tab đôi khi CRASH THẬT giữa chừng
+ * ("Target crashed" — nghi do OOM dưới Xvfb khi nhiều context ảnh/video chạy
+ * song song, xem launch.ts) — page đã crash không dùng lại được nữa (mọi
+ * thao tác tiếp theo đều throw "Target crashed"), không phải lỗi
+ * selector/timeout thường nên KHÔNG cách nào tự phục hồi được trên CHÍNH page
+ * đó. Cùng cơ chế đã có sẵn ở aiVideo.ts/chatAIImage.ts (isPageCrashError) —
+ * pollo.ts trước đây THIẾU hẳn lớp retry này, khiến crash giữa chừng làm rớt
+ * cả job dù phần lớn chỉ là sự cố thoáng qua. Tự mở tab MỚI (gọi lại
+ * attemptGenerateVideo từ đầu — hàm đó tự tạo page riêng) thử lại 1 lần
+ * trước khi chịu thua.
+ */
 export async function generateVideo(
+  prompt: string,
+  options: PolloGenerateVideoOptions,
+  jobId: string,
+): Promise<PolloGenerateVideoResult> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptGenerateVideo(prompt, options, jobId);
+    } catch (err) {
+      if (isPageCrashError(err) && attempt < maxCrashRetries) {
+        console.warn(
+          `[pollo] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function attemptGenerateVideo(
   prompt: string,
   {
     startFramePath,
