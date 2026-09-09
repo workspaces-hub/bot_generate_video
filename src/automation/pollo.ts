@@ -1147,6 +1147,35 @@ export function withPolloAssetUploadLock<T>(fn: () => Promise<T>): Promise<T> {
  * confirmAssetPickerSelection() ĐÚNG 1 LẦN sau khi cả N ảnh đã upload+check
  * xong, trước khi chạy loop "@ mention" riêng.
  */
+/**
+ * Click 1 card trong dialog Upload Media, có retry ngắn — xác nhận qua lỗi
+ * thật (job test_camera_10_SHOT_06_CLIP_01_VIDEO, 2026-09-09):
+ * actionability check của Playwright báo ĐỦ "visible, enabled, stable...
+ * done scrolling" rồi vẫn TREO tiếp tới hết timeout 10s ngay lúc thực sự
+ * dispatch click — noWaitAfter (đã có ở cả 2 nơi gọi) không giúp được gì ở
+ * đây vì nó chỉ bỏ qua bước chờ SAU click, không phải lúc click. Nghi do
+ * renderer tạm không phản hồi kịp input đúng thời điểm đó (thư viện Uploads
+ * của tài khoản đã rất lớn — hàng chục card cùng render trong dialog, xem
+ * docstring submitAssetUpload) — không phải lỗi sai selector (log thật cho
+ * thấy locator vẫn resolve/visible/stable đúng), nên thử lại ngắn (không mở
+ * lại dialog/nộp lại file, chỉ click lại) là hợp lý trước khi coi là lỗi
+ * thật.
+ */
+async function clickAssetPickerCard(card: Locator): Promise<void> {
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await card.click({ timeout: 10_000, noWaitAfter: true });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) await sleep(2000);
+    }
+  }
+  throw lastError;
+}
+
 export async function submitAssetUpload(
   page: Page,
   imagePath: string,
@@ -1175,8 +1204,9 @@ export async function submitAssetUpload(
       // (xem comment dài ở vòng lặp mention trong generateVideo). Bỏ qua
       // hẳn bước chờ đó — không cần Playwright tự xác nhận navigation, các
       // bước sau (composer/hydration check) đã tự phát hiện nếu trang thật
-      // sự bị điều hướng/hỏng.
-      await existingCard.click({ timeout: 10_000, noWaitAfter: true });
+      // sự bị điều hướng/hỏng. clickAssetPickerCard tự retry ngắn nếu chính
+      // lúc dispatch click bị treo (xem docstring hàm đó).
+      await clickAssetPickerCard(existingCard);
       if (confirmSelect) {
         await confirmAssetPickerSelection(page);
       }
@@ -1229,8 +1259,8 @@ export async function submitAssetUpload(
           .catch(() => 0)) > 0;
       if (!stillUploading) {
         // noWaitAfter — cùng lý do đã sửa ở nhánh cachedUrl phía trên (xem
-        // comment ở đó).
-        await cards.first().click({ timeout: 10_000, noWaitAfter: true });
+        // comment ở đó). clickAssetPickerCard tự retry ngắn (xem docstring).
+        await clickAssetPickerCard(cards.first());
         if (confirmSelect) {
           await confirmAssetPickerSelection(page);
         }

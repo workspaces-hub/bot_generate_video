@@ -1951,7 +1951,7 @@ async function writeSnapshotFiles(
     await page.screenshot({
       path: path.join(config.debugDir, `${jobId}.png`),
       fullPage,
-      timeout: 5_000,
+      timeout: 45_000,
     });
   } catch {}
   if (includeHtml) {

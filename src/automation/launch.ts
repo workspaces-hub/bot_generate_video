@@ -99,6 +99,24 @@ export async function launchRealChrome(
     // video nặng (tính năng Omni Reference). Chuyển sang dùng /tmp thay vì
     // /dev/shm để tránh giới hạn này.
     "--disable-dev-shm-usage",
+    // VPS chạy qua Xvfb (X server ẢO, không có GPU thật) — mặc định Chrome
+    // vẫn tự bật 1 process "gpu-process" riêng dùng SwiftShader (giả lập
+    // GPU BẰNG CHÍNH CPU, xem --enable-unsafe-swiftshader/--use-angle=
+    // swiftshader-webgl trong command line thật) để render/composite, dù
+    // không hề có tăng tốc phần cứng nào — chỉ tốn thêm CPU cho lớp giả lập
+    // đó. Xác nhận qua htop THẬT (2026-09-09): riêng process này chiếm
+    // 68.2% CPU một mình, đúng lúc CPU cả máy 100% (vấn đề gốc từ đầu phiên
+    // làm việc). Tắt hẳn GPU — Chrome quay lại render bằng CPU trực tiếp
+    // trong chính renderer process (không qua lớp gpu-process/SwiftShader
+    // trung gian), tránh lãng phí thêm CPU cho giả lập vô ích trên máy vốn
+    // không có GPU. Rủi ro: trang web dùng WebGL thật sẽ không chạy được
+    // (hiện chưa có bằng chứng pollo.ai/ChatAI/AIVideo cần WebGL cho phần
+    // composer/generate — cần theo dõi sau khi bật cờ này).
+    "--disable-gpu",
+    // Đi kèm "--disable-gpu" — chặn luôn đường lùi software-rasterizer
+    // (Skia raster bằng CPU qua đường GPU-process) phòng khi "--disable-gpu"
+    // một mình không chặn hết được mọi fallback.
+    "--disable-software-rasterizer",
     // ĐÃ THỬ (theo yêu cầu người dùng lúc VPS 100% CPU khi gen ảnh+video
     // chạy song song) rồi REVERT: "--disable-features=IsolateOrigins,site-
     // per-process" + "--renderer-process-limit=1" từng được thêm để ép
@@ -129,7 +147,41 @@ export async function launchRealChrome(
       config.browserChannel === "chromium" ? undefined : config.browserChannel,
     headless: config.headless,
     args,
-    ignoreDefaultArgs: ["--enable-automation"],
+    // "--enable-unsafe-swiftshader" là cờ MẶC ĐỊNH của chính Playwright
+    // (KHÔNG có trong args tự thêm ở trên) — chủ động ép bật GPU giả lập
+    // bằng phần mềm (SwiftShader) để hỗ trợ WebGL dù không có GPU thật. Xác
+    // nhận qua log thật (2026-09-09): dù đã thêm "--disable-gpu" vào args,
+    // gpu-process VẪN cứ tự spawn lại (25%+ CPU) — vì cờ mặc định này của
+    // Playwright ghi đè ý định "--disable-gpu" của mình. Loại bỏ nó qua
+    // ignoreDefaultArgs để "--disable-gpu" thực sự có hiệu lực.
+    //
+    // "--enable-features=CDPScreenshotNewSurface" — cờ mặc định khác của
+    // Playwright, chủ động BẬT 1 compositor surface riêng chỉ để phục vụ
+    // page.screenshot() qua CDP — nghi đây là 1 phần lý do gpu-process vẫn
+    // tồn tại/ăn CPU dù đã tắt GPU. Đã giảm hẳn tần suất/kích thước
+    // screenshot (viewport-only, ít lần hơn — xem writeSnapshotFiles), nên
+    // bỏ luôn tính năng này.
+    //
+    // "--disable-background-timer-throttling"/"--disable-backgrounding-
+    // occluded-windows"/"--disable-renderer-backgrounding" — 3 cờ mặc định
+    // CHỦ ĐỘNG TẮT cơ chế Chrome tự tiết kiệm CPU/RAM cho window/tab không ở
+    // foreground (giữ hành vi automation "luôn full tốc" bất kể có đang bị
+    // che hay không). Đã kiểm tra: Xvfb ở đây chạy KHÔNG kèm window manager
+    // (xvfb-run thuần, xem package.json "start:xvfb") nên rủi ro thấp — và
+    // phần code phụ thuộc timer nội bộ của TRANG (không phải
+    // page.waitForTimeout, chạy ở Node, không bị ảnh hưởng) chỉ có các hàm
+    // dò DOM dự phòng (waitForNewResult/waitForNewVideo/waitForNewImageEntry)
+    // — tối đa bị CHẬM thêm, không sai logic. Bỏ 3 cờ này để Chrome được tự
+    // do throttle nếu thấy phù hợp, tiết kiệm thêm RAM/CPU khi nhiều browser
+    // chạy song song.
+    ignoreDefaultArgs: [
+      "--enable-automation",
+      "--enable-unsafe-swiftshader",
+      "--enable-features=CDPScreenshotNewSurface",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+    ],
     proxy:
       useProxy && config.proxyServer
         ? {
