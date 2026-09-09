@@ -7,6 +7,12 @@ import { config } from "./config";
 import { generateVideo } from "./automation/aiVideo";
 import { generateImage } from "./automation/aiVideoImage";
 import { askChatAI } from "./automation/chatAI";
+import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
+import {
+  getPolloBrowserContext,
+  getPolloImageBrowserContext,
+} from "./automation/polloBrowser";
+import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import {
   clearStopStoryboardRequest,
   ensureGeneratedFolder,
@@ -1709,6 +1715,12 @@ async function processImageQueue(): Promise<void> {
         persistImageJobs();
       }
     }
+    // Hàng đợi rỗng hẳn (while thoát bình thường, không phải do lỗi) — đóng
+    // Chrome ngay để giải phóng RAM thay vì giữ sống chờ job kế tiếp không
+    // biết bao giờ mới tới (xem docstring BrowserContextGetter.close, xác
+    // nhận qua đo đạc thật: VPS 3.8GB dễ chạm ngưỡng crash khi nhiều queue
+    // cùng giữ browser sống).
+    await getImageBrowserContext.close();
   } finally {
     imageProcessing = false;
   }
@@ -1806,6 +1818,7 @@ async function processPolloImageQueue(): Promise<void> {
         persistPolloImageJobs();
       }
     }
+    await getPolloImageBrowserContext.close();
   } finally {
     polloImageProcessing = false;
   }
@@ -1905,6 +1918,14 @@ async function processVideoQueue(): Promise<void> {
         persistVideoJobs();
       }
     }
+    // Vòng lặp có thể thoát vì hàng đợi THẬT SỰ rỗng, HOẶC vì còn job
+    // storyboardVideo đang "chờ" (chưa sẵn sàng, xem findNextReadyVideoJobIndex)
+    // — chỉ đóng Chrome khi rỗng hẳn, không phải lúc nào loop thoát cũng đóng
+    // (đóng nhầm lúc còn job chờ sẽ phải khởi động lại Chrome ngay khi job đó
+    // sẵn sàng, phí công vô ích).
+    if (videoJobs.length === 0) {
+      await getVideoBrowserContext.close();
+    }
   } finally {
     videoProcessing = false;
   }
@@ -1969,6 +1990,7 @@ async function processPolloVideoQueue(): Promise<void> {
         persistPolloVideoJobs();
       }
     }
+    await getPolloBrowserContext.close();
   } finally {
     polloVideoProcessing = false;
   }
@@ -2036,6 +2058,7 @@ async function processChatAIQueue(): Promise<void> {
         }
       }
     }
+    await getChatAIBrowserContext.close();
   } finally {
     chatAIProcessing = false;
   }
