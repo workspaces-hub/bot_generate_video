@@ -1565,7 +1565,13 @@ export async function ensureComposerReadyOrThrow(
   featureLabel: string,
   maxReloads = 2,
 ): Promise<void> {
-  let composerReady = await waitForComposerReady(page, 15_000);
+  // 60s thay vì 15s — xác nhận qua log thật (2026-09-09, lặp lại rất nhiều
+  // lần): "Composer chưa render... thử reload lại" xuất hiện thường xuyên
+  // dưới tải CPU cao (nhiều browser cùng chạy) vì hydrate (tải + chạy JS)
+  // chậm hơn hẳn lúc chỉ 1 browser. Mỗi lần thiếu 15s là tốn thêm 1 lần
+  // page.reload() đầy đủ (tốn network/CPU hơn hẳn chỉ đợi thêm) — nới hẳn
+  // lần đầu để giảm số lần phải reload lãng phí.
+  let composerReady = await waitForComposerReady(page, 60_000);
   for (
     let reloadAttempt = 1;
     !composerReady && reloadAttempt <= maxReloads;
