@@ -894,6 +894,17 @@ export async function selectWorkMode(page: Page): Promise<void> {
       (await workToggle.getAttribute("aria-checked").catch(() => null)) ===
       "true";
     if (alreadyOn) return;
+
+    // "modal-beacon" (overlay toàn màn hình thoáng qua của ChatGPT, kiểu
+    // thông báo/spotlight tính năng mới) đôi khi che mất toggle này ngay
+    // lúc click — xác nhận qua lỗi thật ("<div data-state=\"open\" ...>
+    // subtree intercepts pointer events" từ #modal-beacon), kéo dài hết cả
+    // 10s retry mặc định của Playwright, KHÔNG tự biến mất trong lúc đó.
+    // Escape trước khi thử click — cách đóng phổ biến nhất cho overlay kiểu
+    // này, best-effort (vô hại nếu không có gì để đóng).
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(300);
+
     await workToggle.click({ timeout: 10000 });
   } catch (err) {
     console.warn(
