@@ -53,6 +53,15 @@ export const config = {
       "./storage/session-image.json",
   ),
   downloadDir: path.resolve(process.env.DOWNLOAD_DIR ?? "./storage/downloads"),
+  // Thư mục profile/cache tạm của Chrome (user-data-dir) — mặc định
+  // Playwright tự tạo trong os.tmpdir() (thường "/tmp" trên Linux). Nhiều
+  // VPS mount "/tmp" bằng tmpfs (RAM, xem "/dev/shm" cùng cơ chế) — ghi
+  // profile Chrome (cache HTTP, IndexedDB, GPU shader cache...) vào đó thực
+  // chất là TỐN THÊM RAM, không phải đĩa, cộng dồn thêm vào áp lực RAM đã
+  // xác nhận là nút thắt chính (xem launch.ts). Đổi sang 1 thư mục THẬT
+  // trong chính ổ đĩa của project — launch.ts tự set biến môi trường TMPDIR
+  // trỏ vào đây trước khi launch Chrome.
+  chromeTmpDir: path.resolve(process.env.CHROME_TMP_DIR ?? "./storage/chrome-tmp"),
   // Ảnh tham chiếu tải từ Telegram (tính năng tạo ảnh) lưu tạm ở đây.
   uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? "./storage/uploads"),
   debugDir: path.resolve("./storage/debug"),

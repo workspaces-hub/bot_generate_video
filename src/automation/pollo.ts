@@ -1167,7 +1167,16 @@ export async function submitAssetUpload(
       .then(() => true)
       .catch(() => false);
     if (stillThere) {
-      await existingCard.click({ timeout: 10_000 });
+      // noWaitAfter — xác nhận qua log lỗi thật (SHOT_02_CLIP_01_VIDEO,
+      // 2026-09-09): "click action done" xong rồi TREO tiếp ở bước Playwright
+      // tự chờ "waiting for scheduled navigations to finish" tới hết
+      // timeout, dù click đã ăn thật — cùng loại "navigation thật do
+      // pollo.ai kích hoạt sau click" đã xác nhận trước đây với nút Select
+      // (xem comment dài ở vòng lặp mention trong generateVideo). Bỏ qua
+      // hẳn bước chờ đó — không cần Playwright tự xác nhận navigation, các
+      // bước sau (composer/hydration check) đã tự phát hiện nếu trang thật
+      // sự bị điều hướng/hỏng.
+      await existingCard.click({ timeout: 10_000, noWaitAfter: true });
       if (confirmSelect) {
         await confirmAssetPickerSelection(page);
       }
@@ -1219,7 +1228,9 @@ export async function submitAssetUpload(
           .count()
           .catch(() => 0)) > 0;
       if (!stillUploading) {
-        await cards.first().click({ timeout: 10_000 });
+        // noWaitAfter — cùng lý do đã sửa ở nhánh cachedUrl phía trên (xem
+        // comment ở đó).
+        await cards.first().click({ timeout: 10_000, noWaitAfter: true });
         if (confirmSelect) {
           await confirmAssetPickerSelection(page);
         }
@@ -1288,7 +1299,15 @@ export async function submitAssetUpload(
  * với 1 click thường.
  */
 export async function confirmAssetPickerSelection(page: Page): Promise<void> {
-  await uploadDialogSelectButtonLocator(page).click({ timeout: 60_000 });
+  // noWaitAfter — cùng lý do đã sửa ở submitAssetUpload (click chọn card):
+  // nút Select cũng đã từng thấy "waiting for scheduled navigations to
+  // finish" bị timeout trong log thật ("Select (2/9)") dù click đã ăn.
+  // Caller (generateVideo) đã tự chờ thêm 10s + tự check composer-reset sau
+  // khi gọi hàm này (xem vòng lặp mention), nên bỏ qua an toàn.
+  await uploadDialogSelectButtonLocator(page).click({
+    timeout: 60_000,
+    noWaitAfter: true,
+  });
 }
 
 /**

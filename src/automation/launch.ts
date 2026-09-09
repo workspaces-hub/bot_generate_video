@@ -1,5 +1,16 @@
+import fs from "node:fs";
 import { chromium, type Browser } from "playwright";
 import { config } from "../config";
+
+// Set TMPDIR TRƯỚC khi bất kỳ browser nào launch — Playwright tự tạo
+// user-data-dir (profile Chrome) qua os.tmpdir() (đọc biến này) NGAY TRONG
+// process Node của chính bot, không phải trong process Chrome con, nên phải
+// set ở đây (module-level, chạy 1 lần lúc import) trước lần gọi
+// chromium.launch() đầu tiên. Xem chú thích config.chromeTmpDir để biết lý
+// do (tránh ghi profile/cache Chrome vào "/tmp" nếu đó là tmpfs — tốn RAM
+// thay vì đĩa).
+fs.mkdirSync(config.chromeTmpDir, { recursive: true });
+process.env.TMPDIR = config.chromeTmpDir;
 
 /**
  * Google OAuth ("Đăng nhập bằng Google") chặn với lỗi "This browser or app
