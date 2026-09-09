@@ -39,7 +39,7 @@ async function main(): Promise<void> {
 
     await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
 
-    await selectWorkMode(page);
+    await selectWorkMode(page, jobId);
 
     const button = await firstVisible(modelSelectorButtonCandidates(page), 10_000);
     const labelBefore = await button.innerText().catch(() => "<không đọc được>");
