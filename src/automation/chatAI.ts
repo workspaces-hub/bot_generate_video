@@ -189,7 +189,9 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
     const networkLogs: string[] = [];
     const onResponse = (response: Response) => {
       if (response.url().includes("oaiusercontent.com")) {
-        networkLogs.push(`response ${response.status()} ${response.request().method()} ${response.url()}`);
+        networkLogs.push(
+          `response ${response.status()} ${response.request().method()} ${response.url()}`,
+        );
       }
     };
     const onRequestFailed = (request: Request) => {
@@ -230,7 +232,11 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
     );
     await page.waitForTimeout(3000);
   }
-  await captureSnapshot(page, "after-upload attachment", "after-upload attachment");
+  await captureSnapshot(
+    page,
+    "after-upload attachment",
+    "after-upload attachment",
+  );
 
   // Xác nhận qua thực tế (job 35941268, file 97KB/~2371 dòng): ChatAI trả
   // lời "file bạn gửi chưa chứa kịch bản phim" dù file THẬT SỰ có kịch bản ở
@@ -334,7 +340,10 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       .innerText()
       .then((t) => t.trim() === "")
       .catch(() => false);
-    const stopVisible = await firstVisible(stopGeneratingButtonCandidates(page), 3000)
+    const stopVisible = await firstVisible(
+      stopGeneratingButtonCandidates(page),
+      3000,
+    )
       .then(() => true)
       .catch(() => false);
     if (!textCleared && !stopVisible) throw err;
@@ -537,8 +546,10 @@ async function downloadAttachedFiles(
   const indicesToProcess: number[] = [];
   for (let i = 0; i < totalMatched; i++) {
     const label =
-      (await attachments.nth(i).getAttribute("aria-label").catch(() => null)) ??
-      `__no-label-${i}`;
+      (await attachments
+        .nth(i)
+        .getAttribute("aria-label")
+        .catch(() => null)) ?? `__no-label-${i}`;
     if (seenLabels.has(label)) continue;
     seenLabels.add(label);
     indicesToProcess.push(i);
@@ -887,7 +898,7 @@ async function readLatestAssistantMessage(
  * tài khoản không có tính năng này) và bỏ qua nếu đã ở đúng mode "work"
  * (aria-checked="true") để tránh click thừa.
  */
-export async function selectWorkMode(page: Page): Promise<void> {
+export async function selectWorkMode(page: Page, jobId: string): Promise<void> {
   try {
     const workToggle = workModeToggleLocator(page).first();
     const alreadyOn =
@@ -911,6 +922,7 @@ export async function selectWorkMode(page: Page): Promise<void> {
       "[chatAI] Không chọn được mode 'Work' (best-effort, bỏ qua):",
       err instanceof Error ? err.message : err,
     );
+    await captureSnapshot(page, jobId, `selectWorkMode-fail-${Date.now()}`);
   }
 }
 
@@ -937,7 +949,10 @@ export async function selectMaxReasoningEffort(page: Page): Promise<void> {
         .catch(() => null)) === "true";
     if (alreadyMax) return;
 
-    const button = await firstVisible(modelSelectorButtonCandidates(page), 5000);
+    const button = await firstVisible(
+      modelSelectorButtonCandidates(page),
+      5000,
+    );
     await button.hover().catch(() => {});
     await page.waitForTimeout(200);
     await button.click();
@@ -954,8 +969,12 @@ export async function selectMaxReasoningEffort(page: Page): Promise<void> {
 
     for (let i = 0; i < 6; i++) {
       const thumb = effortSliderThumbLocator(page).first();
-      const valueNow = await thumb.getAttribute("aria-valuenow").catch(() => null);
-      const valueMax = await thumb.getAttribute("aria-valuemax").catch(() => null);
+      const valueNow = await thumb
+        .getAttribute("aria-valuenow")
+        .catch(() => null);
+      const valueMax = await thumb
+        .getAttribute("aria-valuemax")
+        .catch(() => null);
       if (valueNow !== null && valueNow === valueMax) break;
       await sliderControl.press("ArrowRight");
       await page.waitForTimeout(150);
@@ -1014,7 +1033,7 @@ export async function askChatAI(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await selectWorkMode(page);
+    await selectWorkMode(page, jobId);
     if (config.chatAIMaxEffort) {
       await selectMaxReasoningEffort(page);
     }
@@ -1049,7 +1068,11 @@ export async function askChatAI(
         lastMessageCount + 1,
       );
       lastMessageCount = result.messageCount;
-      await captureSnapshot(page, jobId + "_"+(promptFileName || ""), "result");
+      await captureSnapshot(
+        page,
+        jobId + "_" + (promptFileName || ""),
+        "result",
+      );
 
       // Xác nhận qua log lỗi thật (job 35941268/1aacc019): ChatAI đọc được
       // file đính kèm nhưng khẳng định SAI là "chưa chứa kịch bản phim" dù
@@ -1205,7 +1228,7 @@ export async function reviseGenerationPrompt(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await selectWorkMode(page);
+    await selectWorkMode(page, jobId);
     if (config.chatAIMaxEffort) {
       await selectMaxReasoningEffort(page);
     }
@@ -1224,7 +1247,7 @@ Hãy viết lại ĐÚNG prompt này để mô tả lại y hệt ý tưởng, b
     const latest = assistantMessageLocator(page).last();
     const text = await latest.innerText().catch(() => "");
     const revisedPrompt = cleanRevisedPrompt(text);
-    console.log("🚀 ~ reviseGenerationPrompt ~ revisedPrompt:", revisedPrompt)
+    console.log("🚀 ~ reviseGenerationPrompt ~ revisedPrompt:", revisedPrompt);
     if (!revisedPrompt) {
       throw new ChatAIError("ChatAI không trả về prompt viết lại nào");
     }
