@@ -1578,6 +1578,41 @@ export async function ensureComposerReadyOrThrow(
 }
 
 /**
+ * editor.focus() có retry ngắn — xác nhận qua lỗi thật (job
+ * test_camera_1_CHAR_MOCKING_EUNUCH, 2026-09-10): locator đã resolve đúng
+ * (element contenteditable thật, visible) nhưng focus() vẫn TREO tới hết
+ * 30000ms — dù ensureComposerReadyOrThrow (waitForComposerReady) đã xác nhận
+ * composer sẵn sàng ngay trước đó. Cùng LỚP lỗi với clickAssetPickerCard
+ * (action đơn giản, element hợp lệ, vẫn treo hết timeout ở đúng lúc dispatch)
+ * — nghi renderer tạm không phản hồi kịp (site đổi giao diện: banner khuyến
+ * mãi/modal có thể xuất hiện SAU thời điểm ensureComposerReadyOrThrow, xem
+ * dismissBlockingOverlays), không phải sai selector. gọi lại
+ * dismissBlockingOverlays trước mỗi lần thử lại — cùng lý do đã áp dụng cho
+ * mọi thao tác khác trên trang (rẻ, best-effort, không lỗi nếu không có gì
+ * để đóng).
+ */
+export async function focusEditorWithRetry(
+  page: Page,
+  editor: Locator,
+): Promise<void> {
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await editor.focus({ timeout: 60_000 });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        await dismissBlockingOverlays(page).catch(() => {});
+        await sleep(2000);
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
  * Tự bật switch "Unlimited" khi credit hiện tại KHÔNG đủ trả phí lượt tạo
  * này — theo yêu cầu người dùng. Xác nhận qua DOM thật (script khảo sát
  * 1 lần, không lưu lại trong repo):
@@ -2072,7 +2107,7 @@ async function attemptGenerateVideo(
     await enableUnlimitedIfNotEnoughCredit(page, jobId);
 
     const editor = promptEditorLocator(page).first();
-    await editor.focus();
+    await focusEditorWithRetry(page, editor);
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
 
@@ -2134,7 +2169,7 @@ async function attemptGenerateVideo(
             );
           }
 
-          await editor.focus();
+          await focusEditorWithRetry(page, editor);
           // SỬA (theo yêu cầu người dùng: xác nhận "đã chọn đủ ảnh tham
           // chiếu chưa" — job test_normal_6_rep_SHOT_05_CLIP_01_VIDEO):
           // insertMentionForFile chỉ throw khi KHÔNG tìm/click được item

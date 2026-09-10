@@ -12,6 +12,7 @@ import {
   captureGenerationRecordId,
   clickGenerateButton,
   fetchGenerationRecordDetail,
+  focusEditorWithRetry,
   gotoPolloWithRetry,
   resolveDownloadExtension,
   submitAssetUpload,
@@ -293,7 +294,11 @@ async function attemptGenerateImage(
     }
 
     const editor = promptEditorLocator(page).first();
-    await editor.focus();
+    // focusEditorWithRetry: xác nhận qua lỗi thật (job
+    // test_camera_1_CHAR_MOCKING_EUNUCH, 2026-09-10) — editor.focus() treo
+    // hết 30s dù locator đã resolve đúng element hợp lệ. Xem docstring hàm
+    // trong pollo.ts.
+    await focusEditorWithRetry(page, editor);
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
 
