@@ -2222,14 +2222,14 @@ async function attemptGenerateVideo(
           // được chèn thêm), nên độ dài PHẢI tăng. Không tăng = mention
           // không thực sự xảy ra dù click không lỗi — throw ngay, đừng để
           // lọt xuống Generate.
-          // const textBeforeMention = await editor.innerText().catch(() => "");
-          // await insertMentionForFile(page, assetUrl);
-          // const textAfterMention = await editor.innerText().catch(() => "");
-          // if (textAfterMention.length <= textBeforeMention.length) {
-          //   throw new GenerationError(
-          //     `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
-          //   );
-          // }
+          const textBeforeMention = await editor.innerText().catch(() => "");
+          await insertMentionForFile(page, assetUrl);
+          const textAfterMention = await editor.innerText().catch(() => "");
+          if (textAfterMention.length <= textBeforeMention.length) {
+            throw new GenerationError(
+              `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
+            );
+          }
         });
       }
       await sleep(5_000);
