@@ -94,6 +94,19 @@ Mỗi VIDEO prompt bắt buộc phải nêu đủ:
 
 1. Khoảnh khắc mở đầu cụ thể của clip: ai đang ở đâu, pose, gaze, biểu cảm, trạng thái đạo cụ và motion phase ban đầu. Với clip nối tiếp, mô tả đây là sự tiếp diễn trực tiếp từ trạng thái cuối của clip trước, nhưng không tham chiếu tới một START/END item.
 2. Hành động cụ thể của chính clip: ai làm gì, tương tác với ai/đạo cụ/bối cảnh nào, diễn biến theo thứ tự trong đúng duration, cùng một kết quả ngắn dễ đọc ở cuối clip.
+
+QUAN HỆ ACTOR–ACTION–TARGET VÀ HƯỚNG HÀNH ĐỘNG BẮT BUỘC:
+
+- Với mọi hành động có mục tiêu cụ thể như nhìn, nói, chỉ tay, đưa đồ, tấn công, né tránh, chạy tới, quay về phía, cúi chào, quỳ trước, ôm hoặc tương tác, VIDEO prompt phải ghi rõ bằng tên/ID nhận diện: ai là người thực hiện, hành động gì và nhân vật/vật thể nào là mục tiêu. Không dùng đại từ mơ hồ như “him”, “her”, “them” khi trong cảnh có từ hai đối tượng phù hợp trở lên.
+- Phải mô tả rõ quan hệ actor → action → target bằng tên nhân vật, không được chỉ mô tả hành động chung chung.
+- Nếu hướng hành động ảnh hưởng đến ý nghĩa câu chuyện, prompt phải khóa hướng bằng các dấu hiệu cơ thể quan sát được: hướng bàn chân, hông, vai, thân trên, khuôn mặt, ánh mắt và trục chuyển động của người thực hiện so với vị trí chính xác của mục tiêu.
+- Phải mô tả trình tự chuyển hướng trước khi thực hiện hành động: người thực hiện rời hướng/mục tiêu cũ, xoay các bộ phận cơ thể cần thiết để đối diện mục tiêu mới, xác lập ánh mắt hoặc trục cơ thể với mục tiêu mới, sau đó mới thực hiện hành động.
+- Với hành động hướng tới một nhân vật cụ thể, phải nêu rõ nhân vật nào không phải mục tiêu nếu bố cục dễ gây nhầm lẫn. Ví dụ: “She bows directly toward Gu Cheng, not toward Su Man.”
+- Khi mục tiêu không đứng chính diện trước người thực hiện, prompt phải nêu vị trí tương đối của mục tiêu trong không gian cảnh như camera-left, camera-right, behind her, beside the elevator hoặc across the room; đồng thời mô tả người thực hiện phải xoay theo hướng nào để hướng cơ thể tới đúng mục tiêu.
+- Trạng thái cuối clip phải tiếp tục xác nhận đúng quan hệ không gian: actor đang hướng tới ai, nhìn ai, cách mục tiêu bao xa và trục cơ thể kết thúc ở đâu.
+- Không coi một hành động là đã mô tả đầy đủ nếu prompt chỉ nói “turns”, “bows”, “looks”, “speaks” hoặc “gestures” mà không nêu rõ target và hướng cơ thể quan sát được.
+- Trước khi lưu JSON, kiểm tra từng VIDEO prompt bằng câu hỏi: “Người thực hiện là ai? Mục tiêu là ai? Hướng cơ thể và hướng hành động có chỉ đúng vào mục tiêu đó không? Có đối tượng nào gần đó khiến mô hình hiểu nhầm không?” Nếu còn mơ hồ, phải viết lại prompt trước khi lưu.
+
 3. Camera plan cụ thể: một VIDEO có thể chứa một hoặc nhiều shot/camera beat. Nếu có nhiều beat, phải mô tả rõ thứ tự, thời lượng tương đối, điểm cut/transition, focal length/lens, shot size, angle, framing và camera movement của từng beat. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
 4. Ánh sáng, thời điểm trong ngày và thời tiết cụ thể, phù hợp LOCATION và continuity.
 5. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, screen direction, time, weather, lighting direction, camera continuity và natural physics.
@@ -188,6 +201,9 @@ Không được:
 - Không thiếu LOCATION thực tế; không thừa location không nhìn thấy.
 - Camera, lens, ánh sáng, weather, costume, identity, prop count/ownership và screen direction không tự thay đổi ngoài diễn biến cho phép.
 - Hành động đạt được tự nhiên trong duration.
+- Mọi hành động có mục tiêu đều xác định rõ actor → action → target bằng tên/ID nhận diện; không dùng đại từ mơ hồ khi có nhiều đối tượng phù hợp.
+- Với hành động định hướng, hướng bàn chân, hông, vai, thân trên, khuôn mặt, ánh mắt và trục chuyển động phải thống nhất với vị trí của đúng mục tiêu; nếu có nguy cơ nhầm mục tiêu, prompt phải nêu rõ đối tượng không phải mục tiêu.
+- Trình tự rời hướng cũ → xoay về mục tiêu mới → xác lập hướng cơ thể/ánh mắt → thực hiện hành động phải rõ ràng và khả thi trong duration.
 - Clip nối tiếp kế thừa hợp lý trạng thái thực tế được mô tả ở cuối clip trước.
 - Mỗi VIDEO prompt có đủ 7 mục bắt buộc tại phần 4.
 - So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có hành động và camera riêng phù hợp timeline.
