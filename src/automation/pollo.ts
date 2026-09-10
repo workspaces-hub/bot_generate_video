@@ -1649,24 +1649,39 @@ export async function enableUnlimitedIfNotEnoughCredit(
     .first()
     .innerText()
     .catch(() => "");
-  const feeText = await page
-    .locator('[data-slot="credit-cost-value"] .font-semibold')
-    .first()
-    .innerText()
-    .catch(() => "");
   const credit = Number.parseInt(creditText, 10);
-  const fee = Number.parseInt(feeText, 10);
-
-  if (!Number.isFinite(credit) || !Number.isFinite(fee)) {
+  if (!Number.isFinite(credit)) {
     console.warn(
-      `[pollo] Không đọc được credit/phí lượt tạo (credit="${creditText}", phí="${feeText}") — bỏ qua bật Unlimited.`,
+      `[pollo] Không đọc được credit hiện tại (credit="${creditText}") — bỏ qua bật Unlimited.`,
     );
     return;
   }
-  if (credit >= fee) return;
+
+  // credit === 0 → LUÔN bật Unlimited, không cần biết phí lượt tạo là bao
+  // nhiêu (0 chắc chắn không đủ trả bất kỳ phí dương nào) — theo yêu cầu
+  // người dùng. Trước đây chỉ dựa vào so sánh credit/fee: nếu không đọc được
+  // fee (vd site đổi cấu trúc, phần tử chưa kịp render) thì bail ra LUÔN dù
+  // credit=0 rõ ràng không đủ, khiến generate chạy tiếp với credit thật và
+  // fail sau đó vì hết credit thay vì tự bật Unlimited.
+  let fee: number | null = null;
+  if (credit !== 0) {
+    const feeText = await page
+      .locator('[data-slot="credit-cost-value"] .font-semibold')
+      .first()
+      .innerText()
+      .catch(() => "");
+    fee = Number.parseInt(feeText, 10);
+    if (!Number.isFinite(fee)) {
+      console.warn(
+        `[pollo] Không đọc được phí lượt tạo (credit=${credit}, phí="${feeText}") — bỏ qua bật Unlimited.`,
+      );
+      return;
+    }
+    if (credit >= fee) return;
+  }
 
   console.warn(
-    `[pollo] Credit hiện tại (${credit}) không đủ trả phí lượt tạo (${fee}) — tự bật "Unlimited".`,
+    `[pollo] Credit hiện tại (${credit})${fee !== null ? ` không đủ trả phí lượt tạo (${fee})` : ""} — tự bật "Unlimited".`,
   );
   // Banner cookie-consent (#cc-main) có thể vẫn còn che switch tại thời điểm
   // này (nó chỉ bị dismiss 1 lần lúc mới vào trang) và chặn click thật —
