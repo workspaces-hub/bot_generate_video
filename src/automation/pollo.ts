@@ -250,8 +250,8 @@ export async function clickGenerateButton(
   // cứu được vì không có overlay thật). Khớp với vấn đề CPU VPS 100% đã biết
   // khi chạy đồng thời nhiều job gen ảnh/video (xem os.setPriority trong
   // index.ts) — trình duyệt xử lý sự kiện click chậm hơn bình thường do
-  // tranh CPU, không phải lỗi logic. Nới lên 15s/lần cho đủ chịu tải.
-  timeoutPerAttemptMs = 15_000,
+  // tranh CPU, không phải lỗi logic. Nới lên 60s/lần cho đủ chịu tải.
+  timeoutPerAttemptMs = 60_000,
   maxAttempts = 5,
 ): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -273,11 +273,17 @@ export async function clickGenerateButton(
       // trước khi kết luận "chưa thành công, cần bấm lại".
       const alreadySucceeded =
         (await resultCardLocator(page).count()) > baselineCount ||
-        (await page.locator('[data-slot="task-card-generating"]').count()) >
-          0;
+        (await page.locator('[data-slot="task-card-generating"]').count()) > 0;
       if (alreadySucceeded) {
+        const time = new Date().toISOString().replace(/[:.]/g, "-");
         console.warn(
+          time,
           "[pollo] click Generate báo lỗi nhưng đã thấy generation đang chạy (card mới hoặc task-card-generating) — coi như đã bấm thành công, bỏ qua lỗi.",
+        );
+        await captureSnapshot(
+          page,
+          time,
+          "clickGenerateButton_alreadySucceeded",
         );
         return;
       }
