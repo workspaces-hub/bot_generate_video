@@ -24,6 +24,7 @@ import {
   sendButtonCandidates,
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
+  workingIndicatorLocator,
   workModeToggleLocator,
 } from "./chatAISelectors";
 import { firstVisible } from "./selectors";
@@ -434,12 +435,21 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       continue;
     }
 
-    const stillGenerating = await firstVisible(
+    const stopButtonVisible = await firstVisible(
       stopGeneratingButtonCandidates(page),
       500,
     )
       .then(() => true)
       .catch(() => false);
+    // Bổ sung tín hiệu "Working for Xm Ys" (xem docstring workingIndicatorLocator)
+    // — xác nhận qua lỗi thật (job 61d57820...test_camera_1.txt): nút Stop
+    // dò bằng stopGeneratingButtonCandidates có khoảng hở lúc tool call
+    // (đọc file...) đang chạy, khiến code coi là "đã xong" (báo 404 không
+    // có file) dù ảnh debug lúc đó cho thấy rõ ràng vẫn "Working for 1m
+    // 35s". Coi "đang generate" nếu MỘT TRONG HAI tín hiệu còn hiện.
+    const workingIndicatorVisible =
+      (await workingIndicatorLocator(page).count().catch(() => 0)) > 0;
+    const stillGenerating = stopButtonVisible || workingIndicatorVisible;
     if (stillGenerating) {
       hasSeenGenerating = true;
       // Xác nhận qua log lỗi thật (job 3b19ebae, model "High" reasoning
@@ -916,7 +926,11 @@ export async function selectWorkMode(page: Page, jobId: string): Promise<void> {
     await page.keyboard.press("Escape").catch(() => {});
     await page.waitForTimeout(300);
 
-    await workToggle.click({ timeout: 10000 });
+    // 15s thay vì 10s — cùng lý do đã sửa cho các click của Pollo (Generate,
+    // upload dialog): dưới tải CPU cao, actionability check pass hết nhưng
+    // "performing click action" treo tới đúng mốc timeout dù click đã ăn
+    // thật, không phải lỗi logic/overlay.
+    await workToggle.click({ timeout: 15_000 });
   } catch (err) {
     console.warn(
       "[chatAI] Không chọn được mode 'Work' (best-effort, bỏ qua):",

@@ -63,6 +63,22 @@ export const stopGeneratingButtonCandidates = (page: Page): Array<() => Locator>
 ];
 
 /**
+ * Chỉ báo "Working for Xm Ys" hiển thị lúc ChatAI đang thực thi tool call
+ * (đọc file, tra cứu web...) — DOM thật xác nhận (job
+ * 61d57820-315e-47a6-834d-564f3a2d0deb_test_camera_1.txt, 2026-09-09):
+ * `<div data-streaming-response-status=""><span aria-hidden="true">Working
+ * for 1m 35s</span>...</div>`. Bổ sung THÊM cho stopGeneratingButtonCandidates
+ * (không thay thế) — xác nhận qua lỗi thật: job này bị sendMessage() coi là
+ * "xong" (báo 404 không có file) dù ảnh debug lúc đó cho thấy RÕ RÀNG trang
+ * vẫn đang "Working for 1m 35s" VÀ nút Stop vẫn hiện — nghi việc dò nút Stop
+ * có khoảng hở lúc tool call đang chạy (chưa xác nhận chắc nguyên nhân gốc,
+ * nhưng tín hiệu "Working for" này rõ ràng/độc lập hơn, dùng làm lưới an
+ * toàn thứ 2 để giảm rủi ro false-positive "đã xong").
+ */
+export const workingIndicatorLocator = (page: Page): Locator =>
+  page.locator("[data-streaming-response-status]");
+
+/**
  * Khối tin nhắn trả lời của ChatAI (mỗi lượt hỏi/đáp 1 khối riêng, lấy khối
  * CUỐI). DOM thật xác nhận (job 24b9cf53): phản hồi dùng tool tạo ẢNH
  * (image generation) KHÔNG nằm trong [data-message-author-role="assistant"]
