@@ -1172,12 +1172,28 @@ async function clickAssetPickerCard(card: Locator): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      await card.click({ timeout: 10_000, noWaitAfter: true });
-      return;
+      await card.click({ timeout: 30_000, noWaitAfter: true });
+      // Xác nhận qua log lỗi thật (SHOT_02_CLIP_01_VIDEO, 2026-09-10): click
+      // không báo lỗi gì nhưng nút Select vẫn "disabled" SUỐT 60s sau đó —
+      // nghi card ĐÃ ở trạng thái data-selected="true" từ trước (vd đã chọn
+      // từ 1 ảnh trước đó trong cùng job), nên click lần này TOGGLE OFF (bỏ
+      // chọn) thay vì chọn — đúng hành vi "click = toggle" đã xác nhận trước
+      // đây (lý do phải bỏ code "deselect card cũ" cũ vì nó xoá luôn
+      // mention). Verify lại attribute thật sau khi click (đợi ngắn tránh
+      // đọc trúng lúc DOM chưa kịp cập nhật) — nếu chưa "true", coi là lỗi
+      // để retry ở lượt sau: lượt click TIẾP THEO sẽ tự đảo lại về true nếu
+      // đúng là bị toggle off (tự sửa, không cần logic riêng).
+      await sleep(300);
+      const selected =
+        (await card.getAttribute("data-selected").catch(() => null)) === "true";
+      if (selected) return;
+      lastError = new Error(
+        'Click card không làm data-selected="true" (có thể bị toggle off do card đã chọn từ trước) — thử lại.',
+      );
     } catch (err) {
       lastError = err;
-      if (attempt < maxAttempts) await sleep(2000);
     }
+    if (attempt < maxAttempts) await sleep(2000);
   }
   throw lastError;
 }
