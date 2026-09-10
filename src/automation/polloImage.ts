@@ -15,6 +15,7 @@ import {
   focusEditorWithRetry,
   gotoPolloWithRetry,
   resolveDownloadExtension,
+  selectModel,
   submitAssetUpload,
   waitForGenerateButtonEnabled,
   waitForGenerationApiStatus,
@@ -288,6 +289,18 @@ async function attemptGenerateImage(
         "Chưa đăng nhập pollo.ai hoặc session đã hết hạn. Chạy: npm run login-pollo",
       );
     }
+
+    // Model mặc định của trang /image là "Pollo Image 1.6" — xác nhận qua
+    // debug snapshot THẬT (job LOC_GALA_HALL, "You don't have enough
+    // credits..."): model này KHÔNG nằm trong danh sách "Unlimited & Free
+    // Gens" của tài khoản (chỉ có MiniMax H3/H3 Max, GPT Image 2, Wan 3.0,
+    // Wan 3.0 Prime), nên switch "Unlimited" bật cũng vô nghĩa — mọi lượt
+    // generate bằng "Pollo Image 1.6" LUÔN trừ credit thật, cạn credit là
+    // fail hẳn. Chủ động chọn "GPT Image 2" (365 ngày MiniMax H3 chỉ áp
+    // dụng cho video, "GPT Image 2" là lựa chọn Unlimited-eligible cho
+    // ảnh) làm model mặc định — theo yêu cầu người dùng.
+    await dismissBlockingOverlays(page);
+    await selectModel(page, "GPT Image 2");
 
     for (const refPath of referenceImagePaths) {
       await uploadReferenceImage(page, refPath);

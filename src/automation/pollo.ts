@@ -706,7 +706,7 @@ function buildDeepLinkUrl(
  * qua. Sau đó bắt buộc ĐỌC LẠI nhãn chip để xác nhận đã đổi đúng model — nếu
  * không đổi thì throw lỗi rõ ràng thay vì im lặng tiếp tục chạy sai model.
  */
-async function selectModel(page: Page, modelName: string): Promise<void> {
+export async function selectModel(page: Page, modelName: string): Promise<void> {
   const chip = modelChipLocator(page).first();
   const currentLabel = await chip.innerText().catch(() => "");
   if (currentLabel.trim().toLowerCase() === modelName.toLowerCase()) return;
