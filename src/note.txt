@@ -1,0 +1,7 @@
+pm2 del 0 && git pull && npm run build && rm -f storage/debug/* && rm -f ~/.pm2/logs/bot-generate-* && pm2 start pm2.bot.config.js 
+
+pm2 del 0  && rm -f storage/debug/* && rm -f ~/.pm2/logs/bot-generate-* && pm2 start pm2.bot.config.js 
+
+ps -eo pid,rss,etime,cmd | grep -- '--remote-debugging-pipe' | grep -v 'type=' | grep -v grep
+
+watch -n 5 "ps -eo pid,rss,etime,cmd | grep -- '--type=renderer' | grep 'playwright_chromiumdev_profile-q9z7bs'"

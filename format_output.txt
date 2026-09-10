@@ -49,7 +49,7 @@ TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
 3. NGUYÊN TẮC CHIA SHOT VÀ CLIP
 
 - Chia toàn bộ timeline thành các VIDEO clip có thời lượng phù hợp với cấu hình ở PHẦN trên.
-- Mỗi VIDEO phải đại diện cho một nhịp hành động cụ thể, rõ ràng và có thể thực hiện tự nhiên trong thời lượng đã chọn.
+- Mỗi VIDEO là một container thời gian hoàn chỉnh và có thể chứa một hoặc nhiều camera beat liên tiếp, miễn các beat đó cùng phục vụ một dramatic purpose và có thể thực hiện rõ ràng trong duration của VIDEO.
 - Nếu một hành động dài hơn giới hạn một clip, chia thành nhiều VIDEO liên tiếp theo thứ tự thời gian.
 - Clip sau phải tiếp nối hợp lý trạng thái kết thúc của clip trước bằng mô tả trực tiếp trong VIDEO prompt; không tạo item trung gian để biểu diễn frame đầu/cuối.
 - Prompt của clip N từ 2 trở đi trong cùng continuity run phải nêu rõ trạng thái được kế thừa từ clip trước khi cần thiết: vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, ánh sáng, môi trường và motion phase.
@@ -94,7 +94,7 @@ Mỗi VIDEO prompt bắt buộc phải nêu đủ:
 
 1. Khoảnh khắc mở đầu cụ thể của clip: ai đang ở đâu, pose, gaze, biểu cảm, trạng thái đạo cụ và motion phase ban đầu. Với clip nối tiếp, mô tả đây là sự tiếp diễn trực tiếp từ trạng thái cuối của clip trước, nhưng không tham chiếu tới một START/END item.
 2. Hành động cụ thể của chính clip: ai làm gì, tương tác với ai/đạo cụ/bối cảnh nào, diễn biến theo thứ tự trong đúng duration, cùng một kết quả ngắn dễ đọc ở cuối clip.
-3. Camera cụ thể: focal length/lens, shot size, angle, framing và chuyển động máy phù hợp với hành động. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
+3. Camera plan cụ thể: một VIDEO có thể chứa một hoặc nhiều shot/camera beat. Nếu có nhiều beat, phải mô tả rõ thứ tự, thời lượng tương đối, điểm cut/transition, focal length/lens, shot size, angle, framing và camera movement của từng beat. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
 4. Ánh sáng, thời điểm trong ngày và thời tiết cụ thể, phù hợp LOCATION và continuity.
 5. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, screen direction, time, weather, lighting direction, camera continuity và natural physics.
 6. Trạng thái kết thúc cụ thể đạt được tự nhiên trong duration để clip tiếp theo có thể tiếp nối: vị trí, pose, gaze, biểu cảm, đạo cụ và camera motion phase sau hành động.
@@ -109,6 +109,15 @@ CẤM TUYỆT ĐỐI:
 - Yêu cầu dùng extracted last stable frame như một asset tham chiếu nếu asset đó không tồn tại trong schema.
 - Nhét Character Bible, Location Bible, metadata phân tích, tiêu đề, negative prompt riêng hoặc lời giải thích ngoài VIDEO prompt.
 - Dùng lại nguyên văn hoặc gần giống nguyên văn phần hành động/camera cho nhiều VIDEO chỉ bằng cách đổi ID. Mỗi prompt phải phản ánh đúng nhịp hành động riêng của clip.
+
+MULTI-SHOT VIDEO CONTAINER
+Một VIDEO không bắt buộc tương ứng với duy nhất một shot.
+Ưu tiên gom nhiều camera beat liên tiếp vào cùng một VIDEO khi chúng thuộc cùng một dramatic beat và toàn bộ chuỗi vẫn đọc rõ trong duration.
+Cho phép hard cut, match cut, whip-pan transition, rack-focus transition, thay đổi shot size, thay đổi angle hoặc thay đổi camera position bên trong cùng một VIDEO.
+Khi VIDEO có nhiều camera beat, phải mô tả rõ trình tự thực hiện và thời lượng tương đối của từng beat.
+Không tự tách thành VIDEO mới chỉ vì camera đổi góc.
+Chỉ tách thành VIDEO mới khi tổng hành động không thể đọc rõ trong duration, có scene/location change đáng kể, continuity state thay đổi lớn hoặc chuỗi camera trở nên quá phức tạp để generator thực hiện ổn định.
+Mỗi VIDEO vẫn phải có một dominant dramatic purpose và một end state rõ ràng để clip tiếp theo kế thừa continuity.
 
 5. THỨ TỰ ITEM
 
