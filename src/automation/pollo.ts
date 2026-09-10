@@ -1547,52 +1547,32 @@ export async function waitForComposerReady(
 
 /**
  * Gọi SAU KHI đã goto() xong — chờ composer sẵn sàng (xem
- * waitForComposerReady), RELOAD TỐI ĐA maxReloads lần nếu chưa thấy, rồi
- * throw GenerationError rõ ràng nếu vẫn không được. An toàn để reload ở ĐÂY
- * (khác hẳn lúc đang chờ kết quả generate — xem findRecentVideoViaCreatePage):
- * thời điểm này CHƯA bấm Generate, chưa có gì đang chạy dở để mất.
+ * waitForComposerReady), throw GenerationError rõ ràng nếu vẫn không được
+ * sau timeoutMs.
  *
- * maxReloads=2 (không phải 1) — xác nhận qua lỗi thật (job test-gen-d5cf5eb1):
- * gốc rễ là PROXY chập chờn (xem docstring waitForComposerReady), mức lỗi có
- * thể dao động rất mạnh theo từng thời điểm (có lúc 60+ request tĩnh cùng lỗi
- * tunnel, có lúc load sạch hoàn toàn ngay lần đầu) — 1 lần reload không phải
- * lúc nào cũng đủ để "trúng" đúng lúc proxy ổn định trở lại, thêm 1 lần nữa
- * tăng cơ hội mà chi phí thời gian không đáng kể so với việc bỏ cuộc cả job.
+ * SỬA (2026-09-10, bỏ hẳn reload — trước đây RELOAD TỐI ĐA 2 lần khi chưa
+ * thấy composer): reload từng hợp lý với giả thuyết gốc là JS chunk LỖI HẲN
+ * (proxy chập chờn, request đã fail thì chờ thêm vô ích, phải load lại mới
+ * có request mới) — nhưng xác nhận qua debug THẬT (job
+ * test_camera_2_SHOT_01_CLIP_01_VIDEO, 2026-09-10): sau khi throw vì "chưa
+ * render" (đã hết 60s + 2 lần reload 20s), snapshot lỗi chụp NGAY SAU ĐÓ lại
+ * cho thấy composer đã hydrate xong hoàn chỉnh — nghĩa là request KHÔNG hề
+ * lỗi hẳn, chỉ CHẬM (CPU tranh chấp giữa nhiều browser), và bản thân
+ * reload() còn phản tác dụng: huỷ bỏ tiến trình tải/hydrate đang dở, bắt đầu
+ * lại từ đầu, tốn thêm network/CPU thay vì chỉ cần đợi thêm. Đổi sang chờ
+ * THẲNG, không reload — tin vào tín hiệu thật (giống triết lý đã áp dụng
+ * cho sendMessage/ChatAI).
  */
 export async function ensureComposerReadyOrThrow(
   page: Page,
   url: string,
   featureLabel: string,
-  maxReloads = 2,
+  timeoutMs = 180_000,
 ): Promise<void> {
-  // 60s thay vì 15s — xác nhận qua log thật (2026-09-09, lặp lại rất nhiều
-  // lần): "Composer chưa render... thử reload lại" xuất hiện thường xuyên
-  // dưới tải CPU cao (nhiều browser cùng chạy) vì hydrate (tải + chạy JS)
-  // chậm hơn hẳn lúc chỉ 1 browser. Mỗi lần thiếu 15s là tốn thêm 1 lần
-  // page.reload() đầy đủ (tốn network/CPU hơn hẳn chỉ đợi thêm) — nới hẳn
-  // lần đầu để giảm số lần phải reload lãng phí.
-  let composerReady = await waitForComposerReady(page, 60_000);
-  for (
-    let reloadAttempt = 1;
-    !composerReady && reloadAttempt <= maxReloads;
-    reloadAttempt++
-  ) {
-    console.warn(
-      `[pollo] Composer chưa render sau khi vào ${url} (proxy có thể đang chập chờn) — thử reload lại (lần ${reloadAttempt}/${maxReloads}).`,
-    );
-    await page
-      .reload({ waitUntil: "domcontentloaded", timeout: 0 })
-      .catch(() => {});
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
-    await page.waitForTimeout(2000);
-    await dismissBlockingOverlays(page);
-    composerReady = await waitForComposerReady(page, 20_000);
-  }
+  const composerReady = await waitForComposerReady(page, timeoutMs);
   if (!composerReady) {
     throw new GenerationError(
-      `pollo.ai không hiển thị giao diện ${featureLabel} (${url}) — trang chưa hydrate xong dù đã reload lại ${maxReloads} lần. Có thể proxy đang chập chờn nặng hoặc site đổi cấu trúc trang.`,
+      `pollo.ai không hiển thị giao diện ${featureLabel} (${url}) — trang chưa hydrate xong sau ${timeoutMs}ms. Có thể proxy/CPU đang chập chờn nặng hoặc site đổi cấu trúc trang.`,
     );
   }
 }
