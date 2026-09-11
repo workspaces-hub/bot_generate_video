@@ -2226,21 +2226,27 @@ async function attemptGenerateVideo(
           // bounded timeout để không treo vô hạn nếu spinner kẹt vì lý do
           // khác.
           //
-          // SỬA (xác nhận qua lỗi thật LẶP LẠI sau khi deploy bản chờ 60s —
-          // job SHOT_19_CLIP_01_VIDEO, 2026-09-11T01:33:02.666Z): vẫn fail y
-          // hệt, snapshot lỗi cho thấy 6 ảnh KHÁC trong CÙNG job này đã mention
-          // thành công (data-media-chip=6) nhưng ĐÚNG ảnh này vẫn còn spinner
-          // sau 60s — 60s không đủ dưới tải cao (nhiều ảnh upload+index liên
-          // tiếp trong cùng 1 job, cộng job khác cùng tài khoản). Nới lên 180s
-          // (khớp deadline upload 180s đã dùng ở submitAssetUpload).
-          const uploadIndexDeadlineMs = Date.now() + 180_000;
+          // SỬA (xác nhận qua lỗi thật LẶP LẠI sau khi deploy bản chờ 60s rồi
+          // 180s — job SHOT_19_CLIP_01_VIDEO, vẫn fail y hệt dù đã nới lên
+          // 180s): mỗi lần nới deadline lại gặp đúng job khác cần lâu hơn —
+          // theo yêu cầu người dùng, BỎ HẲN deadline, chờ tới khi THỰC SỰ hết
+          // spinner mới thôi (không đoán 1 con số cố định nữa). Vẫn an toàn vì
+          // vòng lặp poll rẻ (page.waitForTimeout, không giữ lock nào ngoài
+          // withPolloAssetUploadLock của CHÍNH job này) — log định kỳ mỗi 30s
+          // để không im lặng hoàn toàn nếu spinner kẹt thật lâu.
+          let waitedMs = 0;
           while (
             (await uploadingSpinnerLocator(page)
               .count()
-              .catch(() => 0)) > 0 &&
-            Date.now() < uploadIndexDeadlineMs
+              .catch(() => 0)) > 0
           ) {
+            if (waitedMs > 0 && waitedMs % 30_000 === 0) {
+              console.warn(
+                `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi mention.`,
+              );
+            }
             await page.waitForTimeout(2_000);
+            waitedMs += 2_000;
           }
 
           const textBeforeMention = await editor.innerText().catch(() => "");

@@ -382,6 +382,61 @@ Khi mục tiêu không đứng chính diện trước người thực hiện, pr
 Trạng thái cuối clip phải tiếp tục xác nhận đúng quan hệ không gian: actor đang hướng tới ai, nhìn ai, cách mục tiêu bao xa và trục cơ thể kết thúc ở đâu.
 Không coi một hành động là đã mô tả đầy đủ nếu prompt chỉ nói “turns”, “bows”, “looks”, “speaks” hoặc “gestures” mà không nêu rõ target và hướng cơ thể quan sát được.
 Trước khi lưu JSON, kiểm tra từng VIDEO prompt bằng câu hỏi: “Người thực hiện là ai? Mục tiêu là ai? Hướng cơ thể và hướng hành động có chỉ đúng vào mục tiêu đó không? Có đối tượng nào gần đó khiến mô hình hiểu nhầm không?” Nếu còn mơ hồ, phải viết lại prompt trước khi lưu.
+
+SCRIPT-TO-SHOT/CLIP FOLLOW AUDIT — BẮT BUỘC TRƯỚC KHI LƯU JSON
+Sau khi đã tạo toàn bộ CHARACTER, LOCATION và VIDEO nhưng TRƯỚC KHI serialize hoặc ghi file JSON, phải dừng lại và âm thầm đối chiếu lại toàn bộ danh sách SHOT/CLIP với source script từ dòng đầu tiên đến dòng cuối cùng.
+Không được coi việc “đã tạo nhiều VIDEO” là bằng chứng rằng JSON đã follow đúng kịch bản. Phải kiểm tra nội dung thực tế của từng SHOT/CLIP.
+
+BƯỚC A — LẬP SOURCE EVENT LEDGER
+Đọc lại source theo đúng thứ tự và lập một ledger nội bộ cho từng tập, scene và beat. Mỗi dòng hoặc đơn vị canon phải được đánh dấu riêng, gồm:
+- scene heading, location, time of day và flashback/time-jump boundary;
+- nhân vật xuất hiện, entrance, exit và thay đổi số người trong cảnh;
+- từng hành động vật lý và kết quả của hành động;
+- từng reaction có ý nghĩa;
+- từng câu DIRECT DIALOGUE, NARRATION, PHONE VOICE và OFF-SCREEN VOICE, đúng người nói và đủ toàn bộ ý;
+- prop xuất hiện, đổi chủ, đổi tay, rơi, vỡ, mở, đóng hoặc thay đổi trạng thái;
+- reveal, reversal, power shift, hook và cliffhanger;
+- trạng thái continuity phải được truyền sang beat tiếp theo.
+
+BƯỚC B — FORWARD MAPPING: SOURCE → JSON
+Với từng mục trong SOURCE EVENT LEDGER, phải chỉ ra âm thầm SHOT_XX_CLIP_YY_VIDEO nào thể hiện mục đó.
+Mỗi sự kiện, hành động chính, reaction quan trọng và ý thoại canon phải có ít nhất một VIDEO tương ứng.
+Nếu một câu thoại bị chia qua nhiều clip, phải ghép literal spoken line của các clip theo timeline và xác nhận nội dung ghép lại vẫn đầy đủ, đúng thứ tự, đúng người nói và không mất mệnh đề.
+Nếu một action kéo qua nhiều clip, phải xác nhận motion phase nối liên tục: anticipation → contact/action → follow-through → consequence/reaction; không bị lặp lại như một hành động mới và không bị mất đoạn giữa.
+Nếu bất kỳ mục source nào không map được tới VIDEO cụ thể, đánh dấu MISSING và BẮT BUỘC bổ sung hoặc sửa SHOT/CLIP trước khi lưu.
+
+BƯỚC C — REVERSE MAPPING: JSON → SOURCE
+Đọc lần lượt mọi VIDEO theo thứ tự timeline và xác nhận mỗi hành động, lời thoại, reveal, nhân vật nhìn thấy, prop quan trọng và kết quả trong prompt đều có nguồn từ script hoặc là micro-beat trình bày được phép.
+Nếu một VIDEO chứa plot event, quan hệ, thông tin, kết quả, lời thoại hoặc twist không được source hỗ trợ, đánh dấu EXTRA/CANON DRIFT và BẮT BUỘC xóa hoặc viết lại trước khi lưu.
+Micro-beat tự thêm chỉ hợp lệ nếu giúp đọc rõ một canon beat và không thay đổi nguyên nhân-kết quả, quyền lực, quan hệ, chronology hoặc kết quả.
+
+BƯỚC D — CHRONOLOGY VÀ HIERARCHY CHECK
+Đối chiếu thứ tự source với thứ tự SHOT/CLIP. Không được để beat xảy ra sau xuất hiện trước, reveal bị lộ sớm, reaction xuất hiện trước stimulus hoặc nhân vật biết thông tin trước khi nhìn/nghe thấy.
+Xác nhận mỗi scene change, flashback start/end, time jump và episode boundary nằm đúng vị trí.
+Xác nhận SHOT đại diện đúng dramatic beat; các phần 4 giây của cùng một beat/action/dialogue dùng cùng SHOT_XX và tăng CLIP_YY liên tục.
+Không được tách mỗi clip thành SHOT mới chỉ để đơn giản hóa ID. Không được gộp hai dramatic beat độc lập vào một SHOT nếu làm sai mục tiêu kể chuyện.
+
+BƯỚC E — CONTINUITY FOLLOW CHECK
+So sánh end state của từng clip với opening state của clip kế tiếp trong cùng continuity run.
+Phải khớp: character count, vị trí foreground/midground/background, pose, feet/hips/shoulders, gaze target, screen direction, costume, hair, injury, tears, wetness, prop owner, hand holding prop, prop count/state, door/furniture state, lighting direction, time và weather.
+Mọi state change phải có nguyên nhân hoặc hành động được nhìn thấy trong source/VIDEO. Nếu clip sau reset, teleport, duplicate hoặc bỏ mất state chưa được thay đổi, phải sửa trước khi lưu.
+
+BƯỚC F — PER-EPISODE COMPLETION GATE
+Kiểm tra riêng từng tập từ đầu đến cliffhanger. Một tập chỉ được đánh dấu complete khi:
+- opening hook của tập có mặt;
+- tất cả scene và canon beat của tập đã map đầy đủ;
+- không mất hoặc tóm tắt sai thoại;
+- power shift/reveal chính xảy ra đúng chỗ;
+- shot cuối giữ đúng cliffhanger hoặc trạng thái kết thúc của source;
+- tập sau bắt đầu từ trạng thái hợp logic.
+Không được dùng độ bao phủ tổng thể của toàn phim để che việc thiếu beat trong một tập riêng.
+
+BƯỚC G — FINAL COVERAGE VERDICT
+Chỉ được serialize và lưu JSON khi cả hai điều kiện đều đạt:
+1. FORWARD COVERAGE = 100%: không còn mục MISSING trong SOURCE EVENT LEDGER.
+2. REVERSE CANON COMPLIANCE = 100%: không còn mục EXTRA/CANON DRIFT không được phép trong JSON.
+Nếu chưa đạt 100%, không được thông báo hoàn thành. Phải tự quay lại sửa CHARACTER, LOCATION, SHOT, CLIP, prompt, ref hoặc duration, sau đó chạy lại toàn bộ audit từ BƯỚC A.
+Việc audit phải được thực hiện trên nội dung cuối cùng sắp ghi file, không dựa trên draft, kế hoạch hoặc trí nhớ về các sửa đổi trước đó.
 QUALITY CHECK TRƯỚC KHI TRẢ JSON
 1. Canon, chronology, dialogue meaning và ending có được giữ nguyên, không tự thêm twist hoặc plot event không?
 2. 4 giây đầu có hook rõ và mỗi clip 4 giây có meaningful action/reveal/reaction, không idle hoặc kéo chậm không cần thiết không?
@@ -438,8 +493,6 @@ Mỗi item phải có đúng 5 field, đúng tên và đúng cấu trúc sau:
       }
     ],
     "prompt": "string",
-    "shot": number,
-    "clip": number,
     "duration": 0
   }
 ]
@@ -630,6 +683,10 @@ Không được:
 - So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có hành động và camera riêng phù hợp timeline.
 - So sánh chéo toàn bộ CHARACTER prompt và LOCATION prompt: không trùng lặp sai nhận diện hoặc mâu thuẫn thuộc tính.
 - ĐỘ BAO PHỦ: đối chiếu toàn bộ timeline gốc theo đúng thứ tự; mọi sự kiện/hành động chính từ đầu đến cuối phải có ít nhất một VIDEO tương ứng.
+- BẮT BUỘC chạy SCRIPT-TO-SHOT/CLIP FOLLOW AUDIT trên chính JSON cuối cùng: forward-map từng source event/line sang ID VIDEO và reverse-map từng VIDEO về source.
+- Theo từng tập và từng scene, xác nhận opening hook, toàn bộ canon beat, literal dialogue/voice, action, reaction, reveal, power shift và cliffhanger đều xuất hiện đúng thứ tự.
+- Nếu dialogue/action được chia qua nhiều CLIP, ghép lại theo timeline để xác nhận không thiếu, không lặp, không đảo thứ tự và vẫn thuộc đúng SHOT dramatic beat.
+- Chỉ serialize khi FORWARD COVERAGE = 100% và REVERSE CANON COMPLIANCE = 100%; nếu chưa đạt phải sửa rồi audit lại từ đầu.
 - Đếm tổng CHARACTER, LOCATION và VIDEO để báo cáo sau khi tạo file.
 
 9. NGUYÊN TẮC ỔN ĐỊNH
