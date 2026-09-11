@@ -20,7 +20,6 @@ import {
   modeChipLocator,
   modeMenuOptionLocator,
   modelChipLocator,
-  modelDialogOptionLocator,
   paramsChipLocator,
   promptEditorLocator,
   resultCardLocator,
@@ -717,33 +716,66 @@ export async function selectModel(page: Page, modelName: string): Promise<void> 
   await searchInput.fill(modelName).catch(() => {});
   await page.waitForTimeout(800);
 
-  const row = modelDialogOptionLocator(page, modelName).first();
+  // SỬA (xác nhận qua debug DOM THẬT — chụp trực tiếp popup lúc đang mở,
+  // script test-pollo-generate-image.ts): pollo.ai dùng 2 cấu trúc popup
+  // chọn model KHÁC HẲN NHAU tuỳ trang:
+  // 1. Trang video (/reference-to-video...): dialog lớn, mỗi hàng là
+  //    div[data-button-name] chứa p.font-semibold (modelDialogOptionLocator
+  //    cũ, ĐÃ xác nhận hoạt động đúng cho video).
+  // 2. Trang ảnh (/image): dropdown GỌN hơn, mỗi hàng là <button> chứa
+  //    <span class="text-xs font-semibold leading-5"> (kèm "1+ credits"/
+  //    "105 sec"), KHÁC HẲN cấu trúc trên.
+  // Trang /image CÒN CÓ SẴN 1 khối "Models" duyệt nhanh trên THÂN TRANG
+  // (ngoài popup) dùng ĐÚNG cấu trúc div[data-button-name]/p.font-semibold
+  // như video — đây chính là lý do bản trước luôn click NHẦM: modelDialogOptionLocator
+  // (nhắm div[data-button-name]) tình cờ khớp card của khối duyệt nhanh này
+  // thay vì hàng THẬT trong popup đang search, dẫn tới 2 triệu chứng đã gặp:
+  // (a) job fail "không đổi được model" mà KHÔNG throw lỗi gì (click "thành
+  // công" vào sai phần tử), (b) job fail vì "<div data-base-ui-inert>...
+  // subtree intercepts pointer events" (khối duyệt nhanh nằm NGOÀI popup nên
+  // bị Base UI đánh dấu inert ĐÚNG NHƯ THIẾT KẾ trong lúc popup đang mở — không
+  // phải overlay lạ nào khác). Thử cấu trúc (2) trước (đúng cho trang ảnh),
+  // fallback cấu trúc (1) nếu không khớp (đúng cho trang video, giữ nguyên
+  // hành vi cũ không đổi).
+  const compactRow = page
+    .locator("button")
+    .filter({
+      has: page.locator(
+        `span.text-xs.font-semibold.leading-5:text-is("${modelName}")`,
+      ),
+    })
+    .first();
+  const dialogRow = page
+    .locator(`div[data-button-name]:has(p.font-semibold:text-is("${modelName}"))`)
+    .first();
+  const useCompactRow = (await compactRow.count().catch(() => 0)) > 0;
+  const row = useCompactRow ? compactRow : dialogRow;
   await row
     .evaluate((el) => el.scrollIntoView({ block: "center" }))
     .catch(() => {});
   await page.waitForTimeout(300);
 
-  // SỬA (xác nhận qua lỗi thật LẶP LẠI 100% — 6 job liên tiếp
-  // HIS_WIFE_WAS_HIS_REVENGE_CHARACTER_*, 2026-09-11): retry 20s như cũ
-  // KHÔNG đủ nếu nguyên nhân là 1 overlay/portal khác (KHÔNG PHẢI chính popup
-  // model đang mở) đè lên — "<div data-base-ui-inert>...</div> subtree
-  // intercepts pointer events" lặp lại y hệt suốt cả 20s, không tự hết như
-  // race animate thoáng qua đã ghi nhận trước đây (đó là random/hiếm, đây là
-  // 100%/mọi job). Nghi popup promo "Unlock Unlimited GPT Image 2.5" (banner
-  // "Subscriber Perk" ở đầu trang, xem debug snapshot job LOC_GALA_HALL) tự
-  // mở chồng lên đúng lúc đang chọn model Unlimited-eligible. Gọi
-  // dismissBlockingOverlays MỖI lần retry (không chỉ 1 lần lúc đầu hàm) —
-  // cùng cơ chế đã dùng cho clickWithOverlayDismiss.
+  // KHÔNG gọi dismissBlockingOverlays trong vòng retry — hàm đó bấm phím
+  // Escape để đóng overlay, nhưng Escape cũng đóng LUÔN popup chọn model
+  // đang mở (xác nhận qua lỗi thật: sau khi thêm dismissBlockingOverlays vào
+  // đây, debug snapshot cho thấy input "Search…" biến mất hẳn khỏi trang —
+  // popup đã bị chính code này đóng mất giữa chừng, khiến MỌI lần retry sau
+  // đó chắc chắn không tìm thấy gì nữa). Chỉ lặp lại click thường.
+  // position: { x: 10, y: 5 } giữ nguyên cho dialogRow (cấu trúc video cũ,
+  // đã xác nhận cần offset này) — compactRow (button, cấu trúc ảnh) click
+  // giữa (mặc định) là đủ, không cần offset.
+  const clickOptions = useCompactRow
+    ? { timeout: 1_500 }
+    : { timeout: 1_500, position: { x: 10, y: 5 } };
   const retryDeadline = Date.now() + 20_000;
   let lastError: unknown;
   while (Date.now() < retryDeadline) {
     try {
-      await row.click({ timeout: 1_500, position: { x: 10, y: 5 } });
+      await row.click(clickOptions);
       lastError = undefined;
       break;
     } catch (err) {
       lastError = err;
-      await dismissBlockingOverlays(page);
       await page.waitForTimeout(400);
     }
   }

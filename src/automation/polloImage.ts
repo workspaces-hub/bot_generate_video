@@ -15,6 +15,7 @@ import {
   focusEditorWithRetry,
   gotoPolloWithRetry,
   resolveDownloadExtension,
+  selectModel,
   submitAssetUpload,
   waitForGenerateButtonEnabled,
   waitForGenerationApiStatus,
@@ -269,16 +270,7 @@ async function attemptGenerateImage(
   const context = await getPolloImageBrowserContext();
   const page = await context.newPage();
   try {
-    // SỬA (theo yêu cầu người dùng): dùng THẲNG deep-link có sẵn modelName
-    // thay vì mở trang /image mặc định (model "Pollo Image 1.6", KHÔNG nằm
-    // trong Unlimited) rồi bấm popup đổi sang "GPT Image 2" qua selectModel —
-    // né hẳn bug click bị overlay/popup promo che (xem docstring selectModel)
-    // vì giờ không cần bấm chip model/mở popup nào nữa, pollo.ai tự set sẵn
-    // đúng model theo query string lúc trang vừa load.
-    const url = new URL(
-      "/image-to-image-ai?target=image-to-image&modelName=openai-gpt-image-2-0",
-      config.polloBaseUrl,
-    ).toString();
+    const url = new URL("/image", config.polloBaseUrl).toString();
     // timeout: 0 = tắt hẳn giới hạn thời gian — cùng lý do đã sửa cho
     // generateVideo bên pollo.ts (job microdrama_co_dau_phan_boi_twist_prompt):
     // mạng/site chậm thoáng qua không nên làm rớt cả job.
@@ -298,6 +290,11 @@ async function attemptGenerateImage(
       );
     }
 
+    await dismissBlockingOverlays(page);
+    await captureSnapshot(page, `${jobId}_before-select-model`, "before-select-model");
+    await selectModel(page, "GPT Image 2");
+    await captureSnapshot(page, `${jobId}_after-select-model`, "after-select-model");
+
     for (const refPath of referenceImagePaths) {
       await uploadReferenceImage(page, refPath);
     }
@@ -314,7 +311,14 @@ async function attemptGenerateImage(
     await enableUnlimitedIfNotEnoughCredit(page, jobId);
 
     const baseline = await captureResultBaseline(page);
-    // await captureSnapshot(page, jobId, "before-click-generate");
+    // Theo yêu cầu người dùng: chụp ảnh debug NGAY TRƯỚC khi bấm Generate —
+    // dùng để xác nhận trực quan model/prompt/ảnh tham chiếu đã đúng chưa
+    // trước khi tốn credit generate (đặc biệt hữu ích lúc đang debug model
+    // GPT Image 2 vs 2.5, mention ảnh...). Suffix "_before-generate" (KHÔNG
+    // dùng thẳng jobId) — writeSnapshotFiles ghi đè theo TÊN FILE = jobId,
+    // trùng với captureErrorSnapshot(page, jobId, err) ở catch cuối hàm nếu
+    // dùng chung tên, sẽ mất ảnh "before" khi job lỗi (lúc cần xem nhất).
+    await captureSnapshot(page, `${jobId}_before-generate`, "before-click-generate");
     await dismissBlockingOverlays(page);
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
