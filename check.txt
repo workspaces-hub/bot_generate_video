@@ -85,6 +85,16 @@ Không dùng slow motion mặc định. Chỉ dùng slow motion nếu source yê
 Nếu một câu thoại dài hơn thời lượng đọc tự nhiên của clip, chia câu thoại thành các clip liên tiếp tại ranh giới ngữ nghĩa tự nhiên; không tăng tốc giọng nói phi thực tế.
 Ước lượng thoại theo tốc độ tự nhiên, có pause và reaction; không để lip-sync bị nén chỉ để vừa duration.
 Mỗi VIDEO clip phải có một dominant dramatic purpose rõ ràng.
+
+NGÂN SÁCH THOẠI BẮT BUỘC CHO CLIP 4 GIÂY
+Trước khi chia VIDEO, phải lập âm thầm dialogue ledger theo chronology: người nói, nội dung đầy đủ, bản chuyển ngữ theo REGIONAL MODE, số từ hoặc thời gian phát âm ước tính, pause, reaction và clip dự kiến.
+Với English tự nhiên, dùng 2.0–2.5 từ/giây làm ngưỡng an toàn. Một clip 4 giây thường chỉ chứa tối đa 8–10 từ; nếu còn entrance, action, reaction lớn hoặc camera phức tạp, ưu tiên tối đa 5–8 từ.
+Với Mandarin, phải ước lượng theo thời gian phát âm thực tế, không chỉ đếm ký tự.
+Nếu thoại vượt ngân sách, BẮT BUỘC tăng số VIDEO và chia tại ranh giới ngữ nghĩa tự nhiên. Không tăng tốc giọng, không nuốt chữ, không bỏ mệnh đề, không đổi người nói và không tóm tắt để giảm số clip.
+Một lượt thoại dài được phép chạy qua nhiều clip direct continuation. Mỗi clip chỉ chứa đúng phần lời có thể nói tự nhiên trong duration và phải kết thúc tại điểm ngắt hợp lý.
+Một exchange nhiều người chỉ được gom trong một clip khi tổng thời gian phát âm, pause, reaction, action và camera thật sự vừa duration.
+Runtime cuối phải được suy ra từ toàn bộ thoại và hành động của source; không chọn runtime ngắn tùy ý rồi ép kịch bản vào đó.
+Với kịch bản nhiều tập, phải kiểm tra riêng từng tập trước khi chuyển sang tập tiếp theo; không được nén nhiều tập chỉ để giảm tổng số VIDEO.
 CẤU TRÚC MỖI VIDEO PROMPT
 Mỗi VIDEO prompt trong JSON phải đủ thông tin để generator hiểu clip ngay cả khi đọc riêng, nhưng không được mâu thuẫn với các clip trước.
 Mỗi VIDEO prompt nên bao gồm theo thứ tự logic: thời lượng và format → trạng thái đầu → nhân vật và vị trí → hành động vật lý theo chronology → acting/reaction → camera/lens/movement → ánh sáng → âm thanh/thoại → trạng thái cuối → continuity locks → negative constraints.
@@ -92,6 +102,8 @@ Luôn mô tả rõ clip bắt đầu từ trạng thái vật lý nào của cli
 Luôn mô tả rõ clip kết thúc ở đâu, nhân vật đang ở tư thế nào, đạo cụ ở đâu, vật gì đang mở/đóng, ai đang nhìn ai và thông tin nào vừa được reveal.
 Trạng thái cuối của clip N phải là trạng thái đầu hợp logic của clip N+1.
 Không dùng câu mơ hồ như 'continue dramatically' mà không mô tả trạng thái thực tế.
+Không được thay end state cụ thể bằng boilerplate như “preserve continuity”, “end on the described state”, “keep everything consistent” hoặc “ready for continuation”.
+Cuối mỗi VIDEO prompt phải có end state riêng cho clip đó, nêu rõ: vị trí nhân vật nhìn thấy, pose và body orientation, gaze target, biểu cảm, tay nào giữ đạo cụ nào, trạng thái đạo cụ/cửa/nội thất và camera kết thúc ở vị trí hoặc motion phase nào.
 Nếu hệ thống JSON hiện tại có trường ref, mỗi VIDEO chỉ tham chiếu đúng CHARACTER và LOCATION thực sự cần cho clip.
 Tuân thủ schema JSON hiện tại của hệ thống; không tự đổi tên field, cấu trúc object hoặc tạo loại asset mới nếu schema không hỗ trợ.
 REGIONAL CASTING AND LANGUAGE MODE
@@ -165,6 +177,9 @@ Nếu một nhân vật có nhiều state lớn được source yêu cầu như 
 Character reference dùng neutral reference presentation, không kể action của scene và không nhúng environment cụ thể trừ khi schema bắt buộc.
 Không để khuôn mặt, tóc, tuổi, vóc dáng, skin tone hoặc costume tự thay đổi giữa các shot nếu kịch bản không có lý do.
 Tất cả các vật dụng xuất hiện trong video với mục đích quan trọng phải được định nghĩa như một CHARACTER và phải được tạo thành asset riêng.
+Nếu costume quan trọng đang được cất giữ, bị người khác lấy, được trao về sau hoặc chưa thuộc về nhân vật ở timeline hiện tại, CHARACTER prompt không được gọi costume đó là “primary present-day wardrobe”. Phải tách rõ BASE WARDROBE và AUTHORIZED COSTUME STATE, kèm điều kiện narrative khi state đó được phép xuất hiện.
+Không mô tả cùng một costume độc nhất như trang phục mặc định đồng thời của hai nhân vật. Quyền sở hữu, người đang mặc và vị trí costume phải theo continuity ledger.
+Đạo cụ quan trọng vẫn dùng type CHARACTER theo schema hiện tại, nhưng ID nên mang tiền tố PROP_ và prompt phải ghi rõ đây là continuity-critical object, không phải người. Trong VIDEO.ref, PROP_ nằm sau các nhân vật hữu hình và trước LOCATION.
 ASSET — LOCATION
 Tạo LOCATION reference riêng cho mỗi bối cảnh recurring hoặc bối cảnh cần giữ spatial continuity.
 LOCATION asset có duration 0 nếu schema hiện tại sử dụng quy ước đó.
@@ -262,6 +277,11 @@ Narration có thể kể hành động, nối cảnh, tóm tắt thời gian, tr
 Giữ narrator identity, POV, tone và voice nhất quán xuyên suốt production.
 ENGLISH SUBTITLE SYSTEM
 Mọi spoken voice có nội dung ngôn ngữ phải có English subtitle tương ứng, bao gồm DIRECT DIALOGUE, NARRATION, INNER MONOLOGUE, SYSTEM VOICE, PHONE VOICE và OFF-SCREEN DIALOGUE.
+Mỗi VIDEO prompt có spoken voice phải ghi nguyên văn đầy đủ phần câu thực sự được phát trong chính clip đó bằng ngôn ngữ của REGIONAL MODE.
+Ngay sau từng spoken segment, phải ghi nguyên văn English subtitle tương ứng. Nếu spoken voice đã là English, subtitle phải trùng từng chữ với spoken line.
+CẤM placeholder như “Subtitles match”, “Subtitle matches”, “Subtitles appear phrase by phrase”, “render the dialogue in concise phrases”, “dialogue continues” hoặc mô tả tương tự thay cho literal subtitle.
+CẤM thay lời thoại có ý nghĩa cốt truyện bằng tóm tắt như “she explains that…”, “he says that…”, “he accuses…”, “she warns…” nếu không ghi chính xác literal spoken wording.
+Nếu source có lời thoại dài, phải phân phối toàn bộ nội dung qua nhiều VIDEO; không paraphrase để giảm số clip. Bản chuyển ngữ tự nhiên phải bảo toàn toàn bộ information, intention, người nói và thứ tự ý.
 Subtitle luôn bằng English bất kể REGIONAL MODE.
 Nếu spoken voice là Mandarin Chinese, subtitle phải dịch toàn bộ nội dung sang English sát nghĩa nhất, giữ đúng intention, tone, relationship và plot meaning.
 Nếu spoken voice đã là English, subtitle phải chép lại đầy đủ nội dung English được nói, không paraphrase, không tóm tắt và không thay đổi wording nếu không cần thiết.
@@ -291,6 +311,13 @@ Không để nhân vật biết một thông tin trước thời điểm họ th
 Không để nhân vật phản ứng với hành động xảy ra ngoài eyeline nếu không có âm thanh hoặc lý do họ nhận ra.
 Giữ left/right screen direction và eyeline logic khi reverse angle.
 Giữ entrance/exit đúng vị trí trong location.
+
+VISIBLE CAST AND REF LEDGER
+Trước khi viết ref, phải lập danh sách VISIBLE CAST theo từng VIDEO, gồm nhân vật chính, guard, staff, assistant, attacker, guest speaker, background performer có hành động đọc được và news anchor nhìn thấy trên màn hình.
+Nhân vật chỉ xuất hiện bằng PHONE VOICE, OFF-SCREEN VOICE, NARRATION hoặc chỉ được nhắc tên nhưng không nhìn thấy tuyệt đối không được đưa vào VIDEO.ref.
+Nếu nhân vật xuất hiện rõ trên TV, video call, màn hình hoặc feed giám sát và cần giữ identity, nhân vật đó được coi là nhìn thấy và phải có CHARACTER asset/ref. Nếu thiết bị chỉ phát giọng nói, không ref người nói.
+Không được viết guard, staff, enemy, attacker, guest hoặc background speaker đang nhìn thấy trong VIDEO prompt mà không có CHARACTER asset/ref tương ứng. Có thể dùng một stable ensemble asset khi nhóm không cần identity cá nhân, nhưng phải khóa số lượng, wardrobe và vai trò.
+Đối chiếu hai chiều trước khi lưu: mọi CHARACTER/PROP trong ref phải thật sự nhìn thấy; mọi người và prop quan trọng nhìn thấy trong prompt phải có ref. Audio-only không được tính là nhìn thấy.
 REFERENCE VÀ TÍNH NHẤT QUÁN
 Mỗi recurring character và location phải dùng cùng ID/reference trong các clip tương ứng.
 Không tạo hai CHARACTER asset khác nhau cho cùng một người chỉ vì camera angle thay đổi.
@@ -365,6 +392,11 @@ QUALITY CHECK TRƯỚC KHI TRẢ JSON
 7. End state của clip N có nối chính xác với start state của clip N+1, bao gồm body position, costume, hair, wounds, props, doors và environment state không?
 8. Nếu dùng EDITORIAL REPLAY, có ghi rõ đó là cùng một action và không bị hiểu thành hành động lặp lại không?
 9. JSON có hoàn toàn self-contained, production-ready và không phụ thuộc phim, prompt hoặc reference không tồn tại không?
+10. Có VIDEO 4 giây nào vượt ngân sách thoại hoặc chứa thoại dài cộng quá nhiều action/reaction/camera không? Nếu có, phải tách clip trong cùng SHOT.
+11. Có spoken content nào bị tóm tắt hoặc dùng placeholder subtitle thay cho literal dialogue và literal English subtitle không? Nếu có, phải viết lại.
+12. Mọi audio-only character đã bị loại khỏi ref và mọi người/prop quan trọng nhìn thấy đã có asset/ref chưa?
+13. Mỗi end state đã mô tả cụ thể, riêng biệt và có thể dùng làm opening state của clip kế tiếp chưa?
+14. SHOT/CLIP có phản ánh đúng hierarchy dramatic beat → temporal clip, hay đang sai thành mỗi VIDEO một SHOT với CLIP_01? Nếu sai, phải đánh số lại trước khi serialize.
 NGUYÊN TẮC CUỐI
 Hãy coi mỗi kịch bản mới là một production hoàn toàn mới nhưng luôn thuộc ngôn ngữ kể chuyện microdrama.
 Script quyết định WHAT HAPPENS.
@@ -406,6 +438,8 @@ Mỗi item phải có đúng 5 field, đúng tên và đúng cấu trúc sau:
       }
     ],
     "prompt": "string",
+    "shot": number,
+    "clip": number,
     "duration": 0
   }
 ]
@@ -420,6 +454,15 @@ TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
 - Temporal boundary item dưới bất kỳ tên hoặc alias nào
 
 3. NGUYÊN TẮC CHIA SHOT VÀ CLIP
+
+ĐỊNH NGHĨA SHOT VÀ CLIP BẮT BUỘC:
+- SHOT là một dramatic beat hoặc một đơn vị hành động có cùng mục tiêu kể chuyện, cùng continuity run và geography chính.
+- CLIP là phần thời gian được chia nhỏ của SHOT để phù hợp giới hạn duration hoặc ngân sách thoại.
+- Nếu cùng một beat/action/dialogue phải kéo dài qua nhiều VIDEO direct continuation, giữ nguyên SHOT_XX và tăng CLIP tuần tự: CLIP_01, CLIP_02, CLIP_03...
+- Chỉ tăng SHOT khi chuyển sang dramatic purpose mới, action/reaction beat mới, scene/location mới, time jump, flashback boundary hoặc thay đổi staging/camera setup đủ lớn để trở thành một đơn vị kể chuyện mới.
+- Không được biến mọi clip 4 giây thành một SHOT mới chỉ để tất cả ID đều kết thúc bằng CLIP_01.
+- Trong mỗi SHOT, CLIP phải bắt đầu từ 01, tăng liên tục, không bỏ số và không reset cho đến SHOT tiếp theo.
+- Camera cut bên trong cùng dominant beat không tự động tạo SHOT mới vì MULTI-SHOT VIDEO CONTAINER cho phép nhiều camera beat trong một VIDEO.
 
 - Chia toàn bộ timeline thành các VIDEO clip có thời lượng phù hợp với cấu hình ở PHẦN trên.
 - Mỗi VIDEO là một container thời gian hoàn chỉnh và có thể chứa một hoặc nhiều camera beat liên tiếp, miễn các beat đó cùng phục vụ một dramatic purpose và có thể thực hiện rõ ràng trong duration của VIDEO.
@@ -574,6 +617,11 @@ Không được:
 - Không thiếu LOCATION thực tế; không thừa location không nhìn thấy.
 - Camera, lens, ánh sáng, weather, costume, identity, prop count/ownership và screen direction không tự thay đổi ngoài diễn biến cho phép.
 - Hành động đạt được tự nhiên trong duration.
+- Với mỗi VIDEO, phải ghi lại phép tính nội bộ: thời gian thoại ước tính + action + reaction + camera transition không vượt duration. Nếu vượt, tách thành CLIP tiếp theo trong cùng SHOT.
+- Mọi spoken line và English subtitle phải xuất hiện literal trong prompt; không có placeholder “Subtitles match”, không tóm tắt lời thoại và không bỏ bất kỳ ý thoại canon nào.
+- Mọi SHOT nhiều clip phải dùng cùng SHOT_XX và tăng CLIP_YY liên tục; không được gán một SHOT mới cho từng đoạn 4 giây của cùng một beat.
+- Mỗi VIDEO phải có end state riêng, cụ thể và quan sát được; câu boilerplate continuity không được tính là end state.
+- Audio-only character không có trong ref; mọi nhân vật/ensemble/prop quan trọng thật sự nhìn thấy đều có asset và ref.
 - Mọi hành động có mục tiêu đều xác định rõ actor → action → target bằng tên/ID nhận diện; không dùng đại từ mơ hồ khi có nhiều đối tượng phù hợp.
 - Với hành động định hướng, hướng bàn chân, hông, vai, thân trên, khuôn mặt, ánh mắt và trục chuyển động phải thống nhất với vị trí của đúng mục tiêu; nếu có nguy cơ nhầm mục tiêu, prompt phải nêu rõ đối tượng không phải mục tiêu.
 - Trình tự rời hướng cũ → xoay về mục tiêu mới → xác lập hướng cơ thể/ánh mắt → thực hiện hành động phải rõ ràng và khả thi trong duration.
