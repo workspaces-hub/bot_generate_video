@@ -30,7 +30,6 @@ import {
   uploadCardButtonForImage,
   uploadDialogFileInputLocator,
   uploadDialogSelectButtonLocator,
-  uploadingSpinnerLocator,
   videoLengthOptionLocator,
   videoLengthSliderInputLocator,
 } from "./polloSelectors";
@@ -1339,11 +1338,25 @@ export async function submitAssetUpload(
       .catch(() => null);
     if (currentUrl && currentUrl !== firstCardUrlBefore) {
       // Có data-asset-url MỚI không có nghĩa là đã xử lý xong HẲN — chờ
-      // thêm cho tới khi KHÔNG CÒN spinner "Uploading" nào trong dialog mới
-      // coi là xong, tránh chuyển sang upload ảnh kế tiếp trong khi ảnh này
-      // (hoặc 1 placeholder khác) vẫn đang xử lý dở.
+      // thêm cho tới khi KHÔNG CÒN spinner "Uploading" trên ĐÚNG card này
+      // mới coi là xong.
+      //
+      // SỬA (theo yêu cầu người dùng — check lại chỗ này sau khi gặp lỗi
+      // thật "Upload timeout" LẶP LẠI 100% trên NHIỀU ảnh khác nhau, mỗi lần
+      // retry đều ra assetUrl MỚI nhưng vẫn fail y hệt — job new_ep01_SHOT_01/
+      // 02_CLIP_01_VIDEO, thư viện Uploads đã có 47+ card): uploadingSpinnerLocator(page)
+      // quét TOÀN TRANG, không phân biệt card nào — CÙNG loại bug đã sửa cho
+      // spinner sau Select (xem attachedReferenceImageSpinnerLocator). Nếu
+      // BẤT KỲ card CŨ nào khác trong thư viện (không liên quan ảnh đang
+      // upload) có spinner kẹt vĩnh viễn, stillUploading LUÔN true mãi mãi —
+      // vòng lặp không bao giờ tiến tới click+Select cho card MỚI dù nó đã
+      // xử lý xong thật, cứ lặp tới hết 180s rồi rơi vào "Upload timeout" dù
+      // ảnh mới hoàn toàn ổn. Scope lại đúng vào card MỚI (cards.first()),
+      // không quét cả trang.
       const stillUploading =
-        (await uploadingSpinnerLocator(page)
+        (await cards
+          .first()
+          .locator("span.i-cus--pol-loading")
           .count()
           .catch(() => 0)) > 0;
       if (!stillUploading) {
