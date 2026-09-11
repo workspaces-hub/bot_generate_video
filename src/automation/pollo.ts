@@ -2236,11 +2236,20 @@ async function attemptGenerateVideo(
     // composer đã hỏng.
     if (!startFramePath && referenceImagePaths.length > 0) {
       const promptTextBeforeRefs = await editor.innerText().catch(() => "");
-      // Regex khớp ĐÚNG message throw ở nhánh "spinner kẹt vĩnh viễn" bên
-      // dưới — dùng để phân biệt với các GenerationError KHÁC (composer
-      // reset, mention silent-fail...) mà KHÔNG nên tự retry (lỗi thật, retry
-      // vô ích).
-      const STUCK_SPINNER_PATTERN = /vẫn còn spinner "đang xử lý"/;
+      // Regex khớp các message THUỘC LOẠI "upload/xử lý ảnh thoáng qua trục
+      // trặc phía pollo.ai" — dùng để phân biệt với các GenerationError KHÁC
+      // (composer reset, mention silent-fail...) mà KHÔNG nên tự retry (lỗi
+      // thật, retry vô ích). Gồm 2 nhánh:
+      // 1. "vẫn còn spinner đang xử lý" (ảnh index cho mention không xong).
+      // 2. SỬA (xác nhận qua lỗi thật LẶP LẠI — job SHOT_01_CLIP_01_VIDEO,
+      //    HIS_WIFE_WAS_HIS_REVENGE_1/LENA_HART.png): retry lần 1 (xoá cache,
+      //    upload MỚI hoàn toàn) vẫn có thể dính ĐÚNG bug gốc của
+      //    submitAssetUpload ("Upload timeout: không thấy ảnh mới xuất hiện
+      //    trong picker Uploads sau 180s") — trước đây KHÔNG match pattern
+      //    nên không được retry thêm dù bản chất vẫn là cùng loại lỗi thoáng
+      //    qua. Thêm nhánh này vào cùng pattern.
+      const RETRYABLE_UPLOAD_ERROR_PATTERN =
+        /vẫn còn spinner "đang xử lý"|Upload timeout: không thấy ảnh mới xuất hiện/;
 
       const uploadAndMentionReferenceImage = async (
         refPath: string,
@@ -2351,7 +2360,11 @@ async function attemptGenerateVideo(
         // ghi cache NGAY sau Select, TRƯỚC lúc phát hiện kẹt, nên không xoá
         // thì lần sau getCachedAssetUrl lại trúng ĐÚNG asset đang kẹt đó,
         // khiến retry vô nghĩa (không có upload MỚI nào thực sự xảy ra).
-        const maxUploadMentionAttempts = 2;
+        // Nới 2 → 3 lần: giờ có 2 loại lỗi thoáng qua khác nhau cùng dùng
+        // chung ngân sách retry này (spinner kẹt, upload timeout) — 1 job
+        // dính CẢ HAI liên tiếp (như log thật ở trên) vẫn còn 1 lượt thử
+        // cuối thay vì hết ngay.
+        const maxUploadMentionAttempts = 3;
         for (
           let attempt = 1;
           attempt <= maxUploadMentionAttempts;
@@ -2363,14 +2376,15 @@ async function attemptGenerateVideo(
             );
             break;
           } catch (err) {
-            const isStuckSpinner =
+            const isRetryableUploadError =
               err instanceof GenerationError &&
-              STUCK_SPINNER_PATTERN.test(err.message);
-            if (!isStuckSpinner || attempt === maxUploadMentionAttempts) {
+              RETRYABLE_UPLOAD_ERROR_PATTERN.test(err.message);
+            if (!isRetryableUploadError || attempt === maxUploadMentionAttempts) {
               throw err;
             }
             console.warn(
-              `[pollo] Ảnh "${refPath}" kẹt xử lý — xoá cache, thử upload lại từ đầu (lần ${attempt + 1}/${maxUploadMentionAttempts}).`,
+              `[pollo] Ảnh "${refPath}" upload/xử lý lỗi thoáng qua — xoá cache, thử lại từ đầu (lần ${attempt + 1}/${maxUploadMentionAttempts}):`,
+              err.message,
             );
             forgetCachedAsset(refPath);
           }
