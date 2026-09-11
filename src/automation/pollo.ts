@@ -13,6 +13,7 @@ import { firstVisible, isPageCrashError } from "./selectors";
 import {
   assetPickerCardByUrlLocator,
   assetPickerCardLocator,
+  attachedReferenceImageSpinnerLocator,
   creditPaywallLocator,
   generateButtonLocator,
   mentionPickerItemByUrlLocator,
@@ -2226,20 +2227,27 @@ async function attemptGenerateVideo(
           // bounded timeout để không treo vô hạn nếu spinner kẹt vì lý do
           // khác.
           //
-          // SỬA (xác nhận qua lỗi thật LẶP LẠI sau khi deploy bản chờ 60s rồi
-          // 180s — job SHOT_19_CLIP_01_VIDEO, vẫn fail y hệt dù đã nới lên
-          // 180s): mỗi lần nới deadline lại gặp đúng job khác cần lâu hơn —
-          // theo yêu cầu người dùng, BỎ HẲN deadline, chờ tới khi THỰC SỰ hết
-          // spinner mới thôi (không đoán 1 con số cố định nữa). Vẫn an toàn vì
-          // vòng lặp poll rẻ (page.waitForTimeout, không giữ lock nào ngoài
-          // withPolloAssetUploadLock của CHÍNH job này) — log định kỳ mỗi 30s
-          // để không im lặng hoàn toàn nếu spinner kẹt thật lâu.
+          // SỬA (xác nhận qua lỗi thật: chờ tới khi hết uploadingSpinnerLocator
+          // — quét TOÀN TRANG — treo tới 1500s/25 phút KHÔNG hết, job
+          // SHOT_19_CLIP_01_VIDEO, PROP_WHEELCHAIR.png): "chờ tới khi thực sự
+          // xong" đúng hướng, nhưng quét CẢ TRANG là sai phạm vi — bắt nhầm
+          // spinner của 1 ảnh KHÁC (job khác cùng tài khoản, hoặc ảnh trước đó
+          // kẹt xử lý vĩnh viễn phía server) thay vì ĐÚNG ảnh vừa Select. Scope
+          // lại theo assetUrl (attachedReferenceImageSpinnerLocator) — chỉ chờ
+          // spinner của CHÍNH ảnh này. Giữ thêm 1 ceiling hợp lý (10 phút) làm
+          // lưới an toàn cuối: khác "1 con số đoán mù cho MỌI ảnh" (đã sai 2
+          // lần, 60s rồi 180s) — ceiling này chỉ chặn trường hợp ảnh THẬT SỰ
+          // kẹt vĩnh viễn (bug/lỗi phía pollo.ai), throw rõ ràng thay vì treo
+          // job mãi vô ích.
+          const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
+          const uploadIndexDeadlineMs = Date.now() + 10 * 60_000;
           let waitedMs = 0;
-          while (
-            (await uploadingSpinnerLocator(page)
-              .count()
-              .catch(() => 0)) > 0
-          ) {
+          while ((await spinner.count().catch(() => 0)) > 0) {
+            if (Date.now() >= uploadIndexDeadlineMs) {
+              throw new GenerationError(
+                `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
+              );
+            }
             if (waitedMs > 0 && waitedMs % 30_000 === 0) {
               console.warn(
                 `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi mention.`,

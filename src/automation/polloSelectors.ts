@@ -319,3 +319,32 @@ export const mentionPickerItemByUrlLocator = (page: Page, assetUrl: string): Loc
  */
 export const attachedReferenceImageLocator = (page: Page): Locator =>
   page.locator('[data-testid="chat-reference-uploader"]').first().locator('img[alt="image"]');
+
+/**
+ * Spinner "đang xử lý" (span.i-cus--pol-loading, CÙNG class với
+ * uploadingSpinnerLocator) NHƯNG scope ĐÚNG vào thumbnail của 1 ảnh cụ thể
+ * (khớp qua src=assetUrl) trong khay [data-testid="chat-reference-uploader"]
+ * — xác nhận qua DOM thật (storage/debug/..._SHOT_38.../..._SHOT_19...):
+ * `<div class="relative size-full"><img src="<assetUrl>">
+ * <div class="...overlay..."><span class="i-cus--pol-loading"/></div></div>`
+ * — img và overlay chứa spinner là 2 SIBLING cùng cha, nên tìm cha của img
+ * rồi tìm spinner trong đó là khớp đúng.
+ *
+ * KHÁC uploadingSpinnerLocator (quét TOÀN TRANG, không phân biệt ảnh nào) —
+ * xác nhận qua lỗi thật (job SHOT_19_CLIP_01_VIDEO, PROP_WHEELCHAIR.png):
+ * chờ hết uploadingSpinnerLocator page-scope trước khi mention treo tới
+ * 1500s (25 phút) không hết, dù ảnh CỤ THỂ đang mention có thể đã xử lý xong
+ * từ lâu — nghi bắt nhầm spinner của 1 ảnh KHÁC (job khác cùng tài khoản,
+ * hoặc 1 ảnh trước đó bị lỗi xử lý vĩnh viễn) đang kẹt vĩnh viễn ở nơi khác
+ * trên trang. Scope theo assetUrl để chỉ chờ ĐÚNG ảnh đang cần mention.
+ */
+export const attachedReferenceImageSpinnerLocator = (
+  page: Page,
+  assetUrl: string,
+): Locator =>
+  page
+    .locator('[data-testid="chat-reference-uploader"]')
+    .first()
+    .locator(`img[src="${assetUrl}"]`)
+    .locator("xpath=..")
+    .locator("span.i-cus--pol-loading");
