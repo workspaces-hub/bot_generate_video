@@ -1139,6 +1139,28 @@ function rememberUploadedAsset(imagePath: string, assetUrl: string): void {
 }
 
 /**
+ * Xoá 1 entry khỏi cache asset — dùng khi asset vừa upload bị kẹt xử lý
+ * vĩnh viễn (xem check spinner sau Select trong generateVideo, job
+ * SHOT_01_CLIP_01_VIDEO/LOCATION_CROSS_GRAND_HOTEL_BALLROOM: file gốc xác
+ * nhận hoàn toàn bình thường — PNG hợp lệ, không quá nặng — nên nhiều khả
+ * năng chỉ là pollo.ai kẹt xử lý THOÁNG QUA phía họ, không phải lỗi file).
+ * Nếu không xoá cache, lần retry sau sẽ getCachedAssetUrl trúng LẠI ĐÚNG
+ * asset đang kẹt đó (rememberUploadedAsset đã ghi cache NGAY sau khi Select,
+ * TRƯỚC lúc phát hiện spinner kẹt), khiến retry vô nghĩa — phải xoá cache để
+ * lần sau upload THẬT SỰ MỚI (setInputFiles lại từ đầu).
+ */
+function forgetCachedAsset(imagePath: string): void {
+  const cache = loadAssetCache();
+  delete cache[path.resolve(imagePath)];
+  try {
+    fs.mkdirSync(path.dirname(ASSET_CACHE_PATH), { recursive: true });
+    fs.writeFileSync(ASSET_CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[pollo] Không xoá được cache asset:", err);
+  }
+}
+
+/**
  * Mutex TOÀN CỤC (KHÔNG reentrant — TUYỆT ĐỐI không gọi lồng nhau) khoá pha
  * "upload ảnh tham chiếu + chọn nó" (submitAssetUpload) VÀ, riêng với video
  * mode "Reference to Video", CẢ bước "@ mention" tiếp theo
@@ -2214,8 +2236,15 @@ async function attemptGenerateVideo(
     // composer đã hỏng.
     if (!startFramePath && referenceImagePaths.length > 0) {
       const promptTextBeforeRefs = await editor.innerText().catch(() => "");
-      for (const refPath of referenceImagePaths) {
-        await withPolloAssetUploadLock(async () => {
+      // Regex khớp ĐÚNG message throw ở nhánh "spinner kẹt vĩnh viễn" bên
+      // dưới — dùng để phân biệt với các GenerationError KHÁC (composer
+      // reset, mention silent-fail...) mà KHÔNG nên tự retry (lỗi thật, retry
+      // vô ích).
+      const STUCK_SPINNER_PATTERN = /vẫn còn spinner "đang xử lý"/;
+
+      const uploadAndMentionReferenceImage = async (
+        refPath: string,
+      ): Promise<void> => {
           // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc
           // mới vào trang — xác nhận qua lỗi thật (job
           // microdrama_co_dau_phan_boi_twist_prompt_SHOT_01_CLIP_01_VIDEO): 1
@@ -2309,7 +2338,43 @@ async function attemptGenerateVideo(
               `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
             );
           }
-        });
+      };
+
+      for (const refPath of referenceImagePaths) {
+        // SỬA (theo yêu cầu người dùng — job SHOT_01_CLIP_01_VIDEO,
+        // LOCATION_CROSS_GRAND_HOTEL_BALLROOM.png: file gốc xác nhận hoàn
+        // toàn bình thường, PNG hợp lệ 1024x1024 — kết luận chỉ là pollo.ai
+        // kẹt xử lý THOÁNG QUA phía họ, không phải lỗi file/code): TỰ retry
+        // khi gặp đúng lỗi "spinner kẹt sau 10 phút" thay vì fail hẳn cả job,
+        // bắt người dùng bấm "Tiếp tục tạo video" thủ công. Retry PHẢI xoá
+        // cache asset trước (forgetCachedAsset) — rememberUploadedAsset đã
+        // ghi cache NGAY sau Select, TRƯỚC lúc phát hiện kẹt, nên không xoá
+        // thì lần sau getCachedAssetUrl lại trúng ĐÚNG asset đang kẹt đó,
+        // khiến retry vô nghĩa (không có upload MỚI nào thực sự xảy ra).
+        const maxUploadMentionAttempts = 2;
+        for (
+          let attempt = 1;
+          attempt <= maxUploadMentionAttempts;
+          attempt++
+        ) {
+          try {
+            await withPolloAssetUploadLock(() =>
+              uploadAndMentionReferenceImage(refPath),
+            );
+            break;
+          } catch (err) {
+            const isStuckSpinner =
+              err instanceof GenerationError &&
+              STUCK_SPINNER_PATTERN.test(err.message);
+            if (!isStuckSpinner || attempt === maxUploadMentionAttempts) {
+              throw err;
+            }
+            console.warn(
+              `[pollo] Ảnh "${refPath}" kẹt xử lý — xoá cache, thử upload lại từ đầu (lần ${attempt + 1}/${maxUploadMentionAttempts}).`,
+            );
+            forgetCachedAsset(refPath);
+          }
+        }
       }
       await sleep(5_000);
       // Theo yêu cầu người dùng: chụp ảnh xác nhận đã upload/mention ĐỦ hết

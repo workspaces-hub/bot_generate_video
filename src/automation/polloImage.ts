@@ -291,9 +291,7 @@ async function attemptGenerateImage(
     }
 
     await dismissBlockingOverlays(page);
-    await captureSnapshot(page, `${jobId}_before-select-model`, "before-select-model");
     await selectModel(page, "GPT Image 2");
-    await captureSnapshot(page, `${jobId}_after-select-model`, "after-select-model");
 
     for (const refPath of referenceImagePaths) {
       await uploadReferenceImage(page, refPath);
