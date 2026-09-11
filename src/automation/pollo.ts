@@ -1084,7 +1084,7 @@ export async function deleteStaleUploadedAssets(page: Page): Promise<void> {
  * thường, KHÔNG throw.
  */
 const ASSET_CACHE_PATH = path.resolve("./storage/pollo-asset-cache.json");
-const ASSET_CACHE_TTL_MS = 55 * 60 * 1000;
+const ASSET_CACHE_TTL_MS = 86_400_000;
 /** Xoá hẳn entry khỏi file cache sau ngần này — theo yêu cầu người dùng, tránh file phình to vô hạn (mỗi file ảnh tham chiếu MỚI của MỌI storyboard đều thêm 1 entry, KHÔNG entry nào tự mất nếu không có bước dọn này). */
 const ASSET_CACHE_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
 
