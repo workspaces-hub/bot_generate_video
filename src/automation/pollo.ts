@@ -2207,21 +2207,34 @@ async function attemptGenerateVideo(
           }
 
           await focusEditorWithRetry(page, editor);
-          // SỬA (theo yêu cầu người dùng: xác nhận "đã chọn đủ ảnh tham
-          // chiếu chưa" — job test_normal_6_rep_SHOT_05_CLIP_01_VIDEO):
-          // insertMentionForFile chỉ throw khi KHÔNG tìm/click được item
-          // trong picker — nếu click "thành công" theo Playwright (không
-          // throw) nhưng vì lý do gì đó pollo.ai không thực sự chèn mention
-          // vào prompt (vd click trúng nhưng app không xử lý kịp), trước đây
-          // KHÔNG có gì phát hiện ra, video vẫn generate tiếp với ÍT ảnh
-          // tham chiếu hơn thực tế mà không báo lỗi gì — sai lệch ÂM THẦM,
-          // đúng loại lỗi nguy hiểm nhất. So độ dài innerText của editor
-          // trước/sau mention — mention luôn chèn thêm text hiển thị (tên
-          // asset, xem chú thích insertMentionForFile: dù tên có thể bị
-          // pollo.ai gắn nhãn sai theo Character Library, VẪN là text thật
-          // được chèn thêm), nên độ dài PHẢI tăng. Không tăng = mention
-          // không thực sự xảy ra dù click không lỗi — throw ngay, đừng để
-          // lọt xuống Generate.
+
+          // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_38_CLIP_01_VIDEO,
+          // THE_NORTHERN_DUKE'S_BLADE_first_10, 2026-09-11): 5 job liên tiếp
+          // fail 100% ở insertMentionForFile ("Không chọn được ảnh... sau 4
+          // lần thử") ngay SAU KHI Select đã confirm xong. Lúc đầu nghi Select
+          // tự chèn mention khiến ảnh "biến mất" khỏi picker "@" — SAI: ảnh
+          // chụp lúc lỗi cho thấy khay thumbnail composer VẪN còn spinner
+          // "i-cus--pol-loading" (đang xử lý dở) trên ĐÚNG ảnh vừa Select,
+          // đồng thời picker "@" hiện "No assets yet" — ảnh CHƯA index xong
+          // để trở thành mentionable, không phải đã "dùng rồi". submitAssetUpload
+          // chỉ chờ hết spinner "Uploading" BÊN TRONG dialog Upload Media
+          // (giai đoạn 1: nhận file) — có 1 giai đoạn xử lý SAU đó (giai đoạn
+          // 2: index cho "@ mention", lộ ra bằng CÙNG class spinner nhưng trên
+          // khay thumbnail của composer, sau khi dialog đã đóng) mà code cũ
+          // chưa chờ. Chờ thêm tới khi HẾT spinner này (page-scope, cùng
+          // uploadingSpinnerLocator) trước khi mention — không suy đoán mù,
+          // bounded timeout để không treo vô hạn nếu spinner kẹt vì lý do
+          // khác.
+          const uploadIndexDeadlineMs = Date.now() + 60_000;
+          while (
+            (await uploadingSpinnerLocator(page)
+              .count()
+              .catch(() => 0)) > 0 &&
+            Date.now() < uploadIndexDeadlineMs
+          ) {
+            await page.waitForTimeout(2_000);
+          }
+
           const textBeforeMention = await editor.innerText().catch(() => "");
           await insertMentionForFile(page, assetUrl);
           const textAfterMention = await editor.innerText().catch(() => "");
