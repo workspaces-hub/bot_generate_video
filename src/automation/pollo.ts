@@ -723,6 +723,17 @@ export async function selectModel(page: Page, modelName: string): Promise<void> 
     .catch(() => {});
   await page.waitForTimeout(300);
 
+  // SỬA (xác nhận qua lỗi thật LẶP LẠI 100% — 6 job liên tiếp
+  // HIS_WIFE_WAS_HIS_REVENGE_CHARACTER_*, 2026-09-11): retry 20s như cũ
+  // KHÔNG đủ nếu nguyên nhân là 1 overlay/portal khác (KHÔNG PHẢI chính popup
+  // model đang mở) đè lên — "<div data-base-ui-inert>...</div> subtree
+  // intercepts pointer events" lặp lại y hệt suốt cả 20s, không tự hết như
+  // race animate thoáng qua đã ghi nhận trước đây (đó là random/hiếm, đây là
+  // 100%/mọi job). Nghi popup promo "Unlock Unlimited GPT Image 2.5" (banner
+  // "Subscriber Perk" ở đầu trang, xem debug snapshot job LOC_GALA_HALL) tự
+  // mở chồng lên đúng lúc đang chọn model Unlimited-eligible. Gọi
+  // dismissBlockingOverlays MỖI lần retry (không chỉ 1 lần lúc đầu hàm) —
+  // cùng cơ chế đã dùng cho clickWithOverlayDismiss.
   const retryDeadline = Date.now() + 20_000;
   let lastError: unknown;
   while (Date.now() < retryDeadline) {
@@ -732,6 +743,7 @@ export async function selectModel(page: Page, modelName: string): Promise<void> 
       break;
     } catch (err) {
       lastError = err;
+      await dismissBlockingOverlays(page);
       await page.waitForTimeout(400);
     }
   }

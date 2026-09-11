@@ -15,7 +15,6 @@ import {
   focusEditorWithRetry,
   gotoPolloWithRetry,
   resolveDownloadExtension,
-  selectModel,
   submitAssetUpload,
   waitForGenerateButtonEnabled,
   waitForGenerationApiStatus,
@@ -270,7 +269,16 @@ async function attemptGenerateImage(
   const context = await getPolloImageBrowserContext();
   const page = await context.newPage();
   try {
-    const url = new URL("/image", config.polloBaseUrl).toString();
+    // SỬA (theo yêu cầu người dùng): dùng THẲNG deep-link có sẵn modelName
+    // thay vì mở trang /image mặc định (model "Pollo Image 1.6", KHÔNG nằm
+    // trong Unlimited) rồi bấm popup đổi sang "GPT Image 2" qua selectModel —
+    // né hẳn bug click bị overlay/popup promo che (xem docstring selectModel)
+    // vì giờ không cần bấm chip model/mở popup nào nữa, pollo.ai tự set sẵn
+    // đúng model theo query string lúc trang vừa load.
+    const url = new URL(
+      "/image-to-image-ai?target=image-to-image&modelName=openai-gpt-image-2-0",
+      config.polloBaseUrl,
+    ).toString();
     // timeout: 0 = tắt hẳn giới hạn thời gian — cùng lý do đã sửa cho
     // generateVideo bên pollo.ts (job microdrama_co_dau_phan_boi_twist_prompt):
     // mạng/site chậm thoáng qua không nên làm rớt cả job.
@@ -289,18 +297,6 @@ async function attemptGenerateImage(
         "Chưa đăng nhập pollo.ai hoặc session đã hết hạn. Chạy: npm run login-pollo",
       );
     }
-
-    // Model mặc định của trang /image là "Pollo Image 1.6" — xác nhận qua
-    // debug snapshot THẬT (job LOC_GALA_HALL, "You don't have enough
-    // credits..."): model này KHÔNG nằm trong danh sách "Unlimited & Free
-    // Gens" của tài khoản (chỉ có MiniMax H3/H3 Max, GPT Image 2, Wan 3.0,
-    // Wan 3.0 Prime), nên switch "Unlimited" bật cũng vô nghĩa — mọi lượt
-    // generate bằng "Pollo Image 1.6" LUÔN trừ credit thật, cạn credit là
-    // fail hẳn. Chủ động chọn "GPT Image 2" (365 ngày MiniMax H3 chỉ áp
-    // dụng cho video, "GPT Image 2" là lựa chọn Unlimited-eligible cho
-    // ảnh) làm model mặc định — theo yêu cầu người dùng.
-    await dismissBlockingOverlays(page);
-    await selectModel(page, "GPT Image 2");
 
     for (const refPath of referenceImagePaths) {
       await uploadReferenceImage(page, refPath);
