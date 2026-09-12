@@ -2401,6 +2401,14 @@ async function attemptGenerateVideo(
       //   );
       // }
     }
+
+    if (duration) {
+      await dismissBlockingOverlays(page);
+      await selectDurationIfNeeded(page, duration);
+    }
+
+    await enableUnlimitedIfNotEnoughCredit(page, jobId);
+
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
