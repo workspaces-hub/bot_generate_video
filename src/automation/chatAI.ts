@@ -801,6 +801,21 @@ function isMissingScriptText(text: string): boolean {
 }
 
 /**
+ * ChatAI báo LỖI CÔNG CỤ đọc file đính kèm — KHÁC hẳn isMissingScriptText
+ * (đó là ChatAI đọc được file nhưng KHẲNG ĐỊNH SAI nội dung không có kịch
+ * bản; đây là ChatAI KHÔNG ĐỌC ĐƯỢC file chút nào, thường do trục trặc phía
+ * hạ tầng xử lý file của chính ChatGPT) — theo yêu cầu người dùng, nhận diện
+ * qua các cách diễn đạt thực tế: "chưa thể đọc (được) file", "lỗi kết nối"
+ * kèm "môi trường xử lý (tệp|file)", hoặc ChatAI tự đề nghị "dán nội dung
+ * file vào tin nhắn" (paste content trực tiếp) thay vì đọc file đính kèm.
+ */
+function isFileAccessErrorText(text: string): boolean {
+  return /chưa thể đọc (được )?file|(lỗi|sự cố) kết nối.*(môi trường|xử lý (tệp|file))|môi trường xử lý (tệp|file).*(lỗi|sự cố)|dán (nội dung|trực tiếp) (file|tệp).*vào (tin nhắn|đây|khung chat)/i.test(
+    text,
+  );
+}
+
+/**
  * Đánh dấu đầu phần kịch bản thật trong file đính kèm (xem
  * prompt_master.txt/format_output.txt) — export để handlers.ts dùng chung
  * khi chèn nội dung config.formatOuput vào TRƯỚC marker này trong file user
@@ -855,6 +870,7 @@ async function readLatestAssistantMessage(
   downloadedFiles: string[];
   isComplete: boolean;
   missingScript: boolean;
+  fileAccessError: boolean;
   messageCount: number;
 }> {
   const messages = assistantMessageLocator(page);
@@ -897,6 +913,7 @@ async function readLatestAssistantMessage(
     isComplete:
       !isIncompleteText(text) && (hasFullJsonFile || isCompletionText(text)),
     missingScript: isMissingScriptText(text),
+    fileAccessError: isFileAccessErrorText(text),
     messageCount: count,
   };
 }
@@ -1121,6 +1138,33 @@ export async function askChatAI(
         } else {
           messageToSend =
             "Kịch bản phim đã có sẵn trong nội dung tôi gửi ở trên — hãy đọc lại toàn bộ (kể cả phần cuối) và tiếp tục xử lý, không cần hỏi lại.";
+        }
+        continue;
+      }
+
+      // Theo yêu cầu người dùng: ChatAI báo LỖI CÔNG CỤ đọc file (KHÁC
+      // missingScript ở trên — không phải đọc nhầm nội dung, mà KHÔNG đọc
+      // được file chút nào, thường do trục trặc hạ tầng xử lý file phía
+      // ChatGPT) — thay vì cố upload lại file (dễ lặp lại đúng lỗi công cụ
+      // đang hỏng), đọc THẲNG nội dung file từ local rồi dán trực tiếp vào
+      // tin nhắn dạng text — né hẳn công cụ đọc file đang lỗi.
+      if (result.fileAccessError) {
+        for (const filePath of result.downloadedFiles) {
+          await fs.promises.unlink(filePath).catch(() => {});
+        }
+        const fileContent = attachmentPath
+          ? await fs.promises.readFile(attachmentPath, "utf-8").catch(() => null)
+          : null;
+
+        if (fileContent) {
+          messageToSend = `Bạn báo không đọc được file đính kèm (lỗi môi trường/công cụ xử lý file phía bạn) — đây là TOÀN BỘ nội dung file đó, dán trực tiếp vào đây, dùng đúng nội dung này để tiếp tục xử lý, không cần đọc lại file đính kèm nữa:\n\n${fileContent}`;
+        } else if (attachmentPath) {
+          await uploadAttachment(page, attachmentPath);
+          messageToSend =
+            "Tôi vừa gửi lại file đính kèm ở trên — hãy thử đọc lại và tiếp tục xử lý theo đúng workflow/quy tắc đã nêu trong đó.";
+        } else {
+          messageToSend =
+            "Nội dung cần xử lý đã có sẵn trong tin nhắn tôi gửi trước đó — hãy đọc lại và tiếp tục xử lý, không cần file đính kèm nào nữa.";
         }
         continue;
       }
