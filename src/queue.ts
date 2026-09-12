@@ -6,7 +6,7 @@ import { Telegraf, type Telegram } from "telegraf";
 import { config } from "./config";
 import { generateVideo } from "./automation/aiVideo";
 import { generateImage } from "./automation/aiVideoImage";
-import { askChatAI } from "./automation/chatAI";
+import { askChatAI, askChatAIWithInlineContent } from "./automation/chatAI";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import {
   getPolloBrowserContext,
@@ -2004,7 +2004,7 @@ async function processChatAIQueue(): Promise<void> {
       const job = chatAIJobs[0];
       const jobId = randomUUID();
       try {
-        const { downloadedFiles } = await askChatAI(
+        const { downloadedFiles } = await askChatAIWithInlineContent(
           job.prompt,
           jobId,
           job.promptFileName,

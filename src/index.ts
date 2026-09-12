@@ -21,7 +21,7 @@ import { initQueue } from "./queue";
 try {
   os.setPriority(0, -10);
 } catch (err) {
-  console.warn("[bot] Không nâng được độ ưu tiên CPU cho process bot (bỏ qua, cần quyền root):", err);
+  // console.warn("[bot] Không nâng được độ ưu tiên CPU cho process bot (bỏ qua, cần quyền root):", err);
 }
 
 // Lưới an toàn CUỐI CÙNG — bot.catch() bên dưới chỉ bắt lỗi từ middleware

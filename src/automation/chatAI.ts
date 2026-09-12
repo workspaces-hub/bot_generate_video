@@ -1235,6 +1235,181 @@ export async function askChatAI(
   }
 }
 
+/**
+ * Regex khớp khối ```code fence``` markdown thô (có nhãn ngôn ngữ hay không,
+ * vd ```json) — CHỈ dùng làm fallback cuối trong readInlineCodeBlock, phòng
+ * trường hợp hiếm ChatAI trả lời bằng markdown thô thay vì widget canvas.
+ */
+const CODE_BLOCK_PATTERN = /```(?:[a-zA-Z]*)\n([\s\S]*?)```/g;
+
+/** Trích nội dung khối markdown code LỚN NHẤT trong text (phòng trường hợp có nhiều khối) — null nếu không có khối nào. */
+function extractLargestCodeBlock(text: string): string | null {
+  const matches = [...text.matchAll(CODE_BLOCK_PATTERN)];
+  if (matches.length === 0) return null;
+  let largest = matches[0][1];
+  for (const m of matches) {
+    if (m[1].length > largest.length) largest = m[1];
+  }
+  return largest.trim() || null;
+}
+
+/**
+ * Đọc nội dung khối "code block" ChatGPT trả trong tin nhắn — xác nhận qua
+ * debug DOM thật (job 67d7ec98...): ChatGPT KHÔNG render markdown backtick
+ * thô, mà dùng 1 widget canvas riêng (`<div id="code-block-viewer">` bọc 1
+ * CodeMirror readonly, nhãn "JSON" + nút Copy phía trên — xem ảnh chụp job
+ * đó) — .innerText() của cả tin nhắn KHÔNG hề chứa ký tự "```" nên
+ * extractLargestCodeBlock luôn trả null dù rõ ràng CÓ khối JSON trên màn
+ * hình.
+ *
+ * SỬA (xác nhận qua lỗi thật LẶP LẠI 2 LẦN — file lưu ra lẫn CẢ nội dung tin
+ * nhắn đã gửi/"Pasted text(...).txt", không chỉ riêng JSON trả lời): cách cũ
+ * dùng Ctrl+A/Ctrl+C (theo đúng kỹ thuật của downloadAttachedFiles, phòng
+ * CodeMirror ảo hoá nội dung dài) — kể cả sau khi sửa click đúng vào
+ * pre.cm-content (bên trong, không phải div bọc ngoài) vẫn KHÔNG cứu được:
+ * Ctrl+A trên widget readonly này không scope đúng vào riêng nó, vẫn lọt ra
+ * chọn thêm nội dung khác trên trang. Kiểm tra lại qua debug HTML THẬT: toàn
+ * bộ nội dung JSON (tới tận dấu "]" đóng cuối) đã có sẵn ĐẦY ĐỦ trong DOM
+ * tĩnh ngay từ đầu — widget này KHÔNG ảo hoá (khác panel xem trước file đính
+ * kèm mà downloadAttachedFiles xử lý, đó là 1 component khác). Bỏ hẳn
+ * Ctrl+A/clipboard — đọc thẳng textContent của CHÍNH phần tử pre.cm-content
+ * qua evaluate (không qua .innerText(), tránh CSS/visibility ảnh hưởng,
+ * cũng không cần chọn/focus/click gì cả).
+ */
+async function readInlineCodeBlock(
+  page: Page,
+  message: Locator,
+): Promise<string | null> {
+  const viewer = message.locator("#code-block-viewer").first();
+  const viewerExists = (await viewer.count().catch(() => 0)) > 0;
+  if (!viewerExists) {
+    // Fallback: ChatAI lỡ trả markdown backtick thô thay vì widget canvas.
+    const text = await message.innerText().catch(() => "");
+    return extractLargestCodeBlock(text);
+  }
+  const codeContent = viewer.locator("pre.cm-content").first();
+  const content = await codeContent
+    .evaluate((el) => el.textContent)
+    .catch(() => null);
+  return content?.trim() || null;
+}
+
+/**
+ * Bản CLONE của askChatAI — theo yêu cầu người dùng, tránh hẳn cơ chế
+ * upload/tải file đính kèm của ChatAI (đã xác nhận qua nhiều lỗi thật —
+ * missingScript, fileAccessError...: công cụ xử lý file của ChatGPT không ổn
+ * định). Khác 2 điểm so với askChatAI:
+ *
+ * 1. KHÔNG upload file lên composer — đọc thẳng nội dung file (attachmentPath)
+ *    từ local, dán TRỰC TIẾP vào tin nhắn dạng text (kèm prompt bổ sung phía
+ *    sau), cùng hướng dẫn ChatAI PHẢI trả kết quả JSON ngay trong tin nhắn
+ *    (bọc trong khối ```json ... ```), KHÔNG tạo file đính kèm.
+ * 2. KHÔNG tải file đính kèm nào — đọc lại tin nhắn trả lời mới nhất, trích
+ *    nội dung trong khối code, tự ghi ra file cục bộ (config.chatAIResultsDir)
+ *    thay vì nhờ ChatAI tạo file.
+ *
+ * Theo yêu cầu người dùng: CHỈ gửi tin nhắn ĐÚNG 1 LẦN — KHÔNG lặp nhiều
+ * lượt chờ hoàn thiện (isIncompleteText/CONTINUE_MESSAGE/MAX_TURNS_WAITING_FOR_FILE
+ * của askChatAI), KHÔNG có bước audit (AUDIT_MESSAGE). Không thấy khối code
+ * nào trong câu trả lời thì throw luôn, không tự nhắn lại yêu cầu gửi tiếp.
+ */
+export async function askChatAIWithInlineContent(
+  prompt: string,
+  jobId: string,
+  promptFileName?: string,
+  attachmentPath?: string,
+): Promise<{ downloadedFiles: string[] }> {
+  const context = await getChatAIBrowserContext();
+  const page = await context.newPage();
+  try {
+    await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await dismissCloudflareChallengeIfPresent(page);
+
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+      .then(() => true)
+      .catch(() => false);
+    if (signedOut) {
+      throw new ChatAIError(
+        "Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai",
+      );
+    }
+
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
+
+    await selectWorkMode(page, jobId);
+    if (config.chatAIMaxEffort) {
+      await selectMaxReasoningEffort(page);
+    }
+
+    const fileContent = attachmentPath
+      ? await fs.promises.readFile(attachmentPath, "utf-8").catch(() => null)
+      : null;
+
+    const INLINE_RESULT_INSTRUCTION =
+      "QUAN TRỌNG: Trả kết quả JSON TRỰC TIẾP trong tin nhắn trả lời, bọc trong khối code (```json ... ```) — KHÔNG tạo file đính kèm, KHÔNG dùng công cụ tạo file.";
+
+    const messageToSend = fileContent
+      ? `${fileContent}\n\n${prompt}\n\n${INLINE_RESULT_INSTRUCTION}`
+      : `${prompt}\n\n${INLINE_RESULT_INSTRUCTION}`;
+
+    await sendMessage(page, messageToSend);
+
+    const messages = assistantMessageLocator(page);
+    // Chờ tới khi có ÍT NHẤT 1 tin nhắn trả lời — cùng cơ chế poll đã dùng
+    // trong readLatestAssistantMessage (xem docstring hàm đó: trang có thể
+    // kẹt loading 1 lúc SAU KHI sendMessage đã xác nhận xong).
+    let count = await messages.count();
+    const pollDeadline = Date.now() + 30_000;
+    while (count === 0 && Date.now() < pollDeadline) {
+      await page.waitForTimeout(1000);
+      count = await messages.count();
+    }
+    if (count === 0) {
+      throw new ChatAIError(
+        "Không tìm thấy câu trả lời nào từ ChatAI trên trang",
+      );
+    }
+
+    const latest = messages.last();
+    await captureSnapshot(
+      page,
+      jobId + "_" + (promptFileName || ""),
+      "result",
+    );
+
+    const resultJson = await readInlineCodeBlock(page, latest);
+    if (!resultJson) {
+      throw new ChatAIError(
+        "ChatAI không trả kết quả JSON trong khối code nào cả.",
+      );
+    }
+
+    await fs.promises.mkdir(config.chatAIResultsDir, { recursive: true });
+    const promptFileBaseName = promptFileName
+      ? path.basename(promptFileName, path.extname(promptFileName))
+      : jobId;
+    const filePath = path.join(
+      config.chatAIResultsDir,
+      `${promptFileBaseName}.json`,
+    );
+    await fs.promises.writeFile(filePath, resultJson, "utf-8");
+
+    return { downloadedFiles: [filePath] };
+  } catch (err) {
+    await captureErrorSnapshot(page, jobId, err);
+    throw err instanceof ChatAIError
+      ? err
+      : new ChatAIError(err instanceof Error ? err.message : String(err));
+  } finally {
+    await page.close();
+  }
+}
+
 /** Bỏ dấu ngoặc kép/backtick bọc ngoài và khối ```code fence``` (nếu ChatAI lỡ trả lời kèm định dạng) khỏi prompt đã viết lại. */
 function cleanRevisedPrompt(text: string): string {
   return text
