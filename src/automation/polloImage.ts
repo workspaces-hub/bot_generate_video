@@ -316,7 +316,7 @@ async function attemptGenerateImage(
     // dùng thẳng jobId) — writeSnapshotFiles ghi đè theo TÊN FILE = jobId,
     // trùng với captureErrorSnapshot(page, jobId, err) ở catch cuối hàm nếu
     // dùng chung tên, sẽ mất ảnh "before" khi job lỗi (lúc cần xem nhất).
-    await captureSnapshot(page, `${jobId}_before-generate`, "before-click-generate");
+    // await captureSnapshot(page, `${jobId}_before-generate`, "before-click-generate");
     await dismissBlockingOverlays(page);
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
