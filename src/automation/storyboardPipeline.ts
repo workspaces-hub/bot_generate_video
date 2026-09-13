@@ -284,14 +284,21 @@ export function generatedDirFor(inputPath: string): string {
  * input JSON vào đó — gọi SỚM, NGAY sau khi ChatAI trả JSON xong (xem
  * processChatAIQueue trong queue.ts), TRƯỚC KHI user xác nhận có gen ảnh hay
  * không, để user có thể upload ảnh/JSON thay thế vào đúng folder trong lúc
- * chờ xác nhận (xem tryReplaceGeneratedFile trong handlers.ts). Các hàm
- * generate*ForFile bên dưới cũng tự làm việc này khi chạy (idempotent, ghi
- * đè an toàn) nên gọi hàm này trước không ảnh hưởng gì tới chúng.
+ * chờ xác nhận (xem tryReplaceGeneratedFile trong handlers.ts).
+ *
+ * SỬA (theo yêu cầu người dùng): CHỈ gọi ở lượt ChatAI trả JSON MỚI (KHÔNG
+ * gọi lại lúc resume/"Tiếp tục tạo video" — xem continueFailedStoryboardJob/
+ * generatedDirFor trong queue.ts/handlers.ts, cả 2 đọc thẳng generatedDirFor,
+ * không qua hàm này) — nên xoá sạch folder CŨ (nếu trùng tên từ 1 lần chạy
+ * trước) trước khi tạo lại là an toàn, không phá dở dang tiến trình đang
+ * resume nào. Tránh lẫn ảnh/video CŨ (khác nội dung) vào 1 folder MỚI cùng
+ * tên.
  */
 export async function ensureGeneratedFolder(
   inputPath: string,
 ): Promise<string> {
   const outputDir = generatedDirFor(inputPath);
+  await fs.promises.rm(outputDir, { recursive: true, force: true });
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
