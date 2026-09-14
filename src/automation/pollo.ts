@@ -1858,10 +1858,18 @@ export async function captureResultId(
 
 interface ResultBaseline {
   count: number;
+  /** src của <video class="vjs-tech"> (nếu có) NGAY TRƯỚC lúc bấm Generate — dùng để so sánh trong waitForNewResult (mode "Reference to Video", xem docstring ở đó), KHÔNG dựa vào timestamp nhúng trong URL (không phải video result nào cũng có, xem extractAssetTimestampMs). */
+  videoSrc: string | null;
 }
 
 async function captureResultBaseline(page: Page): Promise<ResultBaseline> {
-  return { count: await resultCardLocator(page).count() };
+  return {
+    count: await resultCardLocator(page).count(),
+    videoSrc: await resultVideoLocator(page)
+      .first()
+      .getAttribute("src")
+      .catch(() => null),
+  };
 }
 
 /** URL asset pollo.ai luôn có dạng ".../<13 số epoch ms>-<uuid>.<ext>" — dùng để xếp thời gian tạo, xem findRecentVideoViaCreatePage. */
@@ -2009,19 +2017,25 @@ async function waitForNewResult(
     // BAO GIỜ kích hoạt được ở mode này, và job vẫn treo tới hết timeoutMs dù
     // đã xong từ lâu. /create fallback (bên dưới) cũng không cứu được lần
     // này (có thể do "Reference to Video" thuộc project riêng, không lên
-    // feed /create chung). Kiểm tra thẳng resultVideoLocator(page) mỗi vòng
-    // lặp — chỉ nhận nếu timestamp nhúng trong URL (extractAssetTimestampMs)
-    // MỚI HƠN lúc bấm Generate, tránh nhận nhầm video CŨ còn sót lại từ job
-    // trước trong cùng phiên chat.
+    // feed /create chung).
+    //
+    // SỬA (xác nhận qua lỗi thật LẶP LẠI — job you_can't_take_him_SHOT_02_CLIP_01_VIDEO):
+    // check timestamp (extractAssetTimestampMs, yêu cầu URL dạng ".../<13 số
+    // epoch ms>-<uuid>.<ext>") KHÔNG áp dụng được cho URL video RESULT — debug
+    // snapshot cho thấy video đã xong THẬT (poster/controls/HD badge đầy đủ)
+    // với src dạng ".../ori/<id không phải số>-0-<hash>.mp4" (KHÔNG có 13 số
+    // epoch nào), khiến extractAssetTimestampMs luôn trả null, nhánh này
+    // không bao giờ kích hoạt được cho mode video — bot treo tới hết
+    // timeoutMs dù video đã hiện ngay trên page từ lâu. So sánh trực tiếp với
+    // src TRƯỚC lúc bấm Generate (baseline.videoSrc, xem captureResultBaseline)
+    // thay vì đoán qua timestamp — đáng tin cậy hơn vì không phụ thuộc format
+    // URL cụ thể.
     const pageVideoSrc = await resultVideoLocator(page)
       .first()
       .getAttribute("src")
       .catch(() => null);
-    if (pageVideoSrc) {
-      const ts = extractAssetTimestampMs(pageVideoSrc);
-      if (ts !== null && ts >= generateClickedAtMs - 60_000) {
-        return { src: pageVideoSrc, card: null };
-      }
+    if (pageVideoSrc && pageVideoSrc !== baseline.videoSrc) {
+      return { src: pageVideoSrc, card: null };
     }
 
     // Xác nhận qua lỗi thật (xem docstring creditPaywallLocator trong
