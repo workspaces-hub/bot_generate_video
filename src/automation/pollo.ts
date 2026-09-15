@@ -705,7 +705,10 @@ function buildDeepLinkUrl(
  * qua. Sau đó bắt buộc ĐỌC LẠI nhãn chip để xác nhận đã đổi đúng model — nếu
  * không đổi thì throw lỗi rõ ràng thay vì im lặng tiếp tục chạy sai model.
  */
-export async function selectModel(page: Page, modelName: string): Promise<void> {
+export async function selectModel(
+  page: Page,
+  modelName: string,
+): Promise<void> {
   const chip = modelChipLocator(page).first();
   const currentLabel = await chip.innerText().catch(() => "");
   if (currentLabel.trim().toLowerCase() === modelName.toLowerCase()) return;
@@ -745,7 +748,9 @@ export async function selectModel(page: Page, modelName: string): Promise<void> 
     })
     .first();
   const dialogRow = page
-    .locator(`div[data-button-name]:has(p.font-semibold:text-is("${modelName}"))`)
+    .locator(
+      `div[data-button-name]:has(p.font-semibold:text-is("${modelName}"))`,
+    )
     .first();
   const useCompactRow = (await compactRow.count().catch(() => 0)) > 0;
   const row = useCompactRow ? compactRow : dialogRow;
@@ -2245,113 +2250,126 @@ async function attemptGenerateVideo(
       const uploadAndMentionReferenceImage = async (
         refPath: string,
       ): Promise<void> => {
-          // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc
-          // mới vào trang — xác nhận qua lỗi thật (job
-          // microdrama_co_dau_phan_boi_twist_prompt_SHOT_01_CLIP_01_VIDEO): 1
-          // popup coco-modal-wrap MỚI xuất hiện SAU đó (lúc đã chọn model/gõ
-          // prompt xong), chặn click nút "Upload Media" mà không có gì dismiss
-          // lại. Gọi lại NGAY TRƯỚC mỗi lần upload — rẻ, best-effort, không
-          // lỗi nếu không có gì để đóng.
-          await dismissBlockingOverlays(page);
-          const assetUrl = await uploadReferenceVideoImage(page, refPath);
+        // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc
+        // mới vào trang — xác nhận qua lỗi thật (job
+        // microdrama_co_dau_phan_boi_twist_prompt_SHOT_01_CLIP_01_VIDEO): 1
+        // popup coco-modal-wrap MỚI xuất hiện SAU đó (lúc đã chọn model/gõ
+        // prompt xong), chặn click nút "Upload Media" mà không có gì dismiss
+        // lại. Gọi lại NGAY TRƯỚC mỗi lần upload — rẻ, best-effort, không
+        // lỗi nếu không có gì để đóng.
+        await dismissBlockingOverlays(page);
+        const assetUrl = await uploadReferenceVideoImage(page, refPath);
 
-          // SỬA (xác nhận qua test thật — người dùng quan sát trực tiếp):
-          // click "Select" xong không có nghĩa là navigation (nếu có) đã
-          // hoàn tất hẳn — chờ thêm 10s NGAY SAU Select trước khi kiểm tra
-          // composer/mention giúp loại bỏ hẳn hiện tượng "composer bị clear"
-          // (không còn tái hiện được sau khi thêm chờ này, trong khi không
-          // chờ thì tái hiện được). Chấp nhận tốn thêm 10s/ảnh — rẻ hơn hẳn
-          // so với generate hỏng vì thiếu tham chiếu.
-          await page.waitForTimeout(10_000);
+        // SỬA (xác nhận qua test thật — người dùng quan sát trực tiếp):
+        // click "Select" xong không có nghĩa là navigation (nếu có) đã
+        // hoàn tất hẳn — chờ thêm 10s NGAY SAU Select trước khi kiểm tra
+        // composer/mention giúp loại bỏ hẳn hiện tượng "composer bị clear"
+        // (không còn tái hiện được sau khi thêm chờ này, trong khi không
+        // chờ thì tái hiện được). Chấp nhận tốn thêm 10s/ảnh — rẻ hơn hẳn
+        // so với generate hỏng vì thiếu tham chiếu.
+        await page.waitForTimeout(10_000);
 
-          // Xác nhận composer chưa bị navigation-reset SAU KHI Select (bên
-          // trong uploadReferenceVideoImage) — kiểm tra NGAY trước khi mention,
-          // tránh mention vào 1 editor đã rỗng/sai (throw sẽ mơ hồ hơn hẳn ở
-          // đây so với để lọt xuống insertMentionForFile).
-          //
-          // SỬA (xác nhận qua lỗi thật — job firemetwice_SHOT_01/02/06: throw
-          // liên tiếp dù composer HOÀN TOÀN BÌNH THƯỜNG): check cũ coi BẤT KỲ
-          // giảm nào (dù chỉ 7-11 ký tự) là reset — quá nhạy. Debug snapshot
-          // xác nhận composer vẫn còn nguyên prompt + media-chip thật (Select
-          // tự chèn mention như side-effect, xem ensureUploadDialogOpen) —
-          // chênh lệch nhỏ chỉ là nhiễu bình thường từ việc chèn chip (khác
-          // hẳn navigation-reset THẬT, vốn luôn làm rớt về GẦN RỖNG theo lịch
-          // sử đã ghi nhận). Chỉ coi là reset khi giảm ĐÁNG KỂ (còn chưa tới
-          // nửa độ dài ban đầu), tránh false positive với nhiễu nhỏ.
-          const promptTextAfterSelect = await editor
-            .innerText()
-            .catch(() => "");
-          if (
-            promptTextBeforeRefs.length > 0 &&
-            promptTextAfterSelect.length < promptTextBeforeRefs.length * 0.5
-          ) {
+        // Xác nhận composer chưa bị navigation-reset SAU KHI Select (bên
+        // trong uploadReferenceVideoImage) — kiểm tra NGAY trước khi mention,
+        // tránh mention vào 1 editor đã rỗng/sai (throw sẽ mơ hồ hơn hẳn ở
+        // đây so với để lọt xuống insertMentionForFile).
+        //
+        // SỬA (xác nhận qua lỗi thật — job firemetwice_SHOT_01/02/06: throw
+        // liên tiếp dù composer HOÀN TOÀN BÌNH THƯỜNG): check cũ coi BẤT KỲ
+        // giảm nào (dù chỉ 7-11 ký tự) là reset — quá nhạy. Debug snapshot
+        // xác nhận composer vẫn còn nguyên prompt + media-chip thật (Select
+        // tự chèn mention như side-effect, xem ensureUploadDialogOpen) —
+        // chênh lệch nhỏ chỉ là nhiễu bình thường từ việc chèn chip (khác
+        // hẳn navigation-reset THẬT, vốn luôn làm rớt về GẦN RỖNG theo lịch
+        // sử đã ghi nhận). Chỉ coi là reset khi giảm ĐÁNG KỂ (còn chưa tới
+        // nửa độ dài ban đầu), tránh false positive với nhiễu nhỏ.
+        const promptTextAfterSelect = await editor.innerText().catch(() => "");
+        if (
+          promptTextBeforeRefs.length > 0 &&
+          promptTextAfterSelect.length < promptTextBeforeRefs.length * 0.5
+        ) {
+          throw new GenerationError(
+            `Composer có dấu hiệu bị reset (navigation thật của pollo.ai) ngay sau khi Select ảnh "${refPath}" — prompt trước ${promptTextBeforeRefs.length} ký tự, sau chỉ còn ${promptTextAfterSelect.length} ký tự.`,
+          );
+        }
+
+        await focusEditorWithRetry(page, editor);
+
+        // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_38_CLIP_01_VIDEO,
+        // THE_NORTHERN_DUKE'S_BLADE_first_10, 2026-09-11): 5 job liên tiếp
+        // fail 100% ở insertMentionForFile ("Không chọn được ảnh... sau 4
+        // lần thử") ngay SAU KHI Select đã confirm xong. Lúc đầu nghi Select
+        // tự chèn mention khiến ảnh "biến mất" khỏi picker "@" — SAI: ảnh
+        // chụp lúc lỗi cho thấy khay thumbnail composer VẪN còn spinner
+        // "i-cus--pol-loading" (đang xử lý dở) trên ĐÚNG ảnh vừa Select,
+        // đồng thời picker "@" hiện "No assets yet" — ảnh CHƯA index xong
+        // để trở thành mentionable, không phải đã "dùng rồi". submitAssetUpload
+        // chỉ chờ hết spinner "Uploading" BÊN TRONG dialog Upload Media
+        // (giai đoạn 1: nhận file) — có 1 giai đoạn xử lý SAU đó (giai đoạn
+        // 2: index cho "@ mention", lộ ra bằng CÙNG class spinner nhưng trên
+        // khay thumbnail của composer, sau khi dialog đã đóng) mà code cũ
+        // chưa chờ. Chờ thêm tới khi HẾT spinner này (page-scope, cùng
+        // uploadingSpinnerLocator) trước khi mention — không suy đoán mù,
+        // bounded timeout để không treo vô hạn nếu spinner kẹt vì lý do
+        // khác.
+        //
+        // SỬA (xác nhận qua lỗi thật: chờ tới khi hết uploadingSpinnerLocator
+        // — quét TOÀN TRANG — treo tới 1500s/25 phút KHÔNG hết, job
+        // SHOT_19_CLIP_01_VIDEO, PROP_WHEELCHAIR.png): "chờ tới khi thực sự
+        // xong" đúng hướng, nhưng quét CẢ TRANG là sai phạm vi — bắt nhầm
+        // spinner của 1 ảnh KHÁC (job khác cùng tài khoản, hoặc ảnh trước đó
+        // kẹt xử lý vĩnh viễn phía server) thay vì ĐÚNG ảnh vừa Select. Scope
+        // lại theo assetUrl (attachedReferenceImageSpinnerLocator) — chỉ chờ
+        // spinner của CHÍNH ảnh này. Giữ thêm 1 ceiling hợp lý (10 phút) làm
+        // lưới an toàn cuối: khác "1 con số đoán mù cho MỌI ảnh" (đã sai 2
+        // lần, 60s rồi 180s) — ceiling này chỉ chặn trường hợp ảnh THẬT SỰ
+        // kẹt vĩnh viễn (bug/lỗi phía pollo.ai), throw rõ ràng thay vì treo
+        // job mãi vô ích.
+        // Chờ hết spinner "đang xử lý" trên khay thumbnail composer TRƯỚC
+        // khi mention — xác nhận qua lỗi thật (job put_the_ring_on_her_SHOT_01_CLIP_01_VIDEO):
+        // thiếu bước chờ này thì bấm Generate/mention ngay khi ảnh còn xử
+        // lý dở, nút Generate bị pollo.ai tự khoá (aria-disabled="true"),
+        // KHÔNG PHẢI vì "tài khoản tồn đọng generation khác" như
+        // waitForGenerateButtonEnabled từng giả định. Ceiling 10 phút/ảnh
+        // làm lưới an toàn: ảnh có thể bị pollo.ai giữ ở hàng chờ kiểm
+        // duyệt nội dung KHÔNG BAO GIỜ tự xong (xem job A_MILLION_BOTTLES_SCREAM_
+        // SHOT_01_CLIP_02_VIDEO, CHAR_MAXENCE_DE_VILLANDRY.png) — throw rõ
+        // ràng sau 10 phút thay vì treo vô hạn.
+        const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
+        const uploadIndexDeadlineMs = Date.now() + 10 * 60_000;
+        let waitedMs = 0;
+        while ((await spinner.count().catch(() => 0)) > 0) {
+          if (Date.now() >= uploadIndexDeadlineMs) {
             throw new GenerationError(
-              `Composer có dấu hiệu bị reset (navigation thật của pollo.ai) ngay sau khi Select ảnh "${refPath}" — prompt trước ${promptTextBeforeRefs.length} ký tự, sau chỉ còn ${promptTextAfterSelect.length} ký tự.`,
+              `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
             );
           }
-
-          await focusEditorWithRetry(page, editor);
-
-          // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_38_CLIP_01_VIDEO,
-          // THE_NORTHERN_DUKE'S_BLADE_first_10, 2026-09-11): 5 job liên tiếp
-          // fail 100% ở insertMentionForFile ("Không chọn được ảnh... sau 4
-          // lần thử") ngay SAU KHI Select đã confirm xong. Lúc đầu nghi Select
-          // tự chèn mention khiến ảnh "biến mất" khỏi picker "@" — SAI: ảnh
-          // chụp lúc lỗi cho thấy khay thumbnail composer VẪN còn spinner
-          // "i-cus--pol-loading" (đang xử lý dở) trên ĐÚNG ảnh vừa Select,
-          // đồng thời picker "@" hiện "No assets yet" — ảnh CHƯA index xong
-          // để trở thành mentionable, không phải đã "dùng rồi". submitAssetUpload
-          // chỉ chờ hết spinner "Uploading" BÊN TRONG dialog Upload Media
-          // (giai đoạn 1: nhận file) — có 1 giai đoạn xử lý SAU đó (giai đoạn
-          // 2: index cho "@ mention", lộ ra bằng CÙNG class spinner nhưng trên
-          // khay thumbnail của composer, sau khi dialog đã đóng) mà code cũ
-          // chưa chờ. Chờ thêm tới khi HẾT spinner này (page-scope, cùng
-          // uploadingSpinnerLocator) trước khi mention — không suy đoán mù,
-          // bounded timeout để không treo vô hạn nếu spinner kẹt vì lý do
-          // khác.
-          //
-          // SỬA (xác nhận qua lỗi thật: chờ tới khi hết uploadingSpinnerLocator
-          // — quét TOÀN TRANG — treo tới 1500s/25 phút KHÔNG hết, job
-          // SHOT_19_CLIP_01_VIDEO, PROP_WHEELCHAIR.png): "chờ tới khi thực sự
-          // xong" đúng hướng, nhưng quét CẢ TRANG là sai phạm vi — bắt nhầm
-          // spinner của 1 ảnh KHÁC (job khác cùng tài khoản, hoặc ảnh trước đó
-          // kẹt xử lý vĩnh viễn phía server) thay vì ĐÚNG ảnh vừa Select. Scope
-          // lại theo assetUrl (attachedReferenceImageSpinnerLocator) — chỉ chờ
-          // spinner của CHÍNH ảnh này. Giữ thêm 1 ceiling hợp lý (10 phút) làm
-          // lưới an toàn cuối: khác "1 con số đoán mù cho MỌI ảnh" (đã sai 2
-          // lần, 60s rồi 180s) — ceiling này chỉ chặn trường hợp ảnh THẬT SỰ
-          // kẹt vĩnh viễn (bug/lỗi phía pollo.ai), throw rõ ràng thay vì treo
-          // job mãi vô ích.
-          // TẮT mention (giữ nguyên quyết định trước — pollo.ai có thể giữ 1
-          // ảnh ở hàng chờ kiểm duyệt nội dung KHÔNG BAO GIỜ tự xong, xem job
-          // A_MILLION_BOTTLES_SCREAM_SHOT_01_CLIP_02_VIDEO, CHAR_MAXENCE_DE_VILLANDRY.png
-          // — mention lúc đó sẽ treo vô ích). NHƯNG VẪN PHẢI chờ hết spinner
-          // "đang xử lý" trên khay thumbnail composer trước khi generate — xác
-          // nhận qua lỗi thật (job put_the_ring_on_her_SHOT_01_CLIP_01_VIDEO):
-          // tắt mention kéo theo tắt LUÔN bước chờ này, khiến bấm Generate
-          // ngay khi CẢ 5 ảnh tham chiếu còn đang xử lý dở — nút Generate bị
-          // pollo.ai tự khoá (aria-disabled="true") vì lý do đó, KHÔNG PHẢI vì
-          // "tài khoản đang tồn đọng generation khác" như waitForGenerateButtonEnabled
-          // từng giả định — treo mãi 20 phút rồi mới báo lỗi mơ hồ. Giữ lại
-          // ceiling 10 phút/ảnh làm lưới an toàn (ảnh bị kẹt vĩnh viễn thật thì
-          // vẫn throw rõ ràng, không mention gì thêm).
-          const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
-          const uploadIndexDeadlineMs = Date.now() + 10 * 60_000;
-          let waitedMs = 0;
-          while ((await spinner.count().catch(() => 0)) > 0) {
-            if (Date.now() >= uploadIndexDeadlineMs) {
-              throw new GenerationError(
-                `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
-              );
-            }
-            if (waitedMs > 0 && waitedMs % 30_000 === 0) {
-              console.warn(
-                `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi generate.`,
-              );
-            }
-            await page.waitForTimeout(2_000);
-            waitedMs += 2_000;
+          if (waitedMs > 0 && waitedMs % 30_000 === 0) {
+            console.warn(
+              `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi mention.`,
+            );
           }
+          await page.waitForTimeout(2_000);
+          waitedMs += 2_000;
+        }
+
+        // BẬT LẠI mention — theo yêu cầu người dùng: pollo.ai yêu cầu PHẢI
+        // "@ mention" thì model mới thực sự dùng ảnh làm tham chiếu (xác
+        // nhận qua placeholder thật của pollo.ai: "Upload images or videos
+        // and @ them as references to guide your video."), không mention
+        // thì video generate KHÔNG dùng ảnh tham chiếu nào cả. Đã chờ hết
+        // spinner "đang xử lý" ở trên (xác nhận qua job SHOT_38_CLIP_01_VIDEO
+        // trước đây: mention fail vì ảnh CHƯA index xong, không phải vì
+        // Select đã "dùng" ảnh) nên giờ mention lại an toàn hơn hẳn lần
+        // trước.
+        const textBeforeMention = await editor.innerText().catch(() => "");
+        await insertMentionForFile(page, assetUrl);
+        const textAfterMention = await editor.innerText().catch(() => "");
+        if (textAfterMention.length <= textBeforeMention.length) {
+          throw new GenerationError(
+            `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
+          );
+        }
       };
 
       // SỬA (theo yêu cầu người dùng): BỎ retry 2-3 lần khi upload/mention ảnh
@@ -2406,17 +2424,17 @@ async function attemptGenerateVideo(
           "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload/mention ảnh tham chiếu (mất hết composer/prompt) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi mention.",
         );
       }
-      // const mentionedCount = await page.locator("[data-media-chip]").count();
-      // await captureSnapshot(
-      //   page,
-      //   `${jobId}_ref-check`,
-      //   `mentioned-${mentionedCount}-of-${referenceImagePaths.length}`,
-      // );
-      // if (mentionedCount < referenceImagePaths.length) {
-      //   throw new GenerationError(
-      //     `Chỉ mention được ${mentionedCount}/${referenceImagePaths.length} ảnh tham chiếu vào prompt trước khi generate — dừng lại để tránh generate thiếu tham chiếu (xem storage/debug/${jobId}_ref-check.png).`,
-      //   );
-      // }
+      const mentionedCount = await page.locator("[data-media-chip]").count();
+      await captureSnapshot(
+        page,
+        `${jobId}_ref-check`,
+        `mentioned-${mentionedCount}-of-${referenceImagePaths.length}`,
+      );
+      if (mentionedCount < referenceImagePaths.length) {
+        throw new GenerationError(
+          `Chỉ mention được ${mentionedCount}/${referenceImagePaths.length} ảnh tham chiếu vào prompt trước khi generate — dừng lại để tránh generate thiếu tham chiếu (xem storage/debug/${jobId}_ref-check.png).`,
+        );
+      }
     }
 
     if (duration) {
