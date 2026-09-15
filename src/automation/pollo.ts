@@ -14,6 +14,7 @@ import {
   aspectRatioOptionLocator,
   assetPickerCardByUrlLocator,
   assetPickerCardLocator,
+  assetPickerGridLocator,
   attachedReferenceImageSpinnerLocator,
   chatFooterFieldsChipLocator,
   creditPaywallLocator,
@@ -1350,10 +1351,33 @@ export async function submitAssetUpload(
   const cachedUrl = getCachedAssetUrl(imagePath);
   if (cachedUrl) {
     const existingCard = assetPickerCardByUrlLocator(page, cachedUrl).first();
-    const stillThere = await existingCard
+    let stillThere = await existingCard
       .waitFor({ state: "visible", timeout: 3000 })
       .then(() => true)
       .catch(() => false);
+
+    // Chưa thấy ngay — thử cuộn xuống lưới Uploads (theo yêu cầu người
+    // dùng): card cũ có thể chỉ đang nằm dưới khung nhìn ban đầu (thư viện
+    // càng nhiều ảnh, card cũ càng bị đẩy xuống), không phải đã biến mất
+    // thật. Cuộn dần từng đợt, kiểm tra lại ngay sau mỗi lần — tối đa 5 lần
+    // trước khi coi là thực sự không còn (rơi xuống upload lại bên dưới).
+    const grid = assetPickerGridLocator(page).first();
+    for (
+      let scrollAttempt = 1;
+      scrollAttempt <= 5 && !stillThere;
+      scrollAttempt++
+    ) {
+      await grid
+        .evaluate((el) => el.scrollBy(0, el.clientHeight))
+        .catch(() => {});
+      await page.waitForTimeout(5000);
+      stillThere = await existingCard
+        .waitFor({ state: "visible", timeout: 2000 })
+        .then(() => true)
+        .catch(() => false);
+      if (stillThere) break;
+    }
+
     if (stillThere) {
       // noWaitAfter — xác nhận qua log lỗi thật (SHOT_02_CLIP_01_VIDEO,
       // 2026-09-09): "click action done" xong rồi TREO tiếp ở bước Playwright
@@ -2478,14 +2502,66 @@ async function attemptGenerateVideo(
               );
             await reopenDialog().catch(() => {});
             const card = assetPickerCardByUrlLocator(page, assetUrl).first();
-            const cardStillThere = await card
+            let cardStillThere = await card
               .waitFor({ state: "visible", timeout: 5_000 })
               .then(() => true)
               .catch(() => false);
+
+            // Chưa thấy ngay — thử cuộn xuống lưới Uploads (giống nhánh
+            // cachedUrl trong submitAssetUpload): card có thể chỉ đang nằm
+            // dưới khung nhìn ban đầu do thư viện đã có thêm nhiều ảnh mới kể
+            // từ lúc upload ảnh này, không phải đã biến mất thật. Cuộn dần,
+            // kiểm tra lại sau mỗi lần — tối đa 5 lần.
+            if (!cardStillThere) {
+              const grid = assetPickerGridLocator(page).first();
+              for (
+                let scrollAttempt = 1;
+                scrollAttempt <= 5 && !cardStillThere;
+                scrollAttempt++
+              ) {
+                await grid
+                  .evaluate((el) => el.scrollBy(0, el.clientHeight))
+                  .catch(() => {});
+                await page.waitForTimeout(5000);
+                cardStillThere = await card
+                  .waitFor({ state: "visible", timeout: 2_000 })
+                  .then(() => true)
+                  .catch(() => false);
+                if (cardStillThere) break;
+              }
+            }
+
             if (cardStillThere) {
               await clickAssetPickerCard(card).catch(() => {});
               await confirmAssetPickerSelection(page).catch(() => {});
               await page.waitForTimeout(3_000);
+
+              // Xác nhận qua debug snapshot THẬT (job
+              // HER_NAME_CAME_OFF_THE_DOOR_SHOT_01_CLIP_01_VIDEO, 2026-09-15):
+              // confirmAssetPickerSelection dùng noWaitAfter nên click "Select"
+              // không throw KHÔNG có nghĩa dialog Uploads đã thực sự đóng —
+              // snapshot lúc lỗi mention (4 lần thử đều fail) cho thấy dialog
+              // VẪN CÒN MỞ (card "Select (1/9)" vẫn hiện, chưa đóng) ngay tại
+              // thời điểm insertMentionForFile chạy. Gõ "@"/bấm tab "All" lúc
+              // dialog Uploads còn che composer chắc chắn không thể mở đúng
+              // picker "@ mention" được — đây là nguyên nhân TRỰC TIẾP hơn hẳn
+              // giả thuyết "asset bị đẩy khỏi danh sách gần đây". Xác minh
+              // dialog đã đóng hẳn (fileInput detached) trước khi break; chưa
+              // đóng thì chủ động bấm Escape rồi xác minh lại.
+              const fileInput = uploadDialogFileInputLocator(page);
+              const dialogClosed = await fileInput
+                .waitFor({ state: "detached", timeout: 5_000 })
+                .then(() => true)
+                .catch(() => false);
+              if (!dialogClosed) {
+                console.warn(
+                  `[pollo] Ảnh "${refPath}" — dialog Uploads vẫn còn mở sau khi bấm Select lại — chủ động đóng bằng Escape trước khi mention.`,
+                );
+                await page.keyboard.press("Escape").catch(() => {});
+                await fileInput
+                  .waitFor({ state: "detached", timeout: 5_000 })
+                  .catch(() => {});
+              }
             }
 
             if ((await spinner.count().catch(() => 0)) > 0) {

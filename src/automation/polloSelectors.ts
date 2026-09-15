@@ -63,6 +63,10 @@ export const uploadDialogFileInputLocator = (page: Page): Locator =>
 export const assetPickerCardLocator = (page: Page): Locator =>
   page.locator('[data-testid="asset-picker-card"]');
 
+/** Container lưới "Uploads" chứa các assetPickerCardLocator — dùng để cuộn xuống tìm card cũ (xem submitAssetUpload, nhánh cachedUrl). */
+export const assetPickerGridLocator = (page: Page): Locator =>
+  page.locator('[data-testid="asset-picker-grid"]');
+
 /**
  * Cùng 1 card như assetPickerCardLocator, khớp ĐÚNG theo data-asset-url (thay
  * vì vị trí) — dùng để CHỌN LẠI 1 ảnh ĐÃ upload trước đó (xem cache
