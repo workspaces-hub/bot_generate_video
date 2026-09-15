@@ -136,6 +136,18 @@ export const modelDialogOptionLocator = (page: Page, modelName: string): Locator
 export const paramsChipLocator = (page: Page): Locator =>
   page.locator('div[data-button-name="params"][role="button"]');
 
+/**
+ * Chip tổng hợp Aspect Ratio/Video Length/Resolution/count — xác nhận qua DOM
+ * thật (mode "Reference to Video" + model MiniMax H3, job
+ * test-aspect-ratio-*): KHÁC HẲN paramsChipLocator ở trên (locator đó không
+ * khớp gì trong mode/model này — chỉ khớp chip MODEL, không phải chip params
+ * tổng hợp). Chip thật là [data-testid="chat-footer-fields"], hiện text dạng
+ * "Auto/5s/480p/1" (Aspect Ratio/Video Length/Resolution/count), bấm mở popup
+ * chứa các section (Aspect Ratio, Video Length, Resolution...).
+ */
+export const chatFooterFieldsChipLocator = (page: Page): Locator =>
+  page.locator('[data-testid="chat-footer-fields"]');
+
 /** Popup/dialog mở ra sau khi bấm modelChipLocator/paramsChipLocator — CHƯA có DOM thật xác nhận cấu trúc bên trong, cần bằng chứng thêm khi cần đổi model/tỉ lệ thật. */
 export const openDialogLocator = (page: Page): Locator => page.locator('[role="dialog"]');
 
@@ -185,6 +197,24 @@ export const videoLengthOptionLocator = (page: Page, duration: string): Locator 
  */
 export const videoLengthSliderInputLocator = (page: Page): Locator =>
   videoLengthLabelLocator(page).locator('xpath=following-sibling::div[1]//input[@type="range"]');
+
+/**
+ * Nhãn section "Aspect Ratio" — CÙNG cấu trúc/class marker với
+ * videoLengthLabelLocator ở trên (xem docstring đó), chỉ khác text lọc.
+ * Options con (16:9/9:16/...) nằm trong div.grid ngay sau label, dùng chung
+ * cấu trúc với Video Length/Resolution — khớp CHÍNH XÁC theo text để tránh
+ * nhầm (xem docstring videoLengthOptionLocator).
+ */
+const aspectRatioLabelLocator = (page: Page): Locator =>
+  page
+    .locator("div.text-f-text-quaternary.text-xs.font-normal")
+    .filter({ hasText: /^Aspect Ratio$/ });
+
+/** 1 option "Aspect Ratio" dạng nút bấm (vd "16:9"/"9:16") — xem docstring aspectRatioLabelLocator. */
+export const aspectRatioOptionLocator = (page: Page, ratio: string): Locator =>
+  aspectRatioLabelLocator(page).locator(
+    `xpath=following-sibling::div[1]//span[normalize-space(text())="${ratio}"]`,
+  );
 
 /** Nút Generate — luôn có data-testid cố định, tự "aria-disabled=true" khi chưa nhập prompt. */
 export const generateButtonLocator = (page: Page): Locator =>

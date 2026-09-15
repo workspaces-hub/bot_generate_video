@@ -11,9 +11,11 @@ import {
 } from "./aiVideo";
 import { firstVisible, isPageCrashError } from "./selectors";
 import {
+  aspectRatioOptionLocator,
   assetPickerCardByUrlLocator,
   assetPickerCardLocator,
   attachedReferenceImageSpinnerLocator,
+  chatFooterFieldsChipLocator,
   creditPaywallLocator,
   generateButtonLocator,
   mentionPickerItemByUrlLocator,
@@ -616,6 +618,31 @@ export async function ensureUploadDialogOpen(
         // timeout. Nới lên 120s cho đủ chịu tải.
         await trigger.click({ timeout: 120_000 });
       } catch (err) {
+        // Xác nhận qua debug DOM thật (SHOT_05_CLIP_01_VIDEO, project
+        // the_king_closed_the_city, 2026-09-15): trigger timeout 120s vì
+        // KHÔNG BAO GIỜ tồn tại, không phải render chậm — count() = 0 suốt.
+        // Nguyên nhân: pollo.ai giới hạn số ảnh tham chiếu tối đa cho mode
+        // "Reference to Video" (đã thấy 9 ảnh gắn sẵn trong composer khi lỗi
+        // xảy ra) — khi đạt giới hạn, nút "+" thêm ẢNH (wrapper
+        // "group/image-upload") bị GỠ KHỎI DOM hoàn toàn, chỉ còn lại nút
+        // "+" thêm VIDEO (wrapper "group/video-upload", icon
+        // "i-cus--pol-add-video") cạnh bên. Phát hiện đúng trạng thái này để
+        // báo lỗi rõ ràng ngay, thay vì đợi hết cả maxAttempts × 120s rồi
+        // ném ra 1 timeout chung chung khó hiểu.
+        const triggerMissing = (await trigger.count().catch(() => 0)) === 0;
+        if (triggerMissing) {
+          const videoUploadWrapperExists =
+            (await page
+              .locator("div.group\\/video-upload")
+              .first()
+              .count()
+              .catch(() => 0)) > 0;
+          if (videoUploadWrapperExists) {
+            throw new GenerationError(
+              "Nút thêm ảnh tham chiếu không còn tồn tại (chỉ còn nút thêm video cạnh bên) — pollo.ai có thể đã đạt giới hạn số ảnh tham chiếu tối đa cho phiên soạn thảo này. Giảm bớt số ảnh tham chiếu cho video này rồi thử lại.",
+            );
+          }
+        }
         if (attempt === maxAttempts) throw err;
         await dismissBlockingOverlays(page);
         continue;
@@ -916,6 +943,67 @@ async function selectDurationIfNeeded(
 }
 
 /**
+ * Trích Aspect Ratio ("9:16" hoặc "16:9") từ nội dung prompt storyboard —
+ * theo yêu cầu người dùng. Không thấy giá trị nào thì mặc định "16:9".
+ */
+function extractAspectRatioFromPrompt(prompt: string): "9:16" | "16:9" {
+  if (/\b9:16\b/.test(prompt)) return "9:16";
+  if (/\b16:9\b/.test(prompt)) return "16:9";
+  return "16:9";
+}
+
+/**
+ * Chọn Aspect Ratio (vd "16:9"/"9:16") — dùng lại ĐÚNG cấu trúc dual-path như
+ * selectDurationIfNeeded ở trên: chip tổng hợp (chatFooterFieldsChipLocator,
+ * hiện text gộp vd "Auto/5s/480p/1" — xác nhận qua DOM thật mode "Reference
+ * to Video" + model MiniMax H3, KHÁC HẲN paramsChipLocator không khớp gì
+ * trong mode/model này) nếu tồn tại thì đọc giá trị hiện tại từ đó để biết có
+ * cần đổi không (BỎ QUA nếu đã đúng, theo yêu cầu người dùng) và bấm mở popup
+ * chứa các option; mode không có chip tổng hợp (section hiện trực tiếp trong
+ * composer, giống case slider của Video Length) thì bỏ qua bước đọc giá trị
+ * hiện tại, tìm option trực tiếp trên trang. Model/mode không có option
+ * Aspect Ratio yêu cầu thì BEST-EFFORT bỏ qua (log cảnh báo, không throw —
+ * giống selectDurationIfNeeded, tỉ lệ sai không đáng chặn cả pipeline).
+ */
+async function selectAspectRatioIfNeeded(
+  page: Page,
+  aspectRatio: string,
+): Promise<void> {
+  const chip = chatFooterFieldsChipLocator(page).first();
+  const chipExists = await chip.isVisible({ timeout: 2000 }).catch(() => false);
+
+  if (chipExists) {
+    const currentLabel = await chip.innerText().catch(() => "");
+    if (currentLabel.includes(aspectRatio)) return;
+
+    await chip.click({ timeout: 10_000 });
+    await page.waitForTimeout(500);
+  }
+
+  const option = aspectRatioOptionLocator(page, aspectRatio).first();
+  const optionExists = await option.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!optionExists) {
+    console.warn(
+      `[pollo] selectAspectRatioIfNeeded: model/mode hiện tại không có option Aspect Ratio "${aspectRatio}" — bỏ qua, dùng tỉ lệ mặc định.`,
+    );
+    if (chipExists) await page.keyboard.press("Escape").catch(() => {});
+    return;
+  }
+
+  await option.click({ timeout: 5_000 }).catch(() => {});
+  await page.waitForTimeout(300);
+
+  if (chipExists) {
+    const newLabel = await chip.innerText().catch(() => "");
+    if (!newLabel.includes(aspectRatio)) {
+      console.warn(
+        `[pollo] selectAspectRatioIfNeeded: đã bấm option "${aspectRatio}" nhưng chip vẫn hiện "${newLabel.trim()}" — có thể không áp dụng được, tiếp tục generate.`,
+      );
+    }
+  }
+}
+
+/**
  * Provider MỚI (pollo.ai) chạy SONG SONG với AIVideo (aiVideo.ts) — KHÔNG
  * thay thế, KHÔNG wired vào queue.ts. Xem chú thích đầu polloImage.ts (cùng
  * quy ước, cùng mức độ bằng chứng DOM thật/chưa xác nhận).
@@ -1088,7 +1176,7 @@ export async function deleteStaleUploadedAssets(page: Page): Promise<void> {
  * thường, KHÔNG throw.
  */
 const ASSET_CACHE_PATH = path.resolve("./storage/pollo-asset-cache.json");
-const ASSET_CACHE_TTL_MS = 86_400_000;
+const ASSET_CACHE_TTL_MS = 2 * 86_400_000;
 /** Xoá hẳn entry khỏi file cache sau ngần này — theo yêu cầu người dùng, tránh file phình to vô hạn (mỗi file ảnh tham chiếu MỚI của MỌI storyboard đều thêm 1 entry, KHÔNG entry nào tự mất nếu không có bước dọn này). */
 const ASSET_CACHE_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
 
@@ -2138,6 +2226,16 @@ export async function generateVideo(
   }
 }
 
+// Xác nhận qua debug DOM thật (SHOT_05_CLIP_01_VIDEO, project
+// the_king_closed_the_city, 2026-09-15, xem comment ở ensureUploadDialogOpen):
+// mode "Reference to Video" của pollo.ai chỉ nhận tối đa 9 ảnh tham chiếu
+// trong một composer — vượt quá số này, nút "+" thêm ảnh (wrapper
+// "group/image-upload") bị gỡ khỏi DOM hoàn toàn, không còn cách nào mở dialog
+// upload để thêm ảnh thứ 10. Chặn ngay từ đầu (trước khi mở browser) để báo
+// lỗi rõ ràng, tránh tốn thời gian upload xong 9 ảnh rồi mới treo 120s trên
+// ảnh thứ 10.
+const MAX_REFERENCE_IMAGES = 9;
+
 async function attemptGenerateVideo(
   prompt: string,
   {
@@ -2149,6 +2247,11 @@ async function attemptGenerateVideo(
   }: PolloGenerateVideoOptions,
   jobId: string,
 ): Promise<PolloGenerateVideoResult> {
+  if (referenceImagePaths.length > MAX_REFERENCE_IMAGES) {
+    throw new GenerationError(
+      `Quá nhiều ảnh tham chiếu (${referenceImagePaths.length}/${MAX_REFERENCE_IMAGES}) — pollo.ai chỉ cho tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu trong mode "Reference to Video". Giảm số ref cho video này rồi thử lại.`,
+    );
+  }
   const context = await getPolloBrowserContext();
   const page = await context.newPage();
   try {
@@ -2206,6 +2309,23 @@ async function attemptGenerateVideo(
     if (duration) {
       await dismissBlockingOverlays(page);
       await selectDurationIfNeeded(page, duration);
+    }
+
+    const aspectRatio = extractAspectRatioFromPrompt(prompt);
+    await dismissBlockingOverlays(page);
+    await selectAspectRatioIfNeeded(page, aspectRatio);
+
+    // Cổng debug tạm — xem chú thích POLLO_DEBUG_STOP_BEFORE_GENERATE bên
+    // dưới, đây là bản chụp SỚM (ngay sau lần chọn Aspect Ratio đầu tiên,
+    // trước khi gõ prompt/upload ref) để so sánh cấu trúc DOM composer lúc
+    // còn "sạch" (chưa qua bước nào có thể làm page rơi về bản marketing).
+    if (process.env.POLLO_DEBUG_STOP_EARLY === "1") {
+      await captureSnapshot(page, `${jobId}_stop-early`, "debug-stop-early", {
+        includeHtml: true,
+      });
+      throw new GenerationError(
+        `[debug] Dừng sớm theo POLLO_DEBUG_STOP_EARLY=1 (không phải lỗi thật) — xem storage/debug/${jobId}_stop-early.{png,html}.`,
+      );
     }
 
     // Bật "Unlimited" (nếu cần) TRƯỚC KHI gõ prompt/mention ảnh — xác nhận
@@ -2459,11 +2579,11 @@ async function attemptGenerateVideo(
         );
       }
       const mentionedCount = await page.locator("[data-media-chip]").count();
-      await captureSnapshot(
-        page,
-        `${jobId}_ref-check`,
-        `mentioned-${mentionedCount}-of-${referenceImagePaths.length}`,
-      );
+      // await captureSnapshot(
+      //   page,
+      //   `${jobId}_ref-check`,
+      //   `mentioned-${mentionedCount}-of-${referenceImagePaths.length}`,
+      // );
       if (mentionedCount < referenceImagePaths.length) {
         throw new GenerationError(
           `Chỉ mention được ${mentionedCount}/${referenceImagePaths.length} ảnh tham chiếu vào prompt trước khi generate — dừng lại để tránh generate thiếu tham chiếu (xem storage/debug/${jobId}_ref-check.png).`,
@@ -2474,6 +2594,23 @@ async function attemptGenerateVideo(
     if (duration) {
       await dismissBlockingOverlays(page);
       await selectDurationIfNeeded(page, duration);
+    }
+
+    await dismissBlockingOverlays(page);
+    await selectAspectRatioIfNeeded(page, aspectRatio);
+
+    // Cổng debug tạm — chỉ bật khi set biến môi trường
+    // POLLO_DEBUG_STOP_BEFORE_GENERATE=1 (dùng để test model/duration/aspect
+    // ratio đã chọn đúng chưa MÀ KHÔNG bấm Generate thật, tốn credit/thời
+    // gian). Điều kiện (không phải throw vô điều kiện) nên KHÔNG ảnh hưởng
+    // type narrowing của code phía dưới trong chạy production bình thường.
+    if (process.env.POLLO_DEBUG_STOP_BEFORE_GENERATE === "1") {
+      await captureSnapshot(page, `${jobId}_stop-before-generate`, "debug-stop", {
+        includeHtml: true,
+      });
+      throw new GenerationError(
+        `[debug] Dừng trước khi bấm Generate theo POLLO_DEBUG_STOP_BEFORE_GENERATE=1 (không phải lỗi thật) — xem storage/debug/${jobId}_stop-before-generate.{png,html} để kiểm tra model/duration/aspect ratio đã chọn.`,
+      );
     }
 
     await enableUnlimitedIfNotEnoughCredit(page, jobId);

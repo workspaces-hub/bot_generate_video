@@ -20,12 +20,24 @@ YÊU CẦU FILE:
 
 2. SCHEMA CỐ ĐỊNH
 
-Mỗi item phải có đúng 5 field, đúng tên và đúng cấu trúc sau:
+CHARACTER và LOCATION phải có đúng 5 field, đúng tên và đúng cấu trúc sau:
 
 [
   {
     "id": "string",
-    "type": "CHARACTER | LOCATION | VIDEO",
+    "type": "CHARACTER | LOCATION",
+    "ref": [],
+    "prompt": "string",
+    "duration": 0
+  }
+]
+
+VIDEO phải có đúng 7 field, đúng tên và đúng cấu trúc sau:
+
+[
+  {
+    "id": "string",
+    "type": "VIDEO",
     "ref": [
       {
         "id": "string",
@@ -33,11 +45,13 @@ Mỗi item phải có đúng 5 field, đúng tên và đúng cấu trúc sau:
       }
     ],
     "prompt": "string",
-    "duration": 0
+    "duration": 0,
+    "shot": 0,
+    "clip": 0
   }
 ]
 
-Không thêm field khác.
+Không thêm field khác. "shot" và "clip" chỉ áp dụng cho VIDEO, KHÔNG thêm vào CHARACTER/LOCATION.
 
 TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
 - SCENE_SETTING_START
@@ -52,6 +66,7 @@ TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
 - Mỗi VIDEO là một container thời gian hoàn chỉnh và có thể chứa một hoặc nhiều camera beat liên tiếp, miễn các beat đó cùng phục vụ một dramatic purpose và có thể thực hiện rõ ràng trong duration của VIDEO.
 - Nếu một hành động dài hơn giới hạn một clip, chia thành nhiều VIDEO liên tiếp theo thứ tự thời gian.
 - Clip sau phải tiếp nối hợp lý trạng thái kết thúc của clip trước bằng mô tả trực tiếp trong VIDEO prompt; không tạo item trung gian để biểu diễn frame đầu/cuối.
+- Với các clip cùng một SHOT (shot giống nhau, clip tăng dần), start frame của clip sau PHẢI khớp CHÍNH XÁC với end frame vừa mô tả ở clip liền trước: cùng vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera và motion phase — không được thay đổi, bỏ sót hay diễn giải lại khác đi.
 - Prompt của clip N từ 2 trở đi trong cùng continuity run phải nêu rõ trạng thái được kế thừa từ clip trước khi cần thiết: vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, ánh sáng, môi trường và motion phase.
 - Không yêu cầu tạo, repaint, regenerate, restage hoặc reinterpret một START/END frame riêng.
 - Mọi thông tin continuity phải nằm tự nhiên ngay trong VIDEO prompt.
@@ -79,6 +94,8 @@ LOCATION
 VIDEO
 
 - id theo mẫu SHOT_XX_CLIP_YY_VIDEO.
+- shot: số nguyên lấy đúng từ số XX trong id (vd id "SHOT_05_CLIP_02_VIDEO" → shot: 5).
+- clip: số nguyên lấy đúng từ số YY trong id (vd id "SHOT_05_CLIP_02_VIDEO" → clip: 2).
 - ref chỉ được chứa CHARACTER và LOCATION thực sự xuất hiện trong chính VIDEO đó.
 - Thứ tự ref bắt buộc: toàn bộ CHARACTER xuất hiện trong clip trước, sau đó LOCATION tương ứng của clip.
 - Không đưa nhân vật chỉ được nhắc đến nhưng không hiện diện vào ref.
@@ -92,8 +109,9 @@ VIDEO
 
 Mỗi VIDEO prompt bắt buộc phải nêu đủ:
 
-1. Khoảnh khắc mở đầu cụ thể của clip: ai đang ở đâu, pose, gaze, biểu cảm, trạng thái đạo cụ và motion phase ban đầu. Với clip nối tiếp, mô tả đây là sự tiếp diễn trực tiếp từ trạng thái cuối của clip trước, nhưng không tham chiếu tới một START/END item.
-2. Hành động cụ thể của chính clip: ai làm gì, tương tác với ai/đạo cụ/bối cảnh nào, diễn biến theo thứ tự trong đúng duration, cùng một kết quả ngắn dễ đọc ở cuối clip.
+1. Start frame — khoảnh khắc mở đầu cụ thể của clip: ai đang ở đâu, pose, gaze, biểu cảm, trạng thái đạo cụ và motion phase ban đầu. Với clip nối tiếp trong cùng một SHOT, start frame này PHẢI đúng chính xác như end frame vừa mô tả ở clip liền trước cùng SHOT đó (cùng vị trí, pose, gaze, biểu cảm, đạo cụ, camera và motion phase — không được đổi khác hay bỏ sót chi tiết), diễn đạt bằng mô tả trực tiếp trong prompt, không tham chiếu tới một START/END item.
+2. Diễn biến hành động — hành động cụ thể của chính clip từ start frame cho đến hết duration: ai làm gì, tương tác với ai/đạo cụ/bối cảnh nào, diễn biến theo đúng thứ tự thời gian trong đúng duration.
+3. End frame — trạng thái kết thúc cụ thể đạt được tự nhiên vào cuối clip: vị trí, pose, gaze, biểu cảm, đạo cụ và camera motion phase sau khi hành động kết thúc, đủ chi tiết để clip tiếp theo (nếu cùng SHOT) kế thừa CHÍNH XÁC làm start frame của nó.
 
 QUAN HỆ ACTOR–ACTION–TARGET VÀ HƯỚNG HÀNH ĐỘNG BẮT BUỘC:
 
@@ -107,10 +125,9 @@ QUAN HỆ ACTOR–ACTION–TARGET VÀ HƯỚNG HÀNH ĐỘNG BẮT BUỘC:
 - Không coi một hành động là đã mô tả đầy đủ nếu prompt chỉ nói “turns”, “bows”, “looks”, “speaks” hoặc “gestures” mà không nêu rõ target và hướng cơ thể quan sát được.
 - Trước khi lưu JSON, kiểm tra từng VIDEO prompt bằng câu hỏi: “Người thực hiện là ai? Mục tiêu là ai? Hướng cơ thể và hướng hành động có chỉ đúng vào mục tiêu đó không? Có đối tượng nào gần đó khiến mô hình hiểu nhầm không?” Nếu còn mơ hồ, phải viết lại prompt trước khi lưu.
 
-3. Camera plan cụ thể: một VIDEO có thể chứa một hoặc nhiều shot/camera beat. Nếu có nhiều beat, phải mô tả rõ thứ tự, thời lượng tương đối, điểm cut/transition, focal length/lens, shot size, angle, framing và camera movement của từng beat. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
-4. Ánh sáng, thời điểm trong ngày và thời tiết cụ thể, phù hợp LOCATION và continuity.
-5. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, screen direction, time, weather, lighting direction, camera continuity và natural physics.
-6. Trạng thái kết thúc cụ thể đạt được tự nhiên trong duration để clip tiếp theo có thể tiếp nối: vị trí, pose, gaze, biểu cảm, đạo cụ và camera motion phase sau hành động.
+4. Camera plan cụ thể: một VIDEO có thể chứa một hoặc nhiều shot/camera beat. Nếu có nhiều beat, phải mô tả rõ thứ tự, thời lượng tương đối, điểm cut/transition, focal length/lens, shot size, angle, framing và camera movement của từng beat. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
+5. Ánh sáng, thời điểm trong ngày và thời tiết cụ thể, phù hợp LOCATION và continuity.
+6. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, screen direction, time, weather, lighting direction, camera continuity và natural physics.
 7. Câu cấm chính xác: “No jump cuts, no hidden scene change, no extra events, no modern elements.”
 
 Không bắt buộc dùng câu mở đầu chung giống nhau cho mọi VIDEO. Hãy bắt đầu bằng mô tả trực tiếp, riêng biệt và phù hợp với hành động của clip.
@@ -185,8 +202,9 @@ Không được:
 
 - Root là array JSON hợp lệ.
 - Thứ tự vật lý đúng tuyệt đối: toàn bộ CHARACTER → toàn bộ LOCATION → toàn bộ VIDEO theo timeline.
-- Mỗi item có đúng 5 field: id, type, ref, prompt, duration.
+- CHARACTER/LOCATION có đúng 5 field: id, type, ref, prompt, duration. VIDEO có đúng 7 field: id, type, ref, prompt, duration, shot, clip.
 - Không có field success hoặc field bổ sung.
+- VIDEO.shot và VIDEO.clip là số nguyên, khớp chính xác với số XX/YY trong chính id SHOT_XX_CLIP_YY_VIDEO của item đó.
 - type chỉ thuộc enum CHARACTER | LOCATION | VIDEO.
 - Không có type, id hoặc ref nào tạo SCENE_SETTING_START, SCENE_SETTING_END, START FRAME item, END FRAME item hoặc temporal boundary item.
 - Không duplicated ID.
@@ -205,7 +223,8 @@ Không được:
 - Với hành động định hướng, hướng bàn chân, hông, vai, thân trên, khuôn mặt, ánh mắt và trục chuyển động phải thống nhất với vị trí của đúng mục tiêu; nếu có nguy cơ nhầm mục tiêu, prompt phải nêu rõ đối tượng không phải mục tiêu.
 - Trình tự rời hướng cũ → xoay về mục tiêu mới → xác lập hướng cơ thể/ánh mắt → thực hiện hành động phải rõ ràng và khả thi trong duration.
 - Clip nối tiếp kế thừa hợp lý trạng thái thực tế được mô tả ở cuối clip trước.
-- Mỗi VIDEO prompt có đủ 7 mục bắt buộc tại phần 4.
+- Với mọi cặp clip cùng SHOT liền kề (clip YY và YY+1 cùng shot XX), start frame mô tả ở đầu prompt clip YY+1 khớp CHÍNH XÁC với end frame mô tả ở cuối prompt clip YY (vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, motion phase).
+- Mỗi VIDEO prompt có đủ 7 mục bắt buộc tại phần 4, gồm rõ ràng 3 phần: start frame, diễn biến hành động, end frame.
 - So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có hành động và camera riêng phù hợp timeline.
 - So sánh chéo toàn bộ CHARACTER prompt và LOCATION prompt: không trùng lặp sai nhận diện hoặc mâu thuẫn thuộc tính.
 - ĐỘ BAO PHỦ: đối chiếu toàn bộ timeline gốc theo đúng thứ tự; mọi sự kiện/hành động chính từ đầu đến cuối phải có ít nhất một VIDEO tương ứng.
