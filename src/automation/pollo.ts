@@ -2336,21 +2336,55 @@ async function attemptGenerateVideo(
         // SHOT_01_CLIP_02_VIDEO, CHAR_MAXENCE_DE_VILLANDRY.png) — throw rõ
         // ràng sau 10 phút thay vì treo vô hạn.
         const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
-        const uploadIndexDeadlineMs = Date.now() + 10 * 60_000;
+        const uploadIndexDeadlineMs = Date.now() + 20 * 60_000;
         let waitedMs = 0;
         while ((await spinner.count().catch(() => 0)) > 0) {
           if (Date.now() >= uploadIndexDeadlineMs) {
-            throw new GenerationError(
-              `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
+            // Theo yêu cầu người dùng: TRƯỚC KHI chịu thua hẳn, thử SELECT
+            // LẠI ảnh (mở lại dialog Upload, bấm lại card + Select) rồi kiểm
+            // tra lại spinner — nghi ngờ spinner đôi khi chỉ là trạng thái UI
+            // CŨ không tự refresh (server đã xử lý xong thật từ lâu), thao
+            // tác select lại buộc composer tải lại đúng trạng thái asset mới
+            // nhất thay vì hiển thị cache cũ. clickAssetPickerCard tự xử lý
+            // đúng hành vi "click = toggle" (xem docstring hàm đó) nên gọi
+            // lại an toàn dù card đang ở trạng thái nào.
+            console.warn(
+              `[pollo] Ảnh "${refPath}" vẫn còn spinner sau ${Math.round(waitedMs / 1000)}s — thử select lại trước khi chịu thua.`,
             );
+            const reopenDialog = () =>
+              ensureUploadDialogOpen(
+                page,
+                uploadCardButtonForImage(page).first(),
+              );
+            await reopenDialog().catch(() => {});
+            const card = assetPickerCardByUrlLocator(page, assetUrl).first();
+            const cardStillThere = await card
+              .waitFor({ state: "visible", timeout: 5_000 })
+              .then(() => true)
+              .catch(() => false);
+            if (cardStillThere) {
+              await clickAssetPickerCard(card).catch(() => {});
+              await confirmAssetPickerSelection(page).catch(() => {});
+              await page.waitForTimeout(3_000);
+            }
+
+            if ((await spinner.count().catch(() => 0)) > 0) {
+              throw new GenerationError(
+                `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s (đã thử select lại) — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
+              );
+            }
+            console.warn(
+              `[pollo] Ảnh "${refPath}" hết spinner sau khi select lại — tiếp tục mention bình thường.`,
+            );
+            break;
           }
-          if (waitedMs > 0 && waitedMs % 30_000 === 0) {
+          if (waitedMs > 0 && waitedMs % 60_000 === 0) {
             console.warn(
               `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi mention.`,
             );
           }
-          await page.waitForTimeout(2_000);
-          waitedMs += 2_000;
+          await page.waitForTimeout(5_000);
+          waitedMs += 5_000;
         }
 
         // BẬT LẠI mention — theo yêu cầu người dùng: pollo.ai yêu cầu PHẢI
