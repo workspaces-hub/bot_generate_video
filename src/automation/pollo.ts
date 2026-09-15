@@ -2480,7 +2480,7 @@ async function attemptGenerateVideo(
         // SHOT_01_CLIP_02_VIDEO, CHAR_MAXENCE_DE_VILLANDRY.png) — throw rõ
         // ràng sau 10 phút thay vì treo vô hạn.
         const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
-        const uploadIndexDeadlineMs = Date.now() + 20 * 60_000;
+        const uploadIndexDeadlineMs = Date.now() + 5 * 60_000;
         let waitedMs = 0;
         while ((await spinner.count().catch(() => 0)) > 0) {
           if (Date.now() >= uploadIndexDeadlineMs) {
