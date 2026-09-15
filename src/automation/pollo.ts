@@ -2268,12 +2268,22 @@ async function attemptGenerateVideo(
           // trong uploadReferenceVideoImage) — kiểm tra NGAY trước khi mention,
           // tránh mention vào 1 editor đã rỗng/sai (throw sẽ mơ hồ hơn hẳn ở
           // đây so với để lọt xuống insertMentionForFile).
+          //
+          // SỬA (xác nhận qua lỗi thật — job firemetwice_SHOT_01/02/06: throw
+          // liên tiếp dù composer HOÀN TOÀN BÌNH THƯỜNG): check cũ coi BẤT KỲ
+          // giảm nào (dù chỉ 7-11 ký tự) là reset — quá nhạy. Debug snapshot
+          // xác nhận composer vẫn còn nguyên prompt + media-chip thật (Select
+          // tự chèn mention như side-effect, xem ensureUploadDialogOpen) —
+          // chênh lệch nhỏ chỉ là nhiễu bình thường từ việc chèn chip (khác
+          // hẳn navigation-reset THẬT, vốn luôn làm rớt về GẦN RỖNG theo lịch
+          // sử đã ghi nhận). Chỉ coi là reset khi giảm ĐÁNG KỂ (còn chưa tới
+          // nửa độ dài ban đầu), tránh false positive với nhiễu nhỏ.
           const promptTextAfterSelect = await editor
             .innerText()
             .catch(() => "");
           if (
             promptTextBeforeRefs.length > 0 &&
-            promptTextAfterSelect.length < promptTextBeforeRefs.length
+            promptTextAfterSelect.length < promptTextBeforeRefs.length * 0.5
           ) {
             throw new GenerationError(
               `Composer có dấu hiệu bị reset (navigation thật của pollo.ai) ngay sau khi Select ảnh "${refPath}" — prompt trước ${promptTextBeforeRefs.length} ký tự, sau chỉ còn ${promptTextAfterSelect.length} ký tự.`,
@@ -2312,43 +2322,36 @@ async function attemptGenerateVideo(
           // lần, 60s rồi 180s) — ceiling này chỉ chặn trường hợp ảnh THẬT SỰ
           // kẹt vĩnh viễn (bug/lỗi phía pollo.ai), throw rõ ràng thay vì treo
           // job mãi vô ích.
-          // TẮT mention — theo yêu cầu người dùng: chờ index cho mentionable
-          // (spinner) có thể kẹt vĩnh viễn tuỳ ảnh (vd nội dung bị đưa vào
-          // hàng chờ kiểm duyệt phía pollo.ai — xem job A_MILLION_BOTTLES_SCREAM_
-          // SHOT_01_CLIP_02_VIDEO, CHAR_MAXENCE_DE_VILLANDRY.png), làm job fail
-          // dù ảnh đã upload/select thành công. LƯU Ý: pollo.ai yêu cầu PHẢI
-          // "@ mention" thì model mới thực sự dùng ảnh làm tham chiếu (xác
-          // nhận qua placeholder thật của pollo.ai: "Upload images or videos
-          // and @ them as references to guide your video.") — tắt bước này
-          // nghĩa là video sẽ generate KHÔNG dùng ảnh tham chiếu nào cả, đổi
-          // lại đổ tin cậy/tốc độ lấy sự đánh đổi mất tác dụng ảnh tham chiếu.
-          //
-          // const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
-          // const uploadIndexDeadlineMs = Date.now() + 10 * 60_000;
-          // let waitedMs = 0;
-          // while ((await spinner.count().catch(() => 0)) > 0) {
-          //   if (Date.now() >= uploadIndexDeadlineMs) {
-          //     throw new GenerationError(
-          //       `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
-          //     );
-          //   }
-          //   if (waitedMs > 0 && waitedMs % 30_000 === 0) {
-          //     console.warn(
-          //       `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi mention.`,
-          //     );
-          //   }
-          //   await page.waitForTimeout(2_000);
-          //   waitedMs += 2_000;
-          // }
-          //
-          // const textBeforeMention = await editor.innerText().catch(() => "");
-          // await insertMentionForFile(page, assetUrl);
-          // const textAfterMention = await editor.innerText().catch(() => "");
-          // if (textAfterMention.length <= textBeforeMention.length) {
-          //   throw new GenerationError(
-          //     `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
-          //   );
-          // }
+          // TẮT mention (giữ nguyên quyết định trước — pollo.ai có thể giữ 1
+          // ảnh ở hàng chờ kiểm duyệt nội dung KHÔNG BAO GIỜ tự xong, xem job
+          // A_MILLION_BOTTLES_SCREAM_SHOT_01_CLIP_02_VIDEO, CHAR_MAXENCE_DE_VILLANDRY.png
+          // — mention lúc đó sẽ treo vô ích). NHƯNG VẪN PHẢI chờ hết spinner
+          // "đang xử lý" trên khay thumbnail composer trước khi generate — xác
+          // nhận qua lỗi thật (job put_the_ring_on_her_SHOT_01_CLIP_01_VIDEO):
+          // tắt mention kéo theo tắt LUÔN bước chờ này, khiến bấm Generate
+          // ngay khi CẢ 5 ảnh tham chiếu còn đang xử lý dở — nút Generate bị
+          // pollo.ai tự khoá (aria-disabled="true") vì lý do đó, KHÔNG PHẢI vì
+          // "tài khoản đang tồn đọng generation khác" như waitForGenerateButtonEnabled
+          // từng giả định — treo mãi 20 phút rồi mới báo lỗi mơ hồ. Giữ lại
+          // ceiling 10 phút/ảnh làm lưới an toàn (ảnh bị kẹt vĩnh viễn thật thì
+          // vẫn throw rõ ràng, không mention gì thêm).
+          const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
+          const uploadIndexDeadlineMs = Date.now() + 10 * 60_000;
+          let waitedMs = 0;
+          while ((await spinner.count().catch(() => 0)) > 0) {
+            if (Date.now() >= uploadIndexDeadlineMs) {
+              throw new GenerationError(
+                `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
+              );
+            }
+            if (waitedMs > 0 && waitedMs % 30_000 === 0) {
+              console.warn(
+                `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi generate.`,
+              );
+            }
+            await page.waitForTimeout(2_000);
+            waitedMs += 2_000;
+          }
       };
 
       // SỬA (theo yêu cầu người dùng): BỎ retry 2-3 lần khi upload/mention ảnh

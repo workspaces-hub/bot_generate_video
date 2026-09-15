@@ -6,7 +6,7 @@ import { Telegraf, type Telegram } from "telegraf";
 import { config } from "./config";
 import { generateVideo } from "./automation/aiVideo";
 import { generateImage } from "./automation/aiVideoImage";
-import { askChatAI, askChatAIWithInlineContent } from "./automation/chatAI";
+import { askChatAI, askChatAIWithInlineContent, ChatAIError } from "./automation/chatAI";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import {
   getPolloBrowserContext,
@@ -2004,12 +2004,35 @@ async function processChatAIQueue(): Promise<void> {
       const job = chatAIJobs[0];
       const jobId = randomUUID();
       try {
-        const { downloadedFiles } = await askChatAIWithInlineContent(
-          job.prompt,
-          jobId,
-          job.promptFileName,
-          job.promptAttachmentPath,
-        );
+        // Theo yêu cầu người dùng: xử lý job BẰNG askChatAI (upload file lên
+        // composer ChatGPT — nhanh/ổn định hơn ở đa số trường hợp bình
+        // thường) TRƯỚC, CHỈ fallback sang askChatAIWithInlineContent (dán
+        // thẳng nội dung file vào tin nhắn, né công cụ đọc file — chậm hơn,
+        // nhiều lượt hơn, nhưng cứu được đúng lúc công cụ đọc file của
+        // ChatGPT đang hỏng) khi askChatAI báo rõ ChatAIError.fileAccessError
+        // (xem askChatAI: throw riêng field này khi ChatGPT báo lỗi công cụ
+        // đọc file LẶP LẠI tới hết lượt, không phải mọi lỗi khác).
+        let downloadedFiles: string[];
+        try {
+          ({ downloadedFiles } = await askChatAI(
+            job.prompt,
+            jobId,
+            job.promptFileName,
+            job.promptAttachmentPath,
+          ));
+        } catch (err) {
+          if (!(err instanceof ChatAIError) || !err.fileAccessError) throw err;
+          console.warn(
+            `[queue] askChatAI dính fileAccessError (job ${jobId}) — fallback sang askChatAIWithInlineContent:`,
+            err.message,
+          );
+          ({ downloadedFiles } = await askChatAIWithInlineContent(
+            job.prompt,
+            jobId,
+            job.promptFileName,
+            job.promptAttachmentPath,
+          ));
+        }
         // Gửi NGAY file JSON storyboard vừa tải về cho user, TRƯỚC KHI bắt
         // đầu gen ảnh/video (có thể mất rất lâu) — theo yêu cầu người dùng,
         // để user xem/kiểm tra được kịch bản ngay, không phải đợi hết cả
