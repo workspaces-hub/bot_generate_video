@@ -441,82 +441,104 @@ export async function captureGenerationRecordId(
   page: Page,
   clickAction: () => Promise<void>,
 ): Promise<number | null> {
-  const responsePromise = page
-    .waitForResponse(
-      (res) =>
-        res.request().method() === "POST" &&
-        /\/api\/trpc\/[a-zA-Z0-9_]+\.(create|submit)(\?|$)/.test(res.url()),
-      { timeout: 60_000 },
-    )
-    .catch(() => null);
+  // Theo yêu cầu người dùng: response tRPC báo LỖI (xem errorInfo bên dưới,
+  // vd "Activity daily limit reached") có thể chỉ là chặn TẠM THỜI/thoáng
+  // qua (thao tác tay ngay sau đó vẫn generate được trên CÙNG tài khoản) —
+  // thử bấm lại Generate tối đa 3 lần trước khi chịu thua hẳn, thay vì throw
+  // ngay ở lần đầu. Mỗi lần thử lại là 1 lượt click+chờ response HOÀN TOÀN
+  // MỚI (baseline count không đổi giữa các lần vì lượt trước bị SERVER từ
+  // chối, không có gì được tạo ra cả — an toàn để click lại).
+  const maxAttempts = 3;
+  let lastTrpcError: GenerationError | null = null;
 
-  // Log chẩn đoán — theo yêu cầu điều tra job "Hết thời gian chờ tạo video —
-  // chưa từng thấy card generate nào xuất hiện" (4 job liên tiếp,
-  // EP1_1_SHOT_12..15, 2026-09-16): recordId luôn null (không có log "API
-  // record ... status") cho các job này, tức responsePromise ở trên KHÔNG
-  // khớp được request nào trong 60s — nhưng chưa rõ vì (a) trang KHÔNG hề
-  // gửi request submit nào cả (click không thực sự đăng ký được), hay (b) có
-  // gửi nhưng khớp SAI regex/tên endpoint. Bắt rộng hơn TOÀN BỘ request POST
-  // tới /api/trpc/ (không lọc theo .create|.submit) trong CÙNG khoảng thời
-  // gian để phân biệt 2 khả năng này — chỉ log khi responsePromise ở trên
-  // thất bại (không tốn gì thêm khi mọi thứ chạy bình thường).
-  const observedTrpcRequests: string[] = [];
-  const onRequest = (req: import("playwright").Request) => {
-    if (req.method() === "POST" && req.url().includes("/api/trpc/")) {
-      observedTrpcRequests.push(req.url());
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const responsePromise = page
+      .waitForResponse(
+        (res) =>
+          res.request().method() === "POST" &&
+          /\/api\/trpc\/[a-zA-Z0-9_]+\.(create|submit)(\?|$)/.test(res.url()),
+        { timeout: 60_000 },
+      )
+      .catch(() => null);
+
+    // Log chẩn đoán — theo yêu cầu điều tra job "Hết thời gian chờ tạo video
+    // — chưa từng thấy card generate nào xuất hiện" (4 job liên tiếp,
+    // EP1_1_SHOT_12..15, 2026-09-16): recordId luôn null (không có log "API
+    // record ... status") cho các job này, tức responsePromise ở trên KHÔNG
+    // khớp được request nào trong 60s — nhưng chưa rõ vì (a) trang KHÔNG hề
+    // gửi request submit nào cả (click không thực sự đăng ký được), hay (b) có
+    // gửi nhưng khớp SAI regex/tên endpoint. Bắt rộng hơn TOÀN BỘ request POST
+    // tới /api/trpc/ (không lọc theo .create|.submit) trong CÙNG khoảng thời
+    // gian để phân biệt 2 khả năng này — chỉ log khi responsePromise ở trên
+    // thất bại (không tốn gì thêm khi mọi thứ chạy bình thường).
+    const observedTrpcRequests: string[] = [];
+    const onRequest = (req: import("playwright").Request) => {
+      if (req.method() === "POST" && req.url().includes("/api/trpc/")) {
+        observedTrpcRequests.push(req.url());
+      }
+    };
+    page.on("request", onRequest);
+
+    await clickAction();
+
+    const res = await responsePromise;
+    page.off("request", onRequest);
+    if (!res) {
+      console.warn(
+        `[pollo] captureGenerationRecordId: không bắt được response submit nào trong 60s. Các POST /api/trpc/ đã quan sát được trong lúc chờ: ${
+          observedTrpcRequests.length > 0
+            ? observedTrpcRequests.join(", ")
+            : "(không có request nào cả — click có thể chưa thực sự submit)"
+        }`,
+      );
+      return null;
     }
-  };
-  page.on("request", onRequest);
+    const body = await res.json().catch(() => null);
+    const entry = Array.isArray(body) ? body[0] : body;
 
-  await clickAction();
+    // Xác nhận qua log thật (job EP1_1_SHOT_12..15, 2026-09-16): response
+    // tRPC báo LỖI (không phải "id" thiếu do đổi cấu trúc) có dạng
+    // {"error":{"json":{"message":...,"code":...,"data":{"errorCode":...}}}}
+    // — cụ thể gặp "Activity daily limit reached" (errorCode
+    // "ACTIVITY_DAILY_LIMIT_REACHED", httpStatus 400). Thử lại (xem
+    // maxAttempts ở trên) trước khi throw hẳn ở lần cuối.
+    const errorInfo = entry?.error?.json;
+    if (errorInfo) {
+      const errorCode = errorInfo.data?.errorCode;
+      lastTrpcError = new GenerationError(
+        `pollo.ai từ chối submit generate: ${errorInfo.message ?? "(không rõ message)"}${
+          errorCode ? ` (errorCode: ${errorCode})` : ""
+        }`,
+      );
+      if (attempt < maxAttempts) {
+        console.warn(
+          `[pollo] captureGenerationRecordId: lần thử ${attempt}/${maxAttempts} bị pollo.ai từ chối (${lastTrpcError.message}) — thử bấm Generate lại.`,
+        );
+        await page.waitForTimeout(5_000);
+        continue;
+      }
+      throw lastTrpcError;
+    }
 
-  const res = await responsePromise;
-  page.off("request", onRequest);
-  if (!res) {
-    console.warn(
-      `[pollo] captureGenerationRecordId: không bắt được response submit nào trong 60s. Các POST /api/trpc/ đã quan sát được trong lúc chờ: ${
-        observedTrpcRequests.length > 0
-          ? observedTrpcRequests.join(", ")
-          : "(không có request nào cả — click có thể chưa thực sự submit)"
-      }`,
-    );
-    return null;
+    const id = entry?.result?.data?.json?.id;
+    if (typeof id !== "number") {
+      // Cùng mục đích chẩn đoán như nhánh !res ở trên — response ĐÃ khớp
+      // URL/method mong đợi (res tồn tại) nhưng không đọc được field "id"
+      // dạng number ở đúng vị trí kỳ vọng (entry.result.data.json.id) — có
+      // thể pollo.ai đổi cấu trúc response, hoặc job KHÁC đang chạy song
+      // song khớp NHẦM response (URL đúng nhưng payload không phải của lượt
+      // generate này). Log nguyên văn URL + body để biết chính xác lệch ở
+      // đâu.
+      console.warn(
+        `[pollo] captureGenerationRecordId: bắt được response (${res.url()}) nhưng không đọc được "id" dạng number từ body — body: ${JSON.stringify(body)}`,
+      );
+    }
+    return typeof id === "number" ? id : null;
   }
-  const body = await res.json().catch(() => null);
-  const entry = Array.isArray(body) ? body[0] : body;
 
-  // Xác nhận qua log thật (job EP1_1_SHOT_12..15, 2026-09-16): response tRPC
-  // báo LỖI (không phải "id" thiếu do đổi cấu trúc) có dạng
-  // {"error":{"json":{"message":...,"code":...,"data":{"errorCode":...}}}} —
-  // cụ thể gặp "Activity daily limit reached" (errorCode
-  // "ACTIVITY_DAILY_LIMIT_REACHED", httpStatus 400): tài khoản đã đạt giới
-  // hạn hoạt động/generate trong ngày phía pollo.ai, request KHÔNG hề được
-  // nhận xử lý — throw rõ ràng NGAY ở đây thay vì trả null để caller rơi
-  // xuống waitForNewResult dò DOM chờ đủ 20 phút vô ích (video chắc chắn
-  // không bao giờ được submit, không có card nào để mà xuất hiện).
-  const errorInfo = entry?.error?.json;
-  if (errorInfo) {
-    const errorCode = errorInfo.data?.errorCode;
-    throw new GenerationError(
-      `pollo.ai từ chối submit generate: ${errorInfo.message ?? "(không rõ message)"}${
-        errorCode ? ` (errorCode: ${errorCode})` : ""
-      }`,
-    );
-  }
-
-  const id = entry?.result?.data?.json?.id;
-  if (typeof id !== "number") {
-    // Cùng mục đích chẩn đoán như nhánh !res ở trên — response ĐÃ khớp
-    // URL/method mong đợi (res tồn tại) nhưng không đọc được field "id"
-    // dạng number ở đúng vị trí kỳ vọng (entry.result.data.json.id) — có thể
-    // pollo.ai đổi cấu trúc response, hoặc job KHÁC đang chạy song song
-    // khớp NHẦM response (URL đúng nhưng payload không phải của lượt
-    // generate này). Log nguyên văn URL + body để biết chính xác lệch ở đâu.
-    console.warn(
-      `[pollo] captureGenerationRecordId: bắt được response (${res.url()}) nhưng không đọc được "id" dạng number từ body — body: ${JSON.stringify(body)}`,
-    );
-  }
-  return typeof id === "number" ? id : null;
+  // Không thể tới đây thật (vòng lặp luôn return hoặc throw ở trên) — chỉ để
+  // TypeScript hài lòng về kiểu trả về.
+  throw lastTrpcError ?? new GenerationError("captureGenerationRecordId: lỗi không xác định.");
 }
 
 /**
