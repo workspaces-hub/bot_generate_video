@@ -1677,25 +1677,23 @@ async function insertMentionForFile(
   const maxAttempts = 4;
   let lastError: unknown;
 
-  // Log chẩn đoán tạm — theo yêu cầu người dùng: nhiều job gần đây vẫn fail
-  // "Không chọn được ảnh vừa upload trong picker '@ mention'" dù log KHÔNG hề
-  // in cảnh báo "dialog vẫn còn mở" nào từ vòng chờ spinner phía trên (tức
-  // dialog Upload Media được xác nhận ĐÃ đóng lúc đó) — nhưng debug snapshot
-  // lúc lỗi CUỐI CÙNG lại cho thấy dialog này ĐANG MỞ LẠI. Chưa rõ nó mở lại
-  // ở đâu — log rõ trạng thái dialog Upload Media NGAY LÚC bắt đầu hàm này
-  // và mỗi lần thử để khoanh vùng: nếu đã thấy mở ngay từ đầu hàm, dialog mở
-  // lại đâu đó GIỮA lúc "hết spinner" và lúc gọi insertMentionForFile; nếu
-  // chỉ mở ở 1 attempt cụ thể, do chính vòng lặp bên dưới (gõ "@"/bấm tab
-  // "All"/Escape+Backspace) gây ra.
-  const uploadDialogOpenAtStart =
-    (await uploadDialogFileInputLocator(page).count().catch(() => 0)) > 0;
-  if (uploadDialogOpenAtStart) {
-    console.warn(
-      `[pollo] [insertMentionForFile] Dialog Upload Media ĐANG MỞ ngay khi bắt đầu mention ảnh (assetUrl: ${assetUrl}) — không phải do vòng lặp mention gây ra.`,
-    );
-  }
+  // Log chẩn đoán (xem docstring dưới) xác nhận: dialog Upload Media KHÔNG
+  // hề mở khi hàm này bắt đầu, nhưng đã mở lại NGAY SAU lần gõ " @" ĐẦU TIÊN
+  // — tức chính page.keyboard.type(" @") là thủ phạm, không phải chỗ nào
+  // khác. Nguyên nhân: đóng dialog Upload Media (dù qua Select thành công hay
+  // Escape) trả FOCUS về lại đúng nút "+" (uploadCardButtonForImage) đã mở
+  // nó ra — hành vi a11y chuẩn của dialog/modal (focus quay về phần tử đã
+  // trigger). Ký tự ĐẦU TIÊN gõ ra (dấu cách) rơi đúng vào nút "+" đang giữ
+  // focus đó thay vì vào editor — phím Space kích hoạt lại nút <button>,
+  // mở lại CHÍNH dialog vừa đóng, thay vì gõ được vào ô prompt. Mọi lần thử
+  // lại sau đó lặp lại y hệt vì Escape+Backspace không hề re-focus editor.
+  // SỬA: chủ động focus lại editor (focusEditorWithRetry, đã dùng ổn định ở
+  // generateVideo) NGAY TRƯỚC MỖI lần gõ " @" — không tin focus còn đúng chỗ
+  // sau bất kỳ bước nào trước đó (Select, Escape, Backspace).
+  const editor = promptEditorLocator(page).first();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await focusEditorWithRetry(page, editor);
     await page.keyboard.type(" @", { delay: 50 });
     await page.waitForTimeout(500);
 
