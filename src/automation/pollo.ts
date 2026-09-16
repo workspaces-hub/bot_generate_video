@@ -2614,6 +2614,23 @@ async function attemptGenerateVideo(
                   .waitFor({ state: "detached", timeout: 5_000 })
                   .catch(() => {});
               }
+            } else {
+              // Xác nhận qua debug snapshot THẬT (job
+              // he_learned_the_way_SHOT_03_CLIP_01_VIDEO, 2026-09-16): không
+              // tìm thấy card dù đã cuộn 5 lần — nhánh này TRƯỚC ĐÂY không hề
+              // đóng lại dialog Uploads đã mở ở reopenDialog() phía trên, nên
+              // dialog vẫn còn mở khi rơi xuống bước mention ngay sau đó
+              // (snapshot lúc lỗi cho thấy dialog "Uploads" còn che nguyên
+              // composer) — y hệt lỗi "dialog chưa đóng" đã sửa ở nhánh
+              // cardStillThere, chỉ khác là không có Select nào để mà xác
+              // minh, phải chủ động đóng ngay.
+              console.warn(
+                `[pollo] [reopen dialog để select lại — ảnh "${refPath}"] Không tìm thấy card (kể cả sau khi cuộn 5 lần) — chủ động đóng dialog Uploads bằng Escape trước khi mention.`,
+              );
+              await page.keyboard.press("Escape").catch(() => {});
+              await uploadDialogFileInputLocator(page)
+                .waitFor({ state: "detached", timeout: 5_000 })
+                .catch(() => {});
             }
 
             if ((await spinner.count().catch(() => 0)) > 0) {
