@@ -244,6 +244,7 @@ export async function clickGenerateButton(
   page: Page,
   button: Locator,
   baselineCount: number,
+  baselineGeneratingCount: number,
   // 4000ms cũ quá gấp — xác nhận qua lỗi thật trên VPS production
   // (SHOT_08_CLIP_02_VIDEO, 2026-09-08): log cho thấy mọi actionability
   // check đều pass ("visible, enabled and stable", "performing click
@@ -273,9 +274,24 @@ export async function clickGenerateButton(
       // snapshot chụp được "16%"), code cứ tưởng chưa bấm được nên bấm lại —
       // dẫn tới nhiều generation trùng nhau cùng lúc. Check thêm tín hiệu này
       // trước khi kết luận "chưa thành công, cần bấm lại".
+      //
+      // SỬA LẦN 2 (theo nghi vấn người dùng — "có khả năng chưa click button
+      // generate không", xác nhận qua log thật: job EP1_1_SHOT_12_CLIP_01_VIDEO
+      // treo 20 phút "chưa từng thấy card generate nào xuất hiện" trong lúc
+      // hàng đợi ẢNH của CÙNG tài khoản, context RIÊNG, vẫn liên tục có card
+      // "task-card-generating" của các job ảnh đó): so `> 0` (bất kỳ card nào
+      // đang generate) là SAI PHẠM VI — không phân biệt được "job VIDEO này
+      // vừa thực sự bắt đầu" với "có card generate CỦA JOB KHÁC visible sẵn
+      // trên trang do context/tài khoản dùng chung trạng thái hiển thị". Nếu
+      // click() timeout đúng lúc có card generate CỦA JOB KHÁC đang tồn tại,
+      // code cũ coi NHƯ ĐÃ THÀNH CÔNG mà không click lại — video KHÔNG BAO
+      // GIỜ thực sự được submit, giải thích đúng triệu chứng "không có API
+      // record, không có card, treo hết 20 phút". So sánh TĂNG so với
+      // baselineGeneratingCount (chụp NGAY TRƯỚC lúc bấm) thay vì so với 0.
       const alreadySucceeded =
         (await resultCardLocator(page).count()) > baselineCount ||
-        (await page.locator('[data-slot="task-card-generating"]').count()) > 0;
+        (await page.locator('[data-slot="task-card-generating"]').count()) >
+          baselineGeneratingCount;
       if (alreadySucceeded) {
         const time = new Date().toISOString().replace(/[:.]/g, "-");
         console.warn(
@@ -469,6 +485,17 @@ export async function captureGenerationRecordId(
   const body = await res.json().catch(() => null);
   const entry = Array.isArray(body) ? body[0] : body;
   const id = entry?.result?.data?.json?.id;
+  if (typeof id !== "number") {
+    // Cùng mục đích chẩn đoán như nhánh !res ở trên — response ĐÃ khớp
+    // URL/method mong đợi (res tồn tại) nhưng không đọc được field "id"
+    // dạng number ở đúng vị trí kỳ vọng (entry.result.data.json.id) — có thể
+    // pollo.ai đổi cấu trúc response, hoặc job KHÁC đang chạy song song
+    // khớp NHẦM response (URL đúng nhưng payload không phải của lượt
+    // generate này). Log nguyên văn URL + body để biết chính xác lệch ở đâu.
+    console.warn(
+      `[pollo] captureGenerationRecordId: bắt được response (${res.url()}) nhưng không đọc được "id" dạng number từ body — body: ${JSON.stringify(body)}`,
+    );
+  }
   return typeof id === "number" ? id : null;
 }
 
@@ -2063,6 +2090,8 @@ interface ResultBaseline {
   count: number;
   /** src của <video class="vjs-tech"> (nếu có) NGAY TRƯỚC lúc bấm Generate — dùng để so sánh trong waitForNewResult (mode "Reference to Video", xem docstring ở đó), KHÔNG dựa vào timestamp nhúng trong URL (không phải video result nào cũng có, xem extractAssetTimestampMs). */
   videoSrc: string | null;
+  /** Số lượng [data-slot="task-card-generating"] NGAY TRƯỚC lúc bấm Generate — dùng để phân biệt "job NÀY vừa bắt đầu generate" với "có job KHÁC (vd hàng đợi ảnh, context riêng nhưng cùng tài khoản) đang generate sẵn từ trước", xem clickGenerateButton. */
+  generatingCount: number;
 }
 
 async function captureResultBaseline(page: Page): Promise<ResultBaseline> {
@@ -2072,6 +2101,9 @@ async function captureResultBaseline(page: Page): Promise<ResultBaseline> {
       .first()
       .getAttribute("src")
       .catch(() => null),
+    generatingCount: await page
+      .locator('[data-slot="task-card-generating"]')
+      .count(),
   };
 }
 
@@ -2818,7 +2850,12 @@ async function attemptGenerateVideo(
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
-      clickGenerateButton(page, generateButton, baseline.count),
+      clickGenerateButton(
+        page,
+        generateButton,
+        baseline.count,
+        baseline.generatingCount,
+      ),
     );
     const generateClickedAtMs = Date.now();
 

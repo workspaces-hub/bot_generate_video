@@ -82,10 +82,17 @@ async function uploadReferenceImage(page: Page, imagePath: string): Promise<void
 
 interface ResultBaseline {
   count: number;
+  /** Số lượng [data-slot="task-card-generating"] NGAY TRƯỚC lúc bấm Generate — xem chú thích cùng tên trong pollo.ts (clickGenerateButton). */
+  generatingCount: number;
 }
 
 async function captureResultBaseline(page: Page): Promise<ResultBaseline> {
-  return { count: await resultCardLocator(page).count() };
+  return {
+    count: await resultCardLocator(page).count(),
+    generatingCount: await page
+      .locator('[data-slot="task-card-generating"]')
+      .count(),
+  };
 }
 
 /**
@@ -321,7 +328,12 @@ async function attemptGenerateImage(
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
-      clickGenerateButton(page, generateButton, baseline.count),
+      clickGenerateButton(
+        page,
+        generateButton,
+        baseline.count,
+        baseline.generatingCount,
+      ),
     );
     // await captureSnapshot(page, jobId, "after-click-generate");
 
