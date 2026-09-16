@@ -434,10 +434,38 @@ export async function captureGenerationRecordId(
     )
     .catch(() => null);
 
+  // Log chẩn đoán — theo yêu cầu điều tra job "Hết thời gian chờ tạo video —
+  // chưa từng thấy card generate nào xuất hiện" (4 job liên tiếp,
+  // EP1_1_SHOT_12..15, 2026-09-16): recordId luôn null (không có log "API
+  // record ... status") cho các job này, tức responsePromise ở trên KHÔNG
+  // khớp được request nào trong 60s — nhưng chưa rõ vì (a) trang KHÔNG hề
+  // gửi request submit nào cả (click không thực sự đăng ký được), hay (b) có
+  // gửi nhưng khớp SAI regex/tên endpoint. Bắt rộng hơn TOÀN BỘ request POST
+  // tới /api/trpc/ (không lọc theo .create|.submit) trong CÙNG khoảng thời
+  // gian để phân biệt 2 khả năng này — chỉ log khi responsePromise ở trên
+  // thất bại (không tốn gì thêm khi mọi thứ chạy bình thường).
+  const observedTrpcRequests: string[] = [];
+  const onRequest = (req: import("playwright").Request) => {
+    if (req.method() === "POST" && req.url().includes("/api/trpc/")) {
+      observedTrpcRequests.push(req.url());
+    }
+  };
+  page.on("request", onRequest);
+
   await clickAction();
 
   const res = await responsePromise;
-  if (!res) return null;
+  page.off("request", onRequest);
+  if (!res) {
+    console.warn(
+      `[pollo] captureGenerationRecordId: không bắt được response submit nào trong 60s. Các POST /api/trpc/ đã quan sát được trong lúc chờ: ${
+        observedTrpcRequests.length > 0
+          ? observedTrpcRequests.join(", ")
+          : "(không có request nào cả — click có thể chưa thực sự submit)"
+      }`,
+    );
+    return null;
+  }
   const body = await res.json().catch(() => null);
   const entry = Array.isArray(body) ? body[0] : body;
   const id = entry?.result?.data?.json?.id;
