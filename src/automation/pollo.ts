@@ -1392,6 +1392,7 @@ export async function submitAssetUpload(
       await clickAssetPickerCard(existingCard);
       if (confirmSelect) {
         await confirmAssetPickerSelection(page);
+        await verifyUploadDialogClosedOrWarn(page, "upload ảnh (dùng lại cache)");
       }
       return cachedUrl;
     }
@@ -1460,6 +1461,7 @@ export async function submitAssetUpload(
         await clickAssetPickerCard(cards.first());
         if (confirmSelect) {
           await confirmAssetPickerSelection(page);
+          await verifyUploadDialogClosedOrWarn(page, "upload ảnh (upload mới)");
         }
         rememberUploadedAsset(imagePath, currentUrl);
         return currentUrl;
@@ -1535,6 +1537,36 @@ export async function confirmAssetPickerSelection(page: Page): Promise<void> {
     timeout: 60_000,
     noWaitAfter: true,
   });
+}
+
+/**
+ * Xác minh dialog Upload Media ĐÃ THỰC SỰ ĐÓNG sau khi bấm Select — KHÔNG
+ * chỉ tin confirmAssetPickerSelection() không throw là xong (hàm đó dùng
+ * noWaitAfter nên click có thể không ăn thật mà vẫn không throw gì, xem
+ * docstring). Dialog chỉ tự đóng khi Select ăn thật, nên dialog còn mở sau
+ * khi chờ là dấu hiệu rõ ràng Select CHƯA ăn.
+ *
+ * `context` là nhãn phân biệt dialog đang mở ở ĐÂU — theo yêu cầu người
+ * dùng, dialog chọn ảnh tham chiếu này được mở ở 2 CHỖ KHÁC NHAU trong
+ * generateVideo: (1) lúc upload ảnh tham chiếu lần đầu (uploadReferenceVideoImage
+ * → submitAssetUpload), (2) lúc "select lại" sau khi mention thất bại/spinner
+ * kẹt quá lâu (xem vòng lặp chờ spinner). Log kèm context để biết NGAY dialog
+ * nào đang bị kẹt khi đọc log thật, không phải đoán.
+ */
+async function verifyUploadDialogClosedOrWarn(
+  page: Page,
+  context: string,
+): Promise<boolean> {
+  const closed = await uploadDialogFileInputLocator(page)
+    .waitFor({ state: "detached", timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!closed) {
+    console.warn(
+      `[pollo] [${context}] Dialog Upload Media vẫn còn mở sau khi bấm Select — Select có thể chưa ăn thật.`,
+    );
+  }
+  return closed;
 }
 
 /**
@@ -2532,33 +2564,53 @@ async function attemptGenerateVideo(
             }
 
             if (cardStillThere) {
-              await clickAssetPickerCard(card).catch(() => {});
-              await confirmAssetPickerSelection(page).catch(() => {});
-              await page.waitForTimeout(3_000);
-
               // Xác nhận qua debug snapshot THẬT (job
-              // HER_NAME_CAME_OFF_THE_DOOR_SHOT_01_CLIP_01_VIDEO, 2026-09-15):
-              // confirmAssetPickerSelection dùng noWaitAfter nên click "Select"
-              // không throw KHÔNG có nghĩa dialog Uploads đã thực sự đóng —
-              // snapshot lúc lỗi mention (4 lần thử đều fail) cho thấy dialog
-              // VẪN CÒN MỞ (card "Select (1/9)" vẫn hiện, chưa đóng) ngay tại
-              // thời điểm insertMentionForFile chạy. Gõ "@"/bấm tab "All" lúc
-              // dialog Uploads còn che composer chắc chắn không thể mở đúng
-              // picker "@ mention" được — đây là nguyên nhân TRỰC TIẾP hơn hẳn
-              // giả thuyết "asset bị đẩy khỏi danh sách gần đây". Xác minh
-              // dialog đã đóng hẳn (fileInput detached) trước khi break; chưa
-              // đóng thì chủ động bấm Escape rồi xác minh lại.
-              const fileInput = uploadDialogFileInputLocator(page);
-              const dialogClosed = await fileInput
-                .waitFor({ state: "detached", timeout: 5_000 })
-                .then(() => true)
-                .catch(() => false);
+              // HER_NAME_CAME_OFF_THE_DOOR_SHOT_01_CLIP_01_VIDEO,
+              // THE_WOMAN_WHO_KEPT_THE_SKY_MOVING_SHOT_05_CLIP_01_VIDEO,
+              // 2026-09-15/16): clickAssetPickerCard/confirmAssetPickerSelection
+              // trước đây bọc .catch(() => {}) NUỐT LUÔN lỗi nếu click thất
+              // bại — snapshot lúc lỗi mention cho thấy card vẫn "chưa chọn"
+              // hoặc dialog vẫn mở với nút "Select (1/9)" chưa từng được bấm
+              // thành công, mà code không hề biết vì lỗi bị nuốt âm thầm.
+              // SỬA: thử lại tối đa 3 lần (click card + confirm), xác minh
+              // dialog ĐÃ ĐÓNG sau mỗi lần trước khi coi là thành công — chỉ
+              // khi dialog thật sự đóng mới rõ ràng Select đã ăn (dialog
+              // Uploads chỉ tự đóng khi bấm "Select" thành công). Chỉ bấm
+              // Escape ép đóng ở lần thử CUỐI nếu vẫn thất bại (chấp nhận có
+              // thể mention sẽ vẫn fail sau đó, nhưng ít nhất không tiếp tục
+              // giữ composer bị dialog che khuất).
+              const dialogContext = `select lại lúc mention thất bại — ảnh "${refPath}"`;
+              const maxConfirmAttempts = 3;
+              let dialogClosed = false;
+              for (
+                let confirmAttempt = 1;
+                confirmAttempt <= maxConfirmAttempts;
+                confirmAttempt++
+              ) {
+                const clickErr = await clickAssetPickerCard(card)
+                  .then(() => null)
+                  .catch((err) => err);
+                const confirmErr = await confirmAssetPickerSelection(page)
+                  .then(() => null)
+                  .catch((err) => err);
+                if (clickErr || confirmErr) {
+                  console.warn(
+                    `[pollo] [${dialogContext}] Lỗi khi click card/Select (lần ${confirmAttempt}/${maxConfirmAttempts}):`,
+                    clickErr ?? confirmErr,
+                  );
+                }
+                dialogClosed = await verifyUploadDialogClosedOrWarn(
+                  page,
+                  `${dialogContext}, lần ${confirmAttempt}/${maxConfirmAttempts}`,
+                );
+                if (dialogClosed) break;
+              }
               if (!dialogClosed) {
                 console.warn(
-                  `[pollo] Ảnh "${refPath}" — dialog Uploads vẫn còn mở sau khi bấm Select lại — chủ động đóng bằng Escape trước khi mention.`,
+                  `[pollo] [${dialogContext}] Vẫn còn mở sau ${maxConfirmAttempts} lần thử — chủ động đóng bằng Escape trước khi mention (Select có thể chưa thực sự ăn, mention phía sau có thể vẫn fail).`,
                 );
                 await page.keyboard.press("Escape").catch(() => {});
-                await fileInput
+                await uploadDialogFileInputLocator(page)
                   .waitFor({ state: "detached", timeout: 5_000 })
                   .catch(() => {});
               }
