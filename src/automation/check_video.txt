@@ -1,0 +1,686 @@
+# DỮ LIỆU ĐẦU VÀO
+
+Bạn được cung cấp ba nhóm dữ liệu bắt buộc và một nhóm dữ liệu tùy chọn:
+
+1. `ORIGINAL_PROMPT`: prompt gốc đã dùng để tạo video.
+2. `REFERENCE_ASSETS`: ảnh tham chiếu của nhân vật, bối cảnh, đạo cụ hoặc đối tượng quan trọng.
+3. `GENERATED_VIDEO`: video thực tế cần kiểm tra.
+4. `PREVIOUS_VIDEO` nếu có: video ngay trước `GENERATED_VIDEO` trong cùng shot, cùng scene hoặc cùng chuỗi continuity.
+
+Phải đọc và đối chiếu tất cả dữ liệu thực sự được cung cấp. Không đánh giá video chỉ dựa trên ảnh tham chiếu hoặc chỉ dựa trên `ORIGINAL_PROMPT`.
+
+`PREVIOUS_VIDEO` là tùy chọn:
+
+* Nếu có `PREVIOUS_VIDEO`, bắt buộc kiểm tra tính liên tục giữa end frame của video trước và start frame của video hiện tại.
+* Nếu không có `PREVIOUS_VIDEO`, bỏ qua toàn bộ kiểm tra continuity giữa hai video, đánh dấu nội bộ là `NOT_APPLICABLE`, không tạo issue, không đưa vào `not_verifiable`, không trừ điểm và không làm thay đổi verdict.
+
+---
+
+## 1. ORIGINAL_PROMPT
+
+```text
+[DÁN PROMPT ĐÃ DÙNG ĐỂ TẠO VIDEO VÀO ĐÂY]
+```
+
+`ORIGINAL_PROMPT` là nguồn chính để xác định:
+
+* Câu chuyện mà video phải thể hiện.
+* Trạng thái ban đầu.
+* Những nhân vật phải xuất hiện.
+* Vai trò của từng nhân vật.
+* Actor của từng hành động chính.
+* Action chính phải xảy ra.
+* Target của từng hành động.
+* Quan hệ giữa các nhân vật.
+* Đạo cụ hoặc đối tượng quan trọng phải xuất hiện.
+* Trạng thái của đạo cụ.
+* Bối cảnh mà sự kiện diễn ra.
+* Hook dự kiến.
+* Xung đột chính.
+* Reveal hoặc reversal.
+* Dramatic beat.
+* Trình tự sự kiện.
+* Quan hệ nguyên nhân–kết quả.
+* Phản ứng quan trọng.
+* Kết quả bắt buộc.
+* Trạng thái cuối.
+* Yếu tố dẫn sang clip tiếp theo.
+
+Trước khi xem video, phải tách `ORIGINAL_PROMPT` thành một ledger nội bộ:
+
+```text
+REQUIRED_CHARACTERS
+REQUIRED_LOCATION
+REQUIRED_OBJECTS
+INITIAL_STATE
+EXPECTED_HOOK
+EXPECTED_MICRODRAMA_BEATS
+EXPECTED_ACTOR_ACTION_TARGET
+EXPECTED_EVENT_ORDER
+EXPECTED_CAUSE_AND_EFFECT
+EXPECTED_REVEAL_OR_REVERSAL
+EXPECTED_END_STATE
+FORBIDDEN_EXTRA_EVENTS
+PREVIOUS_VIDEO_AVAILABLE
+PREVIOUS_END_STATE
+EXPECTED_CURRENT_START_STATE
+CROSS_VIDEO_CONTINUITY_MODE
+```
+
+Chỉ đưa vào ledger những yêu cầu thuộc phạm vi được phép đánh giá.
+
+Không đưa vào ledger:
+
+* Camera.
+* Góc quay.
+* Lens.
+* Framing.
+* Composition.
+* Ánh sáng.
+* Màu sắc.
+* Âm thanh.
+* Lời thoại.
+* Lip-sync.
+* Subtitle.
+* Tỷ lệ video.
+* Độ phân giải.
+* Frame rate.
+* Thời lượng.
+* Chuyển động nhỏ không ảnh hưởng câu chuyện.
+
+### Quy tắc đọc ORIGINAL_PROMPT
+
+* Không coi mọi động từ trong prompt là một sự kiện cốt lõi.
+* Phân biệt hành động chính với chuyển động phụ.
+* Chỉ kiểm tra chi tiết ảnh hưởng đến hook, actor, target, logic, continuity hoặc kết quả.
+* Không báo lỗi vì video bỏ qua một chuyển động nhỏ nhưng vẫn truyền đạt đúng sự kiện.
+* Không tự bổ sung canon, động cơ hoặc tình tiết không có trong prompt.
+* Không dùng nội dung từ video hoặc prompt của cuộc trò chuyện trước, ngoại trừ `PREVIOUS_VIDEO` được cung cấp rõ trong lần kiểm tra hiện tại.
+* Mỗi lần kiểm tra phải chỉ sử dụng `ORIGINAL_PROMPT` hiện tại.
+
+### Ví dụ phân tách hành động
+
+Prompt:
+
+```text
+The manager retracts her hand, straightens abruptly, bows toward the man exiting the elevator, and greets him.
+```
+
+Ledger đúng:
+
+```text
+MAIN_ACTOR: manager
+MAIN_ACTION: bows
+MAIN_TARGET: the man exiting the elevator
+REQUIRED_RESULT: the manager clearly bows toward that man
+MINOR_ACTIONS_ALLOWED_TO_BE_OMITTED:
+- retracts her hand
+- straightens abruptly
+```
+
+Nếu video có quản lý cúi chào đúng người đàn ông bước khỏi thang máy thì hành động chính được coi là đúng, dù không thấy rõ động tác thu tay hoặc đứng thẳng.
+
+Nếu quản lý cúi chào một người khác thì phải báo `WRONG_TARGET`.
+
+---
+
+## 2. REFERENCE_ASSETS
+
+```text
+[LIỆT KÊ TẤT CẢ ẢNH THAM CHIẾU VÀ ID]
+```
+
+Mỗi ảnh phải có một `reference_id` duy nhất.
+
+Prefix đề xuất:
+
+* `CHAR_`: nhân vật.
+* `LOC_`: bối cảnh.
+* `PROP_`: đạo cụ.
+* `OBJECT_`: đối tượng khác.
+* `VEHICLE_`: phương tiện.
+* `CREATURE_`: sinh vật.
+* `WARDROBE_`: trang phục độc lập.
+
+Không tự gán nhầm loại reference.
+
+---
+
+## 2A. PREVIOUS_VIDEO — TÙY CHỌN
+
+```text
+[MÔ TẢ VIDEO NGAY TRƯỚC ĐÓ NẾU CÓ]
+```
+
+`PREVIOUS_VIDEO` phải là video diễn ra ngay trước `GENERATED_VIDEO` trong cùng shot, cùng scene hoặc cùng chuỗi continuity.
+
+Không được dùng một video không liền trước làm `PREVIOUS_VIDEO`.
+
+Không được tự tìm hoặc sử dụng video từ cuộc trò chuyện trước nếu video đó không được cung cấp trong lần kiểm tra hiện tại.
+
+### Chế độ kiểm tra
+
+Xác định `CROSS_VIDEO_CONTINUITY_MODE` từ `ORIGINAL_PROMPT`:
+
+* `STRICT_CONTINUATION`: dùng khi prompt có các cụm như `direct continuation`, `continuing without a time gap`, `same moment`, `immediately continues`, `continuous action` hoặc mô tả rõ hai clip nối nhau không có khoảng nhảy thời gian.
+* `RELAXED_CONTINUATION`: dùng khi hai video vẫn cùng chuỗi câu chuyện nhưng prompt cho phép một khoảng thời gian ngắn, một hành động nối đã diễn ra ngoài màn hình hoặc có thay đổi trạng thái được giải thích rõ.
+* `INTENTIONAL_DISCONTINUITY`: dùng khi prompt tuyên bố time skip, flashback, dream, montage, scene change, location change hoặc một chuyển cảnh có chủ ý.
+* `NOT_APPLICABLE`: dùng khi không có `PREVIOUS_VIDEO`.
+
+Không tự suy đoán có time skip hoặc scene change nếu prompt không nói rõ.
+
+Nếu có `PREVIOUS_VIDEO` và prompt hiện tại mô tả `direct continuation`, mặc định sử dụng `STRICT_CONTINUATION`.
+
+### Frame dùng để so sánh
+
+Từ `PREVIOUS_VIDEO`, xác định:
+
+* `PREVIOUS_LAST_MEANINGFUL_FRAME`: frame cuối cùng còn hiển thị rõ trạng thái câu chuyện.
+* `PREVIOUS_END_STATE`: trạng thái ổn định cuối cùng của nhân vật, bối cảnh và đạo cụ.
+
+Từ `GENERATED_VIDEO`, xác định:
+
+* `CURRENT_FIRST_MEANINGFUL_FRAME`: frame đầu tiên hiển thị rõ trạng thái của video hiện tại.
+* `CURRENT_START_STATE`: trạng thái bắt đầu của nhân vật, bối cảnh và đạo cụ.
+
+Không bắt buộc sử dụng frame đen, fade, logo, watermark, frame chuyển mã hỏng hoặc frame motion blur hoàn toàn làm frame so sánh.
+
+Nếu frame cuối hoặc frame đầu không đủ rõ, kiểm tra thêm một cụm frame ngắn ngay sát biên nối để xác định trạng thái ổn định gần nhất.
+
+### Nội dung bắt buộc so sánh
+
+So sánh `PREVIOUS_END_STATE` với `CURRENT_START_STATE` về:
+
+#### Nhân vật
+
+* Những nhân vật đang hiện diện.
+* Identity và vai trò.
+* Trang phục chính và màu trang phục.
+* Kiểu tóc tổng quát.
+* Độ ướt, bẩn, máu, nước mắt hoặc thương tích nếu có ý nghĩa continuity.
+* Tư thế chính: đứng, ngồi, quỳ, nằm hoặc bị giữ.
+* Hướng cơ thể và quan hệ đối diện nếu ảnh hưởng hành động.
+* Tay đang cầm, đỡ hoặc tương tác với đạo cụ.
+* Nhân vật đang giữ hoặc khống chế ai.
+* Quan hệ vị trí trong không gian với nhân vật khác.
+
+#### Đạo cụ và đối tượng
+
+* Đạo cụ đang xuất hiện.
+* Số lượng.
+* Trạng thái đóng, mở, đầy, rỗng, nguyên vẹn hoặc hư hỏng.
+* Chủ sở hữu.
+* Tay đang cầm đạo cụ nếu nhìn thấy rõ và có ý nghĩa continuity.
+* Vị trí logic trong không gian.
+* Đạo cụ đã được trao, đeo, bỏ xuống hoặc sử dụng.
+
+#### Bối cảnh
+
+* Cùng loại địa điểm.
+* Landmark và cấu trúc quan trọng.
+* Trạng thái cửa, cửa sổ, thang máy, cầu thang hoặc nội thất quan trọng.
+* Đồ vật lớn không tự xuất hiện, biến mất hoặc đổi trạng thái.
+
+#### Trạng thái câu chuyện
+
+* Sự kiện cuối của video trước đã đạt kết quả gì.
+* Video hiện tại có bắt đầu từ đúng kết quả đó không.
+* Hook, xung đột hoặc hành động đang diễn ra có được tiếp tục không.
+* Actor, target và quan hệ quyền lực có được giữ đúng không.
+* Không có sự kiện quan trọng tự hoàn thành ngoài màn hình nếu prompt yêu cầu nối trực tiếp.
+
+### Những khác biệt không được coi là lỗi nối clip
+
+Không báo lỗi chỉ vì:
+
+* Góc quay khác.
+* Lens khác.
+* Shot size khác.
+* Framing hoặc composition khác.
+* Nhân vật đổi vị trí trên màn hình do đổi góc quay nhưng quan hệ vị trí trong thế giới vẫn hợp lý.
+* Ánh sáng, exposure hoặc color grading khác nhẹ.
+* Motion blur ở frame biên.
+* Biểu cảm thay đổi nhẹ.
+* Tay hoặc ngón tay thay đổi nhỏ không ảnh hưởng đạo cụ hay hành động.
+* Vải hoặc tóc thay đổi do secondary motion.
+* Một chi tiết nằm ngoài khung hình ở một trong hai video.
+
+### Lỗi continuity giữa hai video
+
+Tạo `CROSS_VIDEO_CONTINUITY_ERROR` khi có bằng chứng rõ rằng end frame của video trước và start frame của video hiện tại không thể nối trực tiếp, ví dụ:
+
+* Nhân vật đang quỳ ở cuối video trước nhưng đứng sẵn ở frame đầu video hiện tại mà không có thời gian hoặc hành động chuyển tiếp.
+* Nhân vật đang bị hai người giữ nhưng bắt đầu video hiện tại ở trạng thái tự do dù prompt yêu cầu direct continuation.
+* Đạo cụ đang ở tay nhân vật A nhưng đầu video hiện tại nằm ở tay nhân vật B mà không có hành động trao đổi.
+* Hộp đang đóng nhưng tự mở hoặc trở thành rỗng mà không có sự kiện giải thích.
+* Nhẫn chưa được đeo nhưng đã xuất hiện trên tay ở đầu clip sau trước khi hành động đeo xảy ra.
+* Trang phục tự đổi màu, kiểu hoặc trạng thái ướt/khô rõ rệt.
+* Thương tích, vết bẩn hoặc trạng thái vật lý quan trọng tự biến mất hoặc đổi bên.
+* Nhân vật bắt buộc tự biến mất hoặc nhân vật mới tự xuất hiện mà không có entrance hợp lý.
+* Bối cảnh tự chuyển thành địa điểm khác dù prompt yêu cầu tiếp tục không có time gap.
+* Cửa, thang máy hoặc vật thể lớn đổi trạng thái không có nguyên nhân.
+* Sự kiện đầu video hiện tại mâu thuẫn với kết quả cuối video trước.
+
+Không tạo nhiều issue riêng cho từng biểu hiện nếu tất cả cùng xuất phát từ một lỗi nối clip. Tạo một `CROSS_VIDEO_CONTINUITY_ERROR` chính và liệt kê các bằng chứng liên quan trong cùng issue.
+
+### Mức độ nghiêm trọng
+
+* `CRITICAL`: sai end–start state làm thay đổi nhân vật, actor, target, kết quả hoặc ý nghĩa câu chuyện.
+* `HIGH`: sai tư thế, quyền sở hữu đạo cụ, trạng thái đạo cụ, trang phục hoặc sự hiện diện nhân vật khiến hai clip không thể nối trực tiếp.
+* `MEDIUM`: có continuity jump rõ nhưng câu chuyện vẫn hiểu được và có thể sửa bằng một đoạn chuyển tiếp ngắn.
+* `LOW`: sai khác nhỏ, nhìn thấy được nhưng không ảnh hưởng đáng kể đến hành động hoặc mạch phim.
+
+### Kết quả kiểm tra nội bộ
+
+Đánh dấu một trong các trạng thái:
+
+* `MATCHED`: end frame và start frame nối liền hợp lý.
+* `PARTIALLY_MATCHED`: phần lớn trạng thái đúng nhưng có một continuity jump đáng chú ý.
+* `CONTRADICTED`: hai trạng thái mâu thuẫn rõ và không thể nối trực tiếp.
+* `NOT_VERIFIABLE`: có cả hai video nhưng frame biên không đủ rõ để xác minh.
+* `NOT_APPLICABLE`: không có `PREVIOUS_VIDEO` hoặc prompt tuyên bố intentional discontinuity.
+
+---
+
+## 3. CÁCH ĐỌC ẢNH NHÂN VẬT
+
+Ảnh `CHARACTER_REFERENCE` dùng để xác định:
+
+* Vai trò hoặc archetype tổng quát.
+* Giới tính biểu kiến.
+* Nhóm tuổi tổng quát.
+* Kiểu tóc tổng quát.
+* Loại trang phục chính.
+* Màu trang phục chủ đạo nếu quan trọng.
+* Phụ kiện đặc trưng.
+* Dấu hiệu nhận dạng độc nhất nếu có.
+* Vóc dáng tổng quát nếu có ý nghĩa với câu chuyện.
+
+Ảnh tham chiếu không yêu cầu nhân vật trong video phải giống 100%.
+
+Chấp nhận khác biệt về:
+
+* Khuôn mặt.
+* Hình dạng hàm.
+* Mắt, mũi, môi và lông mày.
+* Tỷ lệ đầu.
+* Chiều cao biểu kiến.
+* Độ rộng vai.
+* Mức độ cơ bắp.
+* Vóc dáng gọn hoặc đầy đặn hơn.
+* Tuổi biểu kiến chênh lệch nhẹ trong cùng nhóm tuổi.
+* Tóc dài hoặc ngắn hơn nhẹ.
+* Chi tiết nhỏ của trang phục.
+
+Nếu character sheet chứa nhiều hình nhìn trước, nghiêng, bên cạnh, phía sau hoặc cận mặt, phải hiểu đó là nhiều góc của cùng một nhân vật, không phải nhiều người khác nhau.
+
+Không đếm các hình trong character sheet thành nhân vật thừa.
+
+Không coi nền trắng, nền xám, nền trong suốt hoặc ô caro của character sheet là bối cảnh tham chiếu.
+
+Chỉ tạo `CHARACTER_IDENTITY_ERROR` khi nhân vật sai rõ vai trò hoặc sai nhiều đặc điểm cốt lõi đến mức có thể được hiểu là một người khác.
+
+---
+
+## 4. CÁCH ĐỌC ẢNH BỐI CẢNH
+
+Ảnh `LOCATION_REFERENCE` dùng để xác định:
+
+* Loại địa điểm.
+* Phong cách kiến trúc.
+* Thời đại.
+* Không gian chính.
+* Vật liệu kiến trúc quan trọng.
+* Landmark nổi bật.
+* Cấu trúc cửa, hành lang, cầu thang hoặc nội thất quan trọng.
+* Những đặc điểm cần giữ để nhận ra địa điểm.
+
+Không yêu cầu video phải tái tạo bối cảnh giống 100%.
+
+Chấp nhận:
+
+* Góc quan sát khác.
+* Một phần bối cảnh nằm ngoài khung.
+* Đồ trang trí phụ khác.
+* Nội thất phụ khác.
+* Ánh sáng và màu sắc khác.
+* Khoảng cách giữa các vật thể thay đổi nhẹ.
+
+Chỉ tạo `LOCATION_ERROR` khi:
+
+* Sai loại địa điểm.
+* Sai thời đại hoặc phong cách cốt lõi.
+* Thiếu landmark quyết định khả năng nhận dạng.
+* Video chuyển thành địa điểm khác.
+* Kiến trúc biến dạng làm hỏng logic hoặc continuity.
+
+Nếu ảnh bối cảnh không có người nhưng video có các nhân vật được prompt yêu cầu, không coi nhân vật đó là khác biệt của bối cảnh.
+
+---
+
+## 5. CÁCH ĐỌC ẢNH ĐẠO CỤ VÀ ĐỐI TƯỢNG
+
+Ảnh `PROP_REFERENCE` hoặc `OBJECT_REFERENCE` dùng để xác định:
+
+* Loại vật.
+* Công dụng.
+* Hình dạng tổng quát.
+* Màu sắc chủ đạo nếu có ý nghĩa.
+* Chi tiết nhận dạng quan trọng.
+* Trạng thái đóng, mở, nguyên vẹn, hư hỏng hoặc đang được sử dụng.
+* Số lượng nếu số lượng quan trọng với câu chuyện.
+
+Nếu ảnh tham chiếu chứa nhiều góc hoặc nhiều trạng thái của cùng một vật, phải hiểu đó là một đối tượng duy nhất được minh họa ở nhiều góc hoặc trạng thái.
+
+Không đếm các hình minh họa trong reference sheet thành nhiều vật riêng biệt.
+
+Chấp nhận:
+
+* Màu sắc lệch nhẹ.
+* Góc xoay khác.
+* Kích thước biểu kiến khác.
+* Chi tiết bề mặt khác nhẹ.
+* Một phần vật bị che.
+* Vị trí trong khung khác.
+
+Chỉ báo lỗi khi:
+
+* Sai loại vật.
+* Thiếu vật quan trọng.
+* Sai số lượng có ý nghĩa.
+* Sai trạng thái cốt lõi.
+* Sai chủ sở hữu.
+* Sai target tương tác.
+* Vật tự biến mất.
+* Vật tự nhân đôi.
+* Vật biến thành đối tượng khác.
+* Vật không thực hiện đúng chức năng trong câu chuyện.
+
+---
+
+## 6. GENERATED_VIDEO
+
+```text
+[MÔ TẢ VIDEO HIỆN TẠI CẦN ĐÁNH GIÁ]
+```
+
+`GENERATED_VIDEO` là bằng chứng quan sát chính.
+
+Phải xem toàn bộ video, không chỉ thumbnail hoặc một số frame rời.
+
+Khi kiểm tra video:
+
+* Quan sát frame đầu.
+* Quan sát lúc hook xuất hiện.
+* Quan sát lúc nhân vật xuất hiện.
+* Quan sát hành động chính.
+* Xác định actor.
+* Xác định target.
+* Quan sát lúc đạo cụ đổi trạng thái hoặc đổi chủ.
+* Quan sát reveal hoặc reversal.
+* Quan sát kết quả.
+* Quan sát frame cuối.
+* Kiểm tra identity và continuity xuyên suốt.
+* Nếu có `PREVIOUS_VIDEO`, đối chiếu `PREVIOUS_LAST_MEANINGFUL_FRAME` với `CURRENT_FIRST_MEANINGFUL_FRAME` trước khi đánh giá các sự kiện còn lại.
+
+Không kết luận một chi tiết bị thiếu nếu chi tiết đó chỉ bị che khuất hoặc nằm ngoài khung.
+
+Nếu không đủ bằng chứng, sử dụng `NOT_VERIFIABLE`.
+
+---
+
+## 7. QUY TẮC ƯU TIÊN NGUỒN
+
+Sử dụng nguồn theo thứ tự:
+
+### ORIGINAL_PROMPT quyết định
+
+* Nội dung câu chuyện.
+* Nhân vật phải xuất hiện.
+* Vai trò.
+* Actor.
+* Action.
+* Target.
+* Hook.
+* Dramatic beat.
+* Logic.
+* Chronology.
+* Trạng thái đạo cụ trong cảnh.
+* Kết quả.
+* Trạng thái cuối.
+
+### REFERENCE_ASSETS quyết định
+
+* Thiết kế tổng quát của nhân vật.
+* Loại trang phục.
+* Đặc điểm nhận dạng quan trọng.
+* Thiết kế bối cảnh.
+* Landmark.
+* Hình dạng và loại đạo cụ.
+* Thiết kế của đối tượng tham chiếu.
+
+### GENERATED_VIDEO cung cấp
+
+* Những gì thực tế xuất hiện.
+* Actor thực tế.
+* Target thực tế.
+* Chuỗi sự kiện thực tế.
+* Hook thực tế.
+* Trạng thái thực tế của nhân vật, bối cảnh và đạo cụ.
+* Bằng chứng để tạo issue.
+
+### PREVIOUS_VIDEO nếu có cung cấp
+
+* Trạng thái thế giới ngay trước video hiện tại.
+* Nhân vật đang hiện diện ở cuối clip trước.
+* Tư thế, trang phục và trạng thái vật lý cuối clip trước.
+* Chủ sở hữu và trạng thái cuối của đạo cụ.
+* Bối cảnh và landmark ở cuối clip trước.
+* Kết quả của sự kiện ngay trước đó.
+* Cơ sở để xác minh start frame của video hiện tại có nối liền mạch hay không.
+
+---
+
+## 8. XỬ LÝ MÂU THUẪN GIỮA PROMPT VÀ REFERENCE
+
+Nếu `ORIGINAL_PROMPT` và `REFERENCE_ASSETS` mâu thuẫn:
+
+1. Chi tiết trạng thái riêng của cảnh trong `ORIGINAL_PROMPT` được ưu tiên.
+
+2. Thiết kế nhận dạng tổng quát trong `REFERENCE_ASSETS` vẫn được giữ nếu không mâu thuẫn với trạng thái cảnh.
+
+Ví dụ:
+
+* Reference cho thấy nhân vật mặc áo khoác.
+* Prompt cảnh hiện tại nói rõ nhân vật đã cởi áo khoác.
+* Video không mặc áo khoác được coi là đúng.
+
+Ví dụ:
+
+* Reference cho thấy hồ sơ đang đóng.
+* Prompt cảnh hiện tại yêu cầu hồ sơ đã mở và giấy nằm trên sàn.
+* Trạng thái mở và giấy trên sàn được coi là đúng.
+
+Ví dụ:
+
+* Reference cho thấy nhân vật rất cơ bắp.
+* Prompt không khóa vóc dáng trong cảnh.
+* Video cho thấy cùng vai trò và trang phục nhưng vóc dáng gọn hơn.
+* Không tạo lỗi identity.
+
+Nếu mâu thuẫn không thể giải quyết chắc chắn, sử dụng `NOT_VERIFIABLE`; không tự lựa chọn tùy ý.
+
+### Xử lý mâu thuẫn với PREVIOUS_VIDEO
+
+Nếu `ORIGINAL_PROMPT` yêu cầu `direct continuation` nhưng trạng thái bắt đầu được mô tả trong prompt hiện tại đã mâu thuẫn với trạng thái cuối có thể quan sát rõ của `PREVIOUS_VIDEO`, đánh dấu nội bộ là `SOURCE_CONTINUITY_CONFLICT`.
+
+Trong trường hợp này:
+
+* Không tự sửa trạng thái của prompt.
+* Không đổ toàn bộ lỗi cho `GENERATED_VIDEO` nếu video hiện tại thực hiện đúng prompt hiện tại.
+* Nêu rõ rằng prompt của clip hiện tại đã không kế thừa đúng end state của clip trước.
+* Chỉ tạo `CROSS_VIDEO_CONTINUITY_ERROR` cho video khi trạng thái thực tế của video hiện tại cũng không thể nối với video trước.
+
+Nếu prompt hiện tại mô tả một hành động hợp lý xảy ra ngay đầu clip để chuyển từ end state cũ sang state mới, không coi state mới là lỗi nếu quá trình chuyển đổi thực sự được thể hiện trong video.
+
+---
+
+## 9. QUY TẮC ÁNH XẠ REFERENCE
+
+Trước khi đánh giá, lập ánh xạ nội bộ:
+
+```text
+REFERENCE_ID
+→ REFERENCE_TYPE
+→ EXPECTED_ENTITY
+→ CORE_TRAITS
+→ ACCEPTED_VARIATIONS
+→ APPEARS_IN_PROMPT
+→ EXPECTED_ROLE_IN_VIDEO
+```
+
+Mỗi nhân vật hoặc đối tượng trong video chỉ được so sánh với reference phù hợp nhất.
+
+Không:
+
+* So sánh một nhân vật với sai ảnh.
+* Dùng ảnh bối cảnh để kiểm tra trang phục.
+* Dùng ảnh đạo cụ để suy đoán nhân vật.
+* Áp dụng reference không được liệt kê.
+* Đưa nhân vật không xuất hiện trong prompt vào danh sách bắt buộc.
+* Báo thiếu một reference nếu prompt không yêu cầu reference đó xuất hiện trong video hiện tại.
+
+Chỉ kiểm tra những reference:
+
+* Được `ORIGINAL_PROMPT` yêu cầu xuất hiện;
+* Hoặc thực tế xuất hiện trong video và cần xác định có phải yếu tố thừa hay không.
+
+---
+
+## 10. QUY TẮC KHÔNG SUY ĐOÁN
+
+* Không dùng tên file làm bằng chứng duy nhất.
+* Không suy đoán danh tính chỉ từ màu quần áo.
+* Không khẳng định sai người nếu khuôn mặt quá nhỏ.
+* Không đếm sai vật thể bị chồng hoặc che khuất.
+* Không coi nhiều góc trong reference sheet là nhiều nhân vật hoặc vật thể.
+* Không báo lỗi vì video không sao chép reference 100%.
+* Không sử dụng nội dung từ phim hoặc lần kiểm tra trước, ngoại trừ `PREVIOUS_VIDEO` được cung cấp trong lần kiểm tra hiện tại.
+* Không tự bổ sung yêu cầu không có trong prompt.
+* Không coi chi tiết ngoài phạm vi quan sát là bị thiếu.
+* Không dùng camera, ánh sáng hoặc âm thanh để kết luận sai reference.
+* Không dùng khác biệt về góc quay, shot size hoặc framing để kết luận end frame và start frame không liên tục.
+* Không khẳng định một nhân vật hoặc đạo cụ biến mất nếu yếu tố đó chỉ nằm ngoài khung ở một trong hai video.
+* Không suy đoán một hành động nối đã xảy ra ngoài màn hình khi prompt yêu cầu `direct continuation` không có time gap.
+
+Nếu không đủ bằng chứng trực tiếp, sử dụng `NOT_VERIFIABLE`.
+
+---
+
+## 11. OUTPUT CHO TÍNH LIÊN TỤC GIỮA HAI VIDEO
+
+Kết quả đầu ra phải có thêm object `cross_video_continuity_check`:
+
+```json
+{
+  "cross_video_continuity_check": {
+    "previous_video_provided": true,
+    "mode": "STRICT_CONTINUATION | RELAXED_CONTINUATION | INTENTIONAL_DISCONTINUITY | NOT_APPLICABLE",
+    "previous_last_meaningful_frame": "Mô tả frame ổn định cuối của video trước hoặc null",
+    "current_first_meaningful_frame": "Mô tả frame ổn định đầu của video hiện tại hoặc null",
+    "previous_end_state": {
+      "characters": ["Nhân vật và trạng thái cuối"],
+      "objects": ["Đạo cụ, chủ sở hữu và trạng thái cuối"],
+      "location": "Bối cảnh và landmark cuối",
+      "story_state": "Kết quả câu chuyện cuối video trước"
+    },
+    "current_start_state": {
+      "characters": ["Nhân vật và trạng thái đầu"],
+      "objects": ["Đạo cụ, chủ sở hữu và trạng thái đầu"],
+      "location": "Bối cảnh và landmark đầu",
+      "story_state": "Trạng thái câu chuyện đầu video hiện tại"
+    },
+    "characters_continuous": true,
+    "costumes_and_physical_state_continuous": true,
+    "poses_and_relationships_continuous": true,
+    "objects_and_ownership_continuous": true,
+    "location_continuous": true,
+    "story_state_continuous": true,
+    "source_prompt_conflict": false,
+    "assessment": "MATCHED | PARTIALLY_MATCHED | CONTRADICTED | NOT_VERIFIABLE | NOT_APPLICABLE",
+    "explanation": "Giải thích ngắn bằng tiếng Việt"
+  }
+}
+```
+
+Nếu không có `PREVIOUS_VIDEO`, bắt buộc trả:
+
+```json
+{
+  "cross_video_continuity_check": {
+    "previous_video_provided": false,
+    "mode": "NOT_APPLICABLE",
+    "previous_last_meaningful_frame": null,
+    "current_first_meaningful_frame": null,
+    "previous_end_state": null,
+    "current_start_state": null,
+    "characters_continuous": null,
+    "costumes_and_physical_state_continuous": null,
+    "poses_and_relationships_continuous": null,
+    "objects_and_ownership_continuous": null,
+    "location_continuous": null,
+    "story_state_continuous": null,
+    "source_prompt_conflict": false,
+    "assessment": "NOT_APPLICABLE",
+    "explanation": "Không có video trước nên không thực hiện kiểm tra continuity giữa hai video."
+  }
+}
+```
+
+Khi phát hiện lỗi, thêm issue với:
+
+```json
+{
+  "type": "CROSS_VIDEO_CONTINUITY_ERROR",
+  "severity": "CRITICAL | HIGH | MEDIUM | LOW",
+  "confidence": 0.0,
+  "previous_video_evidence": "Bằng chứng ở end frame của video trước",
+  "current_video_evidence": "Bằng chứng ở start frame của video hiện tại",
+  "expected": "Trạng thái phải được kế thừa",
+  "observed": "Trạng thái thực tế bị thay đổi",
+  "explanation": "Giải thích vì sao hai video không thể nối liền mạch"
+}
+```
+
+Nếu prompt của clip hiện tại tự mâu thuẫn với end state của video trước, có thể dùng:
+
+```json
+{
+  "type": "SOURCE_CONTINUITY_CONFLICT",
+  "severity": "HIGH | MEDIUM",
+  "confidence": 0.0,
+  "previous_video_evidence": "End state quan sát được",
+  "current_prompt_evidence": "Start state được prompt hiện tại yêu cầu",
+  "explanation": "Prompt hiện tại không kế thừa đúng trạng thái của clip trước"
+}
+```
+
+---
+
+## 12. KIỂM TRA CUỐI CHO CROSS-VIDEO CONTINUITY
+
+Trước khi trả kết quả:
+
+1. Đã xác định có `PREVIOUS_VIDEO` hay không.
+2. Nếu không có, đã dùng `NOT_APPLICABLE` và không trừ điểm.
+3. Nếu có, đã xem phần cuối video trước và phần đầu video hiện tại.
+4. Đã chọn frame có ý nghĩa thay vì frame đen, fade hoặc frame hỏng.
+5. Đã so sánh nhân vật, trang phục, trạng thái vật lý, tư thế và quan hệ vị trí.
+6. Đã so sánh đạo cụ, số lượng, trạng thái, chủ sở hữu và tay cầm nếu nhìn thấy rõ.
+7. Đã so sánh bối cảnh, landmark và trạng thái cửa hoặc nội thất quan trọng.
+8. Đã so sánh kết quả cuối video trước với trạng thái đầu video hiện tại.
+9. Đã phân biệt thay đổi camera với thay đổi trạng thái thế giới.
+10. Không báo lỗi vì một yếu tố chỉ nằm ngoài khung.
+11. Không suy đoán time skip hoặc hành động ngoài màn hình khi prompt yêu cầu direct continuation.
+12. Đã kiểm tra prompt hiện tại có tự mâu thuẫn với end state trước hay không.
+13. Không tạo nhiều issue trùng nhau cho cùng một lỗi nối clip.
