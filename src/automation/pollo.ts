@@ -484,6 +484,26 @@ export async function captureGenerationRecordId(
   }
   const body = await res.json().catch(() => null);
   const entry = Array.isArray(body) ? body[0] : body;
+
+  // Xác nhận qua log thật (job EP1_1_SHOT_12..15, 2026-09-16): response tRPC
+  // báo LỖI (không phải "id" thiếu do đổi cấu trúc) có dạng
+  // {"error":{"json":{"message":...,"code":...,"data":{"errorCode":...}}}} —
+  // cụ thể gặp "Activity daily limit reached" (errorCode
+  // "ACTIVITY_DAILY_LIMIT_REACHED", httpStatus 400): tài khoản đã đạt giới
+  // hạn hoạt động/generate trong ngày phía pollo.ai, request KHÔNG hề được
+  // nhận xử lý — throw rõ ràng NGAY ở đây thay vì trả null để caller rơi
+  // xuống waitForNewResult dò DOM chờ đủ 20 phút vô ích (video chắc chắn
+  // không bao giờ được submit, không có card nào để mà xuất hiện).
+  const errorInfo = entry?.error?.json;
+  if (errorInfo) {
+    const errorCode = errorInfo.data?.errorCode;
+    throw new GenerationError(
+      `pollo.ai từ chối submit generate: ${errorInfo.message ?? "(không rõ message)"}${
+        errorCode ? ` (errorCode: ${errorCode})` : ""
+      }`,
+    );
+  }
+
   const id = entry?.result?.data?.json?.id;
   if (typeof id !== "number") {
     // Cùng mục đích chẩn đoán như nhánh !res ở trên — response ĐÃ khớp
