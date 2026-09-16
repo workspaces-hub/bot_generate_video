@@ -1677,6 +1677,24 @@ async function insertMentionForFile(
   const maxAttempts = 4;
   let lastError: unknown;
 
+  // Log chẩn đoán tạm — theo yêu cầu người dùng: nhiều job gần đây vẫn fail
+  // "Không chọn được ảnh vừa upload trong picker '@ mention'" dù log KHÔNG hề
+  // in cảnh báo "dialog vẫn còn mở" nào từ vòng chờ spinner phía trên (tức
+  // dialog Upload Media được xác nhận ĐÃ đóng lúc đó) — nhưng debug snapshot
+  // lúc lỗi CUỐI CÙNG lại cho thấy dialog này ĐANG MỞ LẠI. Chưa rõ nó mở lại
+  // ở đâu — log rõ trạng thái dialog Upload Media NGAY LÚC bắt đầu hàm này
+  // và mỗi lần thử để khoanh vùng: nếu đã thấy mở ngay từ đầu hàm, dialog mở
+  // lại đâu đó GIỮA lúc "hết spinner" và lúc gọi insertMentionForFile; nếu
+  // chỉ mở ở 1 attempt cụ thể, do chính vòng lặp bên dưới (gõ "@"/bấm tab
+  // "All"/Escape+Backspace) gây ra.
+  const uploadDialogOpenAtStart =
+    (await uploadDialogFileInputLocator(page).count().catch(() => 0)) > 0;
+  if (uploadDialogOpenAtStart) {
+    console.warn(
+      `[pollo] [insertMentionForFile] Dialog Upload Media ĐANG MỞ ngay khi bắt đầu mention ảnh (assetUrl: ${assetUrl}) — không phải do vòng lặp mention gây ra.`,
+    );
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await page.keyboard.type(" @", { delay: 50 });
     await page.waitForTimeout(500);
@@ -1691,6 +1709,16 @@ async function insertMentionForFile(
       .waitFor({ state: "visible", timeout: 8_000 })
       .then(() => true)
       .catch(() => false);
+
+    if (!found) {
+      const uploadDialogOpenNow =
+        (await uploadDialogFileInputLocator(page).count().catch(() => 0)) > 0;
+      if (uploadDialogOpenNow) {
+        console.warn(
+          `[pollo] [insertMentionForFile] Lần thử ${attempt}/${maxAttempts}: dialog Upload Media đang mở, có thể đang che picker "@ mention" (assetUrl: ${assetUrl}).`,
+        );
+      }
+    }
 
     if (found) {
       // Best-effort: KHÔNG throw nếu spinner không có/không biến mất kịp —
