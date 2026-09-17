@@ -157,6 +157,26 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
     }
   }
 
+  // "coco-tour" — tour/spotlight giới thiệu tính năng mới (KHÁC HẲN coco-modal
+  // đã xử lý ở trên) — xác nhận qua lỗi thật (job
+  // người_vợ_báo_thù_-Y_CHARACTER_LIN_YIN, 2026-09-17): selectModel timeout
+  // vì bị 4 <rect fill="transparent" pointer-events="auto" ...> (khoét lỗ
+  // quanh vùng đang highlight, mask SVG bên trong div.coco-tour-mask, z-index
+  // 1001) chặn click, dù chính overlay đó "pointer-events: none" — các rect
+  // con bên trong mới thật sự nhận click. Nút đóng KHÔNG dùng aria-label
+  // "Close" như coco-modal — dùng class riêng "coco-tour-next-btn" (text vd
+  // "Got it"/"Next" tuỳ bước). Bấm LẶP LẠI (tối đa 5 lần, cách nhau ngắn) để
+  // qua hết các bước nếu tour có nhiều bước, không chỉ 1 lần.
+  for (let i = 0; i < 5; i++) {
+    const tourNextButton = page.locator("button.coco-tour-next-btn").first();
+    const tourButtonVisible = await tourNextButton
+      .isVisible({ timeout: 1000 })
+      .catch(() => false);
+    if (!tourButtonVisible) break;
+    await tourNextButton.click().catch(() => {});
+    await page.waitForTimeout(300);
+  }
+
   await page.keyboard.press("Escape").catch(() => {});
 }
 
