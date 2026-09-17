@@ -858,7 +858,18 @@ export async function selectModel(
   const currentLabel = await chip.innerText().catch(() => "");
   if (currentLabel.trim().toLowerCase() === modelName.toLowerCase()) return;
 
-  await chip.click({ timeout: 10_000 });
+  // clickWithOverlayDismiss (không phải chip.click() thô) — xác nhận qua lỗi
+  // thật LẶP LẠI NHIỀU LẦN, MỖI LẦN 1 PHẦN TỬ CHE KHÁC NHAU (job
+  // người_vợ_báo_thù_-Y_CHARACTER_LIN_YIN/FENG_MINGZHOU, 2026-09-17): lần đầu
+  // bị "coco-tour" (đã sửa riêng, xem dismissBlockingOverlays), lần sau lại
+  // bị 1 <video> nền của thẻ nội dung khuyến mãi phía dưới trang đè lên đúng
+  // vị trí chip model — các phần tử quảng cáo/khuyến mãi trên trang chủ
+  // pollo.ai LIÊN TỤC đổi khác nhau, không thể liệt kê hết từng loại 1. AN
+  // TOÀN gọi dismissBlockingOverlays() giữa các lần thử ở ĐÂY (khác hẳn vòng
+  // lặp click row model bên dưới, nơi Escape sẽ đóng nhầm popup đang mở) —
+  // popup chọn model CHƯA MỞ tại bước này nên Escape không có gì để đóng
+  // nhầm cả.
+  await clickWithOverlayDismiss(page, chip, 10_000, 5);
   const searchInput = page.locator('input[placeholder="Search…"]');
   await searchInput.fill(modelName).catch(() => {});
   await page.waitForTimeout(800);
