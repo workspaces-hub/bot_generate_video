@@ -4,7 +4,11 @@ import { randomUUID } from "node:crypto";
 import { generateReferenceImage } from "./chatAIImage";
 import { generateVideo, type GenerateVideoOptions } from "./aiVideo";
 import { generateImage } from "./aiVideoImage";
-import { reviseGenerationPrompt } from "./chatAI";
+import {
+  reviseGenerationPrompt,
+  verifyVideo,
+  type VerifyVideoRef,
+} from "./chatAI";
 import { generateVideo as generateVideoPollo } from "./pollo";
 import { generateImage as generateImagePollo } from "./polloImage";
 
@@ -293,22 +297,32 @@ async function archiveExistingVideos(outputDir: string): Promise<void> {
     .readdir(outputDir, { withFileTypes: true })
     .catch(() => []);
   const videoFiles = entries
-    .filter((e) => e.isFile() && VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
+    .filter(
+      (e) =>
+        e.isFile() && VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()),
+    )
     .map((e) => e.name);
   if (videoFiles.length === 0) return;
 
   const existingVersions = entries
     .filter((e) => e.isDirectory() && /^v\d+$/.test(e.name))
     .map((e) => Number.parseInt(e.name.slice(1), 10));
-  const nextVersion = (existingVersions.length > 0 ? Math.max(...existingVersions) : 0) + 1;
-  const versionDir = path.join(outputDir, `v${String(nextVersion).padStart(2, "0")}`);
+  const nextVersion =
+    (existingVersions.length > 0 ? Math.max(...existingVersions) : 0) + 1;
+  const versionDir = path.join(
+    outputDir,
+    `v${String(nextVersion).padStart(2, "0")}`,
+  );
 
   await fs.promises.mkdir(versionDir, { recursive: true });
   for (const fileName of videoFiles) {
     await fs.promises
       .copyFile(path.join(outputDir, fileName), path.join(versionDir, fileName))
       .catch((err) => {
-        console.warn(`[storyboardPipeline] Không copy được video "${fileName}" vào "${versionDir}":`, err);
+        console.warn(
+          `[storyboardPipeline] Không copy được video "${fileName}" vào "${versionDir}":`,
+          err,
+        );
       });
   }
 }
@@ -585,7 +599,10 @@ export async function generateReferenceImagesForFileViaAIVideo(
       failed++;
       failedEntries.push({ id: entry.id, type: entry.type });
       if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {
+        await onEntryError(
+          entry.id,
+          err instanceof Error ? err.message : String(err),
+        ).catch((err) => {
           console.error(
             `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
             err,
@@ -673,11 +690,10 @@ export async function generateReferenceImagesForFileViaPollo(
     );
     let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
     try {
-      const { filePaths: imagePaths, polloResultId } = await generateWithContentViolationRetry(
-        entry,
-        jobId,
-        () => generateImagePollo(entry.prompt!, {}, jobId),
-      );
+      const { filePaths: imagePaths, polloResultId } =
+        await generateWithContentViolationRetry(entry, jobId, () =>
+          generateImagePollo(entry.prompt!, {}, jobId),
+        );
       if (imagePaths.length === 0) {
         throw new Error("Không tạo được ảnh nào");
       }
@@ -722,7 +738,10 @@ export async function generateReferenceImagesForFileViaPollo(
       failed++;
       failedEntries.push({ id: entry.id, type: entry.type });
       if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {
+        await onEntryError(
+          entry.id,
+          err instanceof Error ? err.message : String(err),
+        ).catch((err) => {
           console.error(
             `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
             err,
@@ -766,7 +785,10 @@ async function findExistingImageById(
   return match ? path.join(dir, match) : null;
 }
 
-async function resolveRefImagePath(dir: string, id: string): Promise<string> {
+export async function resolveRefImagePath(
+  dir: string,
+  id: string,
+): Promise<string> {
   const found = await findExistingImageById(dir, id);
   if (found) return found;
 
@@ -813,8 +835,8 @@ async function findVideoEntriesReadyAfterEnd(
 
   const readyIds: string[] = [];
   for (const entry of candidates) {
-    const refs = (entry.ref ?? []).filter((r): r is Required<StoryboardRefItem> =>
-      Boolean(r.id),
+    const refs = (entry.ref ?? []).filter(
+      (r): r is Required<StoryboardRefItem> => Boolean(r.id),
     );
     let allReady = true;
     for (const ref of refs) {
@@ -1032,7 +1054,10 @@ export async function generateVideosForFile(
         err instanceof Error ? err.message : err,
       );
       if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {});
+        await onEntryError(
+          entry.id,
+          err instanceof Error ? err.message : String(err),
+        ).catch((err) => {});
         await sleep(1000);
       }
       entry.success = false;
@@ -1043,6 +1068,125 @@ export async function generateVideosForFile(
   }
 
   return { outputDir, succeeded, failed, failedEntries };
+}
+
+export interface VerifyVideosResult {
+  outputDir: string;
+  total: number;
+  verified: number;
+  failed: number;
+  failedEntries: FailedEntry[];
+}
+
+/**
+ * Đọc 1 file JSON storyboard trong storage/generated/, duyệt từng entry
+ * "VIDEO" ĐÃ có file video thật trên đĩa (<sanitizeId(entry.id)>.mp4 trong
+ * outputDir — entry chưa gen video thì bỏ qua, không phải lỗi) rồi gọi
+ * verifyVideo (chatAI.ts) kiểm tra từng video — theo yêu cầu người dùng.
+ *
+ * refs resolve giống hệt generateVideosForFile (resolveRefImagePath theo
+ * entry.ref, ĐÚNG THỨ TỰ khai báo trong JSON).
+ *
+ * Best-effort theo từng entry — 1 video lỗi (thiếu ref trên đĩa, ChatAI lỗi
+ * phiên đăng nhập...) không chặn các video khác trong CÙNG file, chỉ tính
+ * vào failedEntries.
+ */
+/**
+ * Tách shot/clip của 1 entry VIDEO — ưu tiên field "shot"/"clip" (schema mới,
+ * xem format_output.txt), fallback parse từ id dạng SHOT_XX_CLIP_YY_VIDEO cho
+ * file JSON cũ chưa có 2 field này. Trả về null nếu không xác định được (id
+ * không đúng mẫu) — verifyVideos khi đó bỏ qua hẳn việc tìm PREVIOUS_VIDEO
+ * cho entry đó, không suy đoán mù.
+ */
+function parseShotClip(
+  entry: StoryboardEntry,
+): { shot: number; clip: number } | null {
+  if (typeof entry.shot === "number" && typeof entry.clip === "number") {
+    return { shot: entry.shot, clip: entry.clip };
+  }
+  const match = /^SHOT_(\d+)_CLIP_(\d+)_VIDEO$/i.exec(entry.id ?? "");
+  if (!match) return null;
+  return { shot: Number(match[1]), clip: Number(match[2]) };
+}
+
+export async function verifyVideos(
+  inputPath: string,
+): Promise<VerifyVideosResult> {
+  const outputDir = generatedDirFor(inputPath);
+  const entries: StoryboardEntry[] = JSON.parse(
+    await fs.promises.readFile(inputPath, "utf-8"),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "VIDEO") return false;
+      return Boolean(e.id) && typeof e.prompt === "string" && Boolean(e.prompt);
+    },
+  );
+
+  let verified = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  // Video liền trước ĐÃ XÁC NHẬN tồn tại trên đĩa cho từng SHOT — theo yêu
+  // cầu người dùng, dùng làm PREVIOUS_VIDEO khi verify clip kế tiếp CÙNG shot
+  // (clip số N-1). Cập nhật sau mỗi entry có file thật, bất kể verify entry
+  // đó thành công hay lỗi — chỉ cần file .mp4 tồn tại là đủ làm continuity
+  // reference cho clip sau.
+  const lastVideoPathByShot = new Map<number, { clip: number; path: string }>();
+
+  for (const entry of targets) {
+    const videoPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
+    if (!fs.existsSync(videoPath)) continue;
+
+    const shotClip = parseShotClip(entry);
+    let previousVideoPath: string | undefined;
+    if (shotClip) {
+      const prev = lastVideoPathByShot.get(shotClip.shot);
+      if (
+        prev &&
+        prev.clip === shotClip.clip - 1 &&
+        fs.existsSync(prev.path)
+      ) {
+        previousVideoPath = prev.path;
+      }
+    }
+
+    try {
+      const refs = (entry.ref ?? []).filter(
+        (r): r is Required<StoryboardRefItem> => Boolean(r.id),
+      );
+      const verifyRefs: VerifyVideoRef[] = [];
+      for (const ref of refs) {
+        const refId = sanitizeId(ref.id);
+        verifyRefs.push({
+          id: refId,
+          path: await resolveRefImagePath(outputDir, refId),
+        });
+      }
+
+      await verifyVideo(entry.prompt, verifyRefs, videoPath, previousVideoPath);
+      verified++;
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [VERIFY] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      failed++;
+      failedEntries.push({ id: entry.id, type: "VIDEO" });
+    }
+
+    if (shotClip) {
+      lastVideoPathByShot.set(shotClip.shot, {
+        clip: shotClip.clip,
+        path: videoPath,
+      });
+    }
+  }
+
+  return { outputDir, total: targets.length, verified, failed, failedEntries };
 }
 
 /**
@@ -1135,16 +1279,14 @@ export async function generateVideosForFilePollo(
       console.log(
         `[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video (pollo)...`,
       );
-      const { filePath: tempFilePath, polloResultId } = await generateWithContentViolationRetry(
-        entry,
-        jobId,
-        () =>
+      const { filePath: tempFilePath, polloResultId } =
+        await generateWithContentViolationRetry(entry, jobId, () =>
           generateVideoPollo(
             entry.prompt!,
             { referenceImagePaths: refPaths, model: "MiniMax H3", duration },
             jobId,
           ),
-      );
+        );
       // Lưu id kết quả pollo.ai (dạng "/v/<id>") NGAY VÀO entry trong file
       // JSON storyboard gốc — theo yêu cầu người dùng, KHÔNG lưu file riêng.
       if (polloResultId) {
@@ -1170,7 +1312,10 @@ export async function generateVideosForFilePollo(
         err instanceof Error ? err.message : err,
       );
       if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {});
+        await onEntryError(
+          entry.id,
+          err instanceof Error ? err.message : String(err),
+        ).catch((err) => {});
         await sleep(1000);
       }
       entry.success = false;
@@ -1496,3 +1641,6 @@ export async function generateSceneImagesForFileViaAIVideo(
   return { outputDir, succeeded, failed, failedEntries };
 }
 
+// verifyVideos("/Users/linhnt/workspaces/bot/generate_video/storage/generated/ep01_new_art/ep01_new_art.json")
+//   .then(console.log)
+//   .catch(console.error);

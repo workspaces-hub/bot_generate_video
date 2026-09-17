@@ -318,6 +318,22 @@ async function attemptGenerateImage(
     // vẫn giữ hành vi cũ chỉ bật khi credit không đủ).
     await enableUnlimitedIfNotEnoughCredit(page, jobId, true);
 
+    // Log + ảnh debug xác nhận switch Unlimited THẬT SỰ đã bật (aria-checked
+    // đọc lại trực tiếp từ DOM, không suy đoán qua việc enableUnlimitedIfNotEnoughCredit
+    // không throw) — theo yêu cầu người dùng, dùng để kiểm tra fix
+    // alwaysEnable hoạt động đúng.
+    const unlimitedSwitchChecked = await page
+      .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+      .first()
+      .getAttribute("aria-checked")
+      .catch(() => null);
+    console.log(
+      `[pollo-image] Unlimited switch sau enableUnlimitedIfNotEnoughCredit(alwaysEnable=true): aria-checked="${unlimitedSwitchChecked}"`,
+    );
+    await captureSnapshot(page, `${jobId}_unlimited-check`, "unlimited-check", {
+      includeHtml: true,
+    });
+
     const baseline = await captureResultBaseline(page);
     // Theo yêu cầu người dùng: chụp ảnh debug NGAY TRƯỚC khi bấm Generate —
     // dùng để xác nhận trực quan model/prompt/ảnh tham chiếu đã đúng chưa

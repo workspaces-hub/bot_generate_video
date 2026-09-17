@@ -67,9 +67,60 @@ TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
 - Nếu một hành động dài hơn giới hạn một clip, chia thành nhiều VIDEO liên tiếp theo thứ tự thời gian.
 - Clip sau phải tiếp nối hợp lý trạng thái kết thúc của clip trước bằng mô tả trực tiếp trong VIDEO prompt; không tạo item trung gian để biểu diễn frame đầu/cuối.
 - Với các clip cùng một SHOT (shot giống nhau, clip tăng dần), start frame của clip sau PHẢI khớp CHÍNH XÁC với end frame vừa mô tả ở clip liền trước: cùng vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera và motion phase — không được thay đổi, bỏ sót hay diễn giải lại khác đi.
-- Prompt của clip N từ 2 trở đi trong cùng continuity run phải nêu rõ trạng thái được kế thừa từ clip trước khi cần thiết: vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, ánh sáng, môi trường và motion phase.
+- Prompt của clip N từ 2 trở đi trong cùng continuity run bắt buộc mô tả lại đầy đủ trạng thái bàn giao liên quan từ clip trước: vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, ánh sáng, môi trường và motion phase. Không được dùng riêng câu “matches exactly”, “same as before” hoặc “unchanged” thay cho mô tả cụ thể.
 - Không yêu cầu tạo, repaint, regenerate, restage hoặc reinterpret một START/END frame riêng.
 - Mọi thông tin continuity phải nằm tự nhiên ngay trong VIDEO prompt.
+
+3A. KHÓA TRẠNG THÁI BÀN GIAO GIỮA HAI CLIP CÙNG SHOT
+
+- Trước khi viết prompt, lập ngầm một trạng thái bàn giao duy nhất cho mỗi ranh giới clip. Trạng thái này được dùng đồng thời làm End frame của clip N và Start frame của clip N+1; không thiết kế hai đầu độc lập. Không xuất bảng trạng thái, metadata hoặc item mới.
+- Viết cùng một đoạn mô tả trạng thái cụ thể ở hai đầu; được phép lặp nguyên văn phần bàn giao này để tránh mất chi tiết. Đoạn hành động và camera phát triển sau điểm nối vẫn phải riêng cho từng clip.
+- Trạng thái bàn giao phải chứa những thông tin ảnh hưởng đến việc nối hình: nhân vật và vị trí theo mốc cố định; khoảng cách; hướng chân/hông/vai/mặt; target của ánh mắt; biểu cảm và trạng thái miệng; tay và điểm cầm; số lượng, hướng, người giữ/điểm đỡ, trạng thái đạo cụ; vị trí nhân vật phụ liên quan; bố cục, camera, vùng nét; ánh sáng và các dấu vết đã phát sinh.
+- Phải phân biệt “không nhìn thấy” với “không tồn tại”: chi tiết ngoài khung vẫn giữ trạng thái vật lý đã xác lập. Khi cắt về khung rộng, không tự đưa nhân vật hoặc đạo cụ về vị trí mặc định. Không thêm nhân vật ngoài khung vào ref chỉ để lưu continuity.
+- Với chuyển động đang diễn ra, không được chỉ ghi “mid-stride”, “moving”, “turning”, “raising” hoặc “at the apex”. Phải khóa pha quan sát được và hướng phát triển kế tiếp. Khi đang đi: chân nào chịu lực, chân nào đang vung, gót/mũi chân đang chạm hay rời sàn, trọng tâm và hướng tiến. Khi xoay/đứng lên/cúi xuống: điểm tựa, phần thân đang xoay, tư thế trung gian và chiều chuyển động. Khi thao tác đạo cụ: tay, điểm tiếp xúc, pha nắm/nhả/đỡ, hướng chuyển động và trạng thái của người nhận. Chỉ dùng các chi tiết phù hợp hành động, không ép mọi cảnh phải có bước chân hoặc chuyển giao.
+- Với điểm đảo chiều hoặc đỉnh động tác, xác định đã tới đỉnh hay còn đi lên, đã bắt đầu đi xuống hay chưa, có chủ ý dừng hay không. Clip sau tiếp tục đúng pha này, không giơ lại, lấy đà lại, thực hiện lại tiếp xúc hoặc lặp sự kiện đã hoàn tất.
+- Câu hành động đầu tiên sau Start frame của clip tiếp theo phải nêu chuyển động tiếp diễn ngay: chi/bộ phận nào chuyển động tiếp, theo hướng nào và từ điểm tựa nào. Không có khoảng đứng chờ, reset pose, lùi về vị trí cũ hoặc time skip không được mô tả.
+- Nếu camera đang chuyển động qua ranh giới, khóa vị trí theo mốc cảnh, độ cao, hướng nhìn, lens/shot size, phía của trục tương tác, hướng và tốc độ chuyển động định tính, pha tăng tốc/đều tốc/hãm. Camera không tự dừng hoặc khởi động lại ở clip sau. Nếu đã locked, clip sau mở đầu cũng locked rồi mới thực hiện chuyển động mới được mô tả.
+- “End frame” có thể là khoảnh khắc đang chuyển động, không bắt buộc là ảnh đóng băng hoặc pose giữ lâu. Hai mô tả bàn giao biểu diễn cùng một ranh giới thời gian; clip sau phát triển tiếp chứ không phát lại đoạn cuối clip trước.
+- Ưu tiên chọn ranh giới có trạng thái dễ đọc; nếu chia giữa một động tác khó tái tạo, phải mô tả đủ pha hoặc điều chỉnh điểm chia mà vẫn giữ nhịp và sự kiện. Không bắt mọi nhân vật dừng ở cuối mỗi clip.
+
+3B. HỆ QUY CHIẾU KHÔNG GIAN CỐ ĐỊNH
+
+- Thiết lập ngầm sơ đồ không gian từ LOCATION: các mốc ổn định như cửa vào, cửa sổ, chân cầu thang, cạnh bàn, đầu ghế, lối đi. Đặt tên mô tả phân biệt được cho các mốc và dùng nhất quán trong LOCATION cùng mọi VIDEO liên quan.
+- Thứ tự xác định vị trí: mốc cố định trong bối cảnh → quan hệ actor/target và anatomical left/right → vị trí camera → camera-left/right và screen direction tại beat hiện tại. Camera-left/right chỉ mô tả hình chiếu trong khung, không thay thế địa chỉ vật lý trong bối cảnh.
+- Không dùng riêng “beside the sofa”, “camera-left end” hoặc “neck points camera-left” để khóa một vật thể qua nhiều góc máy. Phải nêu đầu/cạnh nào theo mốc cố định, vật nằm phía nào và đầu chức năng hướng về mốc nào. Có thể bổ sung vị trí trên màn hình sau đó.
+- Khi đổi góc máy, tính lại trái/phải màn hình từ sơ đồ cố định. Nhân vật và đạo cụ không tự di chuyển, quay, đổi chỗ hoặc đổi phía để giữ nguyên chữ camera-left/right. Không ghi “all screen positions unchanged” nếu chính chuyển động camera làm hình chiếu thay đổi.
+- Đường đi phải nối được vị trí đầu và cuối, đi qua đúng lối trống, đúng cạnh/góc vật cản và đủ thời gian. Không cho actor đã vòng qua một góc ở clip trước quay lại vòng cùng góc như chưa đi qua; không đi xuyên bàn, ghế hoặc nhân vật khác.
+- Khóa phía camera so với trục tương tác chính. Nếu cần vượt trục, phải mô tả đường máy liên tục hoặc beat tái xác lập địa lý rõ ràng và đủ thời gian; không dùng một câu “preserve axis” để che một đường máy thực tế mâu thuẫn.
+
+3C. CAMERA, ĐƯỜNG NHÌN VÀ CHUYỂN NÉT KHẢ THI
+
+- Với từng camera beat, kiểm tra ngầm: máy ở đâu trong sơ đồ, nhìn về đâu, ai/vật gì ở trước máy, thứ tự tiền cảnh–trung cảnh–hậu cảnh, vật che khuất và vùng nét. Mọi chủ thể cần thấy phải thực sự nằm trong đường nhìn và khung hình.
+- Rack focus chỉ chuyển mặt phẳng nét trong hình học đang có; không đổi hướng nhìn, dịch chuyển máy, nhìn xuyên vật cản hoặc đưa người phía sau máy vào khung. Chỉ rack focus giữa các đối tượng cùng có mặt trong đường nhìn tại thời điểm đó.
+- Nếu góc đầu là POV/eyeline của nhân vật nhìn về target, không được chỉ rack focus để thấy lại chính nhân vật đó phía sau máy. Phải chọn góc khác có cả hai lớp từ đầu, mô tả một chuyển động camera khả thi để nhìn lại, hoặc ghi rõ motivated cut sang góc mới. Mỗi cách phải được tính vào duration.
+- Phân biệt lens/focal length với vị trí máy: dolly/push thay đổi vị trí và phối cảnh; zoom thay đổi focal length; cut có thể chuyển cả lens và vị trí. Không tự đổi 95mm sang 85mm trong cùng cú push mà không mô tả zoom, thay lens qua cut hoặc cơ chế chuyển đổi thích hợp.
+- Khi prompt yêu cầu khung cận mặt nhưng trạng thái bàn giao còn chứa tay/chân/đạo cụ ngoài khung, giữ chúng như trạng thái vật lý kế thừa; không nói rằng mọi chi tiết đó đều nhìn thấy trong cùng khung cận. Nếu khán giả cần xác nhận một chi tiết, bố trí insert hoặc khung đủ rộng với thời gian thực tế.
+- Với nhiều camera beat, đánh dấu rõ cut hay chuyển động liên tục. Whip-pan không cho phép máy dịch chuyển tức thời sang vị trí không thể đạt. Không dùng rack focus, whip-pan hoặc “cinematic transition” như lời giải thích thay cho đường đi vật lý còn thiếu.
+- Câu “No jump cuts” cấm nhảy tư thế, vị trí, thời gian hoặc hành động không có diễn biến nối; không cấm motivated hard cut/match cut đổi góc đã mô tả. Cut hợp lệ vẫn phải bảo toàn thời điểm, pha động tác và trạng thái của cảnh.
+
+3D. NGÂN SÁCH THỜI GIAN CHO THOẠI, HÀNH ĐỘNG VÀ CAMERA
+
+- Trước khi quyết định số clip, lập ngầm timeline trong khoảng 0 đến duration: hành động, thoại, phản ứng, chuyển hướng nhìn và camera. Hoạt động song song chỉ được chồng thời gian khi thực sự có thể diễn ra đồng thời; các bước có quan hệ trước–sau phải cộng đủ thời gian.
+- Ước lượng lời thoại theo ngôn ngữ và cách diễn: với tiếng Anh tự nhiên, dùng khoảng 2–3 từ/giây làm mốc lập kế hoạch, chậm hơn khi ngập ngừng, lạnh lùng, nhấn mạnh hoặc có khoảng nghỉ. Với ngôn ngữ khác, ước lượng theo âm tiết và nhịp nói thực tế; không dùng số token hoặc đếm khoảng trắng máy móc. Đây là mốc kiểm tra khả thi, không phải yêu cầu đọc đều như máy.
+- Tính cả hơi thở, dấu ngắt, nhấn từ, phản ứng và thao tác trước/sau lời thoại. Dành biên thời gian cho diễn xuất thay vì lấp kín duration bằng tốc độ nói tối đa. Không dùng “exact lip sync” để biện minh cho thoại dài hơn thời gian còn lại.
+- Nếu câu chỉ bắt đầu sau mốc t, toàn bộ câu và các phản ứng sau câu phải nằm trong duration trừ t. Phải đọc thử ngầm đúng nhịp đã yêu cầu; nếu phải nói dồn, bỏ chữ hoặc tăng tốc bất thường mới vừa thì clip không đạt.
+- Khi không đủ thời gian, ưu tiên tách thêm VIDEO trong cùng SHOT ở ranh giới ngữ nghĩa tự nhiên; bảo toàn toàn bộ nội dung thoại và thứ tự sự kiện. Có thể tinh giản camera beat không thiết yếu. Chỉ tăng duration nếu cấu hình đầu vào cho phép; không tự vượt giới hạn 4–5 giây hoặc giới hạn người dùng đặt.
+- Không cắt bỏ, rút gọn hoặc đổi nghĩa thoại để ép vừa clip nếu chưa được cho phép. Không thêm sự kiện để lấp đầy clip. Nếu chia một lượt nói qua hai clip, ưu tiên sau một cụm/câu hoàn chỉnh, khóa miệng/hơi thở và ghi rõ phần lời tiếp theo; không lặp lời đã nói. Tránh chia giữa một từ.
+- End frame phải là trạng thái thực sự đạt được trước khi hết duration. Không mô tả người đã nói hết câu, nhìn sang rồi nhìn lại hoặc hoàn tất thao tác nếu timeline chưa đủ thời gian thực hiện.
+
+3E. MÔ TẢ BÀN GIAO VÀ FRAME CUỐI THỰC TẾ
+
+- Phân biệt ba nguồn: asset CHARACTER/LOCATION dùng nhận diện; End frame dự kiến do prompt mô tả; frame cuối thực tế của video đã sinh. Một ảnh nhân vật hoặc câu “matches exactly” không thay thế frame cuối thực tế và không chứng minh hai video đã nối khớp.
+- Mặc định khi chỉ có kịch bản và asset CHARACTER/LOCATION: thiết kế trạng thái bàn giao bằng mô tả cụ thể, không tuyên bố đã xem video trước hoặc đã nhận frame trích xuất. Không tạo frame asset, ID, URL, field hay ref mới.
+- Chỉ khi người dùng/pipeline thực sự cung cấp và gắn frame cuối video trước làm ảnh khởi đầu cho lần gen hiện tại, mới được thêm chỉ dẫn tự nhiên trong VIDEO prompt rằng ảnh khởi đầu được cung cấp là hình học mở đầu cần giữ, rồi mô tả cụ thể trạng thái và chuyển động tiếp diễn. Không yêu cầu repaint, tái dựng hoặc tạo lại frame đó; không gọi nó là một START/END item.
+- Trong trường hợp có frame thực tế, dùng nó cho các chi tiết quan sát được; trạng thái ngoài khung kế thừa từ diễn biến đã xác lập. Một ảnh tĩnh không đủ xác nhận vận tốc hoặc pha trước đó: dùng video/chuỗi frame nếu được cung cấp, không tự nhận đã đo chuyển động từ một ảnh.
+- Nếu frame thực tế mâu thuẫn với identity, sự kiện hoặc trạng thái bắt buộc của kịch bản, không âm thầm sửa cốt truyện hoặc viết prompt khẳng định hai trạng thái mâu thuẫn đồng thời. Cần sửa/tạo lại clip trước về trạng thái yêu cầu trước khi dùng frame đó làm đầu vào; chỉ mô tả hành động nối sửa khi thật sự khả thi và được nội dung cho phép.
+- Việc trích frame và gắn ảnh đầu vào thuộc bước vận hành pipeline ngoài schema này; master chỉ mô tả khi đầu vào thực sự tồn tại, không giả định viết câu trong prompt sẽ tự thực hiện việc truyền frame. VIDEO.ref vẫn chỉ có CHARACTER/LOCATION thực sự xuất hiện.
 
 4. QUY TẮC THEO TYPE
 
@@ -87,7 +138,7 @@ LOCATION
 - id: ID nhất quán và duy nhất.
 - ref: [].
 - prompt: chỉ chứa LOCATION PROMPT hoàn chỉnh, bằng tiếng Anh, dùng trực tiếp để tạo asset tham chiếu bối cảnh.
-- Prompt phải mô tả đủ kiến trúc/địa hình, bố cục không gian, lối vào, mốc định hướng, vật thể cố định, vật liệu, thời điểm/ánh sáng nền phù hợp và phong cách hình ảnh.
+- Prompt phải mô tả đủ kiến trúc/địa hình, bố cục không gian, lối vào, mốc định hướng, vật thể cố định, vật liệu, thời điểm/ánh sáng nền phù hợp và phong cách hình ảnh. Các cạnh/đầu/lối đi quan trọng phải được phân biệt theo mốc cố định trong bối cảnh theo mục 3B; không chỉ đặt tên bằng camera-left/camera-right của một góc tham chiếu.
 - Không đưa nhân vật hoặc hành động riêng của một VIDEO vào LOCATION prompt.
 - duration: 0.
 
@@ -120,7 +171,7 @@ QUAN HỆ ACTOR–ACTION–TARGET VÀ HƯỚNG HÀNH ĐỘNG BẮT BUỘC:
 - Nếu hướng hành động ảnh hưởng đến ý nghĩa câu chuyện, prompt phải khóa hướng bằng các dấu hiệu cơ thể quan sát được: hướng bàn chân, hông, vai, thân trên, khuôn mặt, ánh mắt và trục chuyển động của người thực hiện so với vị trí chính xác của mục tiêu.
 - Phải mô tả trình tự chuyển hướng trước khi thực hiện hành động: người thực hiện rời hướng/mục tiêu cũ, xoay các bộ phận cơ thể cần thiết để đối diện mục tiêu mới, xác lập ánh mắt hoặc trục cơ thể với mục tiêu mới, sau đó mới thực hiện hành động.
 - Với hành động hướng tới một nhân vật cụ thể, phải nêu rõ nhân vật nào không phải mục tiêu nếu bố cục dễ gây nhầm lẫn. Ví dụ: “She bows directly toward Gu Cheng, not toward Su Man.”
-- Khi mục tiêu không đứng chính diện trước người thực hiện, prompt phải nêu vị trí tương đối của mục tiêu trong không gian cảnh như camera-left, camera-right, behind her, beside the elevator hoặc across the room; đồng thời mô tả người thực hiện phải xoay theo hướng nào để hướng cơ thể tới đúng mục tiêu.
+- Khi mục tiêu không đứng chính diện trước người thực hiện, prompt phải nêu vị trí của mục tiêu theo mốc cố định trong bối cảnh và quan hệ với actor; sau đó có thể bổ sung camera-left/camera-right tại beat hiện tại. Mô tả rõ actor xoay những bộ phận nào và theo hướng nào để nhìn/tương tác đúng target; không bắt thân người phải xoay nếu hành động chỉ cần đổi mắt hoặc đầu.
 - Trạng thái cuối clip phải tiếp tục xác nhận đúng quan hệ không gian: actor đang hướng tới ai, nhìn ai, cách mục tiêu bao xa và trục cơ thể kết thúc ở đâu.
 - Không coi một hành động là đã mô tả đầy đủ nếu prompt chỉ nói “turns”, “bows”, “looks”, “speaks” hoặc “gestures” mà không nêu rõ target và hướng cơ thể quan sát được.
 - Trước khi lưu JSON, kiểm tra từng VIDEO prompt bằng câu hỏi: “Người thực hiện là ai? Mục tiêu là ai? Hướng cơ thể và hướng hành động có chỉ đúng vào mục tiêu đó không? Có đối tượng nào gần đó khiến mô hình hiểu nhầm không?” Nếu còn mơ hồ, phải viết lại prompt trước khi lưu.
@@ -172,7 +223,7 @@ TRÁI–PHẢI CƠ THỂ VÀ HƯỚNG CHỨC NĂNG CỦA ĐẠO CỤ:
 
 4. Camera plan cụ thể: một VIDEO có thể chứa một hoặc nhiều shot/camera beat. Nếu có nhiều beat, phải mô tả rõ thứ tự, thời lượng tương đối, điểm cut/transition, focal length/lens, shot size, angle, framing và camera movement của từng beat. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
 5. Ánh sáng, thời điểm trong ngày và thời tiết cụ thể, phù hợp LOCATION và continuity.
-6. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, screen direction, time, weather, lighting direction, camera continuity và natural physics.
+6. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, time, weather, lighting direction và natural physics. Camera continuity, screen direction và vị trí trên màn hình phải phát triển đúng đường máy và hệ quy chiếu cố định ở mục 3B–3C; không ép giữ cùng bên màn hình khi góc nhìn đã thay đổi hợp lý.
 7. Câu cấm chính xác: “No jump cuts, no hidden scene change, no extra events, no modern elements.”
 
 Không bắt buộc dùng câu mở đầu chung giống nhau cho mọi VIDEO. Hãy bắt đầu bằng mô tả trực tiếp, riêng biệt và phù hợp với hành động của clip.
@@ -180,14 +231,14 @@ Không bắt buộc dùng câu mở đầu chung giống nhau cho mọi VIDEO. H
 CẤM TUYỆT ĐỐI:
 - Dùng cụm “bounded by the referenced START FRAME and END FRAME”.
 - Dùng câu “The opening frame must match START exactly and the final stable frame must match END exactly.”
-- Nói rằng có supplied/referenced/current/previous START FRAME hoặc END FRAME.
-- Yêu cầu dùng extracted last stable frame như một asset tham chiếu nếu asset đó không tồn tại trong schema.
+- Bịa đặt supplied/referenced/current/previous START FRAME hoặc END FRAME item/asset. Chỉ được mô tả ảnh khởi đầu thực sự đã được cung cấp ngoài schema theo đúng mục 3E; không thêm nó vào ref hoặc tạo type/ID mới.
+- Yêu cầu dùng extracted last stable frame khi không có ảnh thực tế được cung cấp/gắn làm đầu vào. Không dùng frame ổn định ở thời điểm sớm hơn thay frame cuối của một chuyển động vẫn đang tiếp diễn rồi gọi đó là nối tiếp chính xác.
 - Nhét Character Bible, Location Bible, metadata phân tích, tiêu đề, negative prompt riêng hoặc lời giải thích ngoài VIDEO prompt.
-- Dùng lại nguyên văn hoặc gần giống nguyên văn phần hành động/camera cho nhiều VIDEO chỉ bằng cách đổi ID. Mỗi prompt phải phản ánh đúng nhịp hành động riêng của clip.
+- Dùng lại nguyên văn hoặc gần giống nguyên văn phần diễn biến hành động/camera cho nhiều VIDEO chỉ bằng cách đổi ID. Mỗi prompt phải phản ánh đúng nhịp hành động riêng của clip. Ngoại lệ bắt buộc: đoạn trạng thái bàn giao End frame N → Start frame N+1 được phép lặp nguyên văn theo mục 3A; đây không phải lặp sự kiện.
 
 MULTI-SHOT VIDEO CONTAINER
 Một VIDEO không bắt buộc tương ứng với duy nhất một shot.
-Ưu tiên gom nhiều camera beat liên tiếp vào cùng một VIDEO khi chúng thuộc cùng một dramatic beat và toàn bộ chuỗi vẫn đọc rõ trong duration.
+Chỉ gom nhiều camera beat liên tiếp vào cùng một VIDEO khi chúng thuộc cùng một dramatic beat, có đường nhìn/đường máy khả thi và đã vượt qua kiểm tra ngân sách thời gian ở mục 3D. Khi hai lựa chọn đều kể đủ nội dung, ưu tiên ít chuyển góc hơn để giữ hành động và continuity rõ ràng.
 Cho phép hard cut, match cut, whip-pan transition, rack-focus transition, thay đổi shot size, thay đổi angle hoặc thay đổi camera position bên trong cùng một VIDEO.
 Khi VIDEO có nhiều camera beat, phải mô tả rõ trình tự thực hiện và thời lượng tương đối của từng beat.
 Không tự tách thành VIDEO mới chỉ vì camera đổi góc.
@@ -262,7 +313,7 @@ Không được:
 - Cast và LOCATION trong ref khớp chính xác nội dung prompt của VIDEO.
 - Không thiếu CHARACTER đang hiện diện; không thừa nhân vật chỉ được nhắc tới hoặc ngoài khung hình.
 - Không thiếu LOCATION thực tế; không thừa location không nhìn thấy.
-- Camera, lens, ánh sáng, weather, costume, identity, prop count/ownership và screen direction không tự thay đổi ngoài diễn biến cho phép.
+- Camera, lens, ánh sáng, weather, costume, identity và prop count/ownership không tự thay đổi ngoài diễn biến cho phép; screen direction phải phù hợp hình chiếu từ đường camera thực tế, không được dùng để ép nhân vật/đạo cụ đổi vị trí vật lý.
 - Hành động đạt được tự nhiên trong duration.
 - Mọi hành động có mục tiêu đều xác định rõ actor → action → target bằng tên/ID nhận diện; không dùng đại từ mơ hồ khi có nhiều đối tượng phù hợp.
 - Với hành động định hướng, hướng bàn chân, hông, vai, thân trên, khuôn mặt, ánh mắt và trục chuyển động phải thống nhất với vị trí của đúng mục tiêu; nếu có nguy cơ nhầm mục tiêu, prompt phải nêu rõ đối tượng không phải mục tiêu.
@@ -277,8 +328,15 @@ Không được:
 - Clip nối tiếp kế thừa hợp lý trạng thái thực tế được mô tả ở cuối clip trước.
 - Với mọi cặp clip cùng SHOT liền kề (clip YY và YY+1 cùng shot XX), start frame mô tả ở đầu prompt clip YY+1 khớp CHÍNH XÁC với end frame mô tả ở cuối prompt clip YY (vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, motion phase).
 - Mỗi VIDEO prompt có đủ 7 mục bắt buộc tại phần 4, gồm rõ ràng 3 phần: start frame, diễn biến hành động, end frame.
-- So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có hành động và camera riêng phù hợp timeline.
+- So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có diễn biến hành động/camera riêng phù hợp timeline. Cho phép lặp nguyên văn trạng thái bàn giao giữa hai clip liền kề; cấm lặp lại sự kiện đã hoàn tất.
 - So sánh chéo toàn bộ CHARACTER prompt và LOCATION prompt: không trùng lặp sai nhận diện hoặc mâu thuẫn thuộc tính.
+- Kiểm tra riêng từng điểm nối cùng SHOT theo mục 3A: trạng thái bàn giao được mô tả cụ thể ở cả hai đầu, không bỏ chi tiết quan trọng; pha chi/bước chân, trọng tâm, tiếp xúc đạo cụ và camera motion khớp; hành động đầu clip sau phát triển tiếp chứ không reset hoặc replay.
+- Kiểm tra sơ đồ bối cảnh: actor/target/đạo cụ có địa chỉ vật lý nhất quán theo mốc cố định; đổi camera không làm đổi chỗ, đổi hướng chức năng hoặc đổi tay. Đường đi nối được vị trí đầu–cuối, không xuyên vật cản hay vòng lại một góc đã đi qua ngoài ý muốn.
+- Kiểm tra từng rack focus: cả đối tượng nhả nét và nhận nét có nằm trong cùng đường nhìn không? Có vô tình yêu cầu thấy người phía sau máy hoặc xuyên vật che không? Nếu có, sửa vị trí máy hoặc transition trước khi lưu.
+- Kiểm tra từng thay đổi lens, framing và camera position: có cut, zoom hoặc đường máy tương ứng và đủ thời gian không? Camera cuối clip trước và đầu clip sau phải cùng trạng thái; chuyển góc mới chỉ bắt đầu sau điểm nối đã khớp.
+- Kiểm tra timeline từng VIDEO: thời lượng thoại theo nhịp tự nhiên, hành động tuần tự, phản ứng và camera đều nằm trong duration; các thao tác song song phải khả thi. Câu bắt đầu muộn vẫn phải đủ thời gian kết thúc; không nhồi thoại để ép đạt end frame.
+- Nếu tách thêm clip vì thiếu thời gian: mọi lời thoại/sự kiện vẫn đầy đủ, không lặp; ID, shot, clip, duration và thứ tự array được cập nhật đồng bộ; mọi điểm nối mới cũng phải được kiểm tra.
+- Phân biệt continuity dự kiến bằng chữ với continuity video thực tế. Chỉ nhắc ảnh khởi đầu được cung cấp khi thật sự có; không tuyên bố đã truyền frame, đã xem video hoặc đã kiểm chứng khớp hình ảnh khi mới viết prompt.
 - ĐỘ BAO PHỦ: đối chiếu toàn bộ timeline gốc theo đúng thứ tự; mọi sự kiện/hành động chính từ đầu đến cuối phải có ít nhất một VIDEO tương ứng.
 - Đếm tổng CHARACTER, LOCATION và VIDEO để báo cáo sau khi tạo file.
 

@@ -255,6 +255,51 @@ export const effortSliderThumbLocator = (page: Page): Locator =>
   page.locator('span[role="slider"]');
 
 /**
+ * Nhãn TÊN THẬT (vd "Light"/"Medium"/"High"/"Max") của nấc thanh trượt Power
+ * ĐANG chọn, đọc được NGAY CẢ KHI popup thanh trượt đang mở — xác nhận qua
+ * lỗi thật (script test-chatai-select-model.ts): effortLabelLocator (span
+ * có data-max-effort) chỉ tồn tại ở trạng thái nút toolbar ĐÃ ĐÓNG (hiện
+ * dạng rút gọn "GPT-6 Astra | High") — biến mất HOÀN TOÀN (0 phần tử) khi
+ * popup đang mở, nên KHÔNG dùng được để dò từng nấc lúc đang thao tác trên
+ * thanh trượt (khác effortLabelLocator — hàm đó chỉ đáng tin lúc CHƯA mở
+ * popup, xem selectMaxReasoningEffort). Vùng thông báo trợ năng (aria-live,
+ * class chứa "KeyboardAnnouncement" — hash CSS-module đổi được nên chỉ khớp
+ * theo substring) LUÔN cập nhật đúng tên nấc + vị trí dạng "Light, 1 of 5."
+ * mỗi khi bấm ArrowLeft/ArrowRight, kể cả lúc popup đang mở — lọc thêm bằng
+ * text pattern ", N of M" để phân biệt với span thông báo hướng dẫn chung
+ * ("Use Left and Right arrow keys...") cũng dùng chung class.
+ */
+export const effortSliderAnnouncementLocator = (page: Page): Locator =>
+  page
+    .locator('[class*="KeyboardAnnouncement"]')
+    .filter({ hasText: /,\s*\d+\s+of\s+\d+/i });
+
+/**
+ * Item "Select model" (có mũi tên chevron) trong popup mở ra từ
+ * modelSelectorButtonCandidates — bấm vào đây để chuyển từ "simple view"
+ * (chỉ có thanh trượt Power) sang "advanced view" (danh sách ĐẦY ĐỦ tên
+ * model, xem modelOptionLocator bên dưới) — DOM thật xác nhận
+ * (storage/debug/inspect-chatai-model-picker*.html, mode "Work"):
+ * `<div role="menuitem" aria-label="Select model" ...><span>...<span
+ * data-max-effort="false">GPT-5.6 Sol</span></span><svg .../chevron-right...
+ * /></div>`. CHỈ hiện danh sách model đầy đủ (GPT-6 Astra, GPT-5.6
+ * Sol/Terra/Luna, GPT-5.5...) ở mode "Work" (xem workModeToggleLocator) —
+ * mode "Chat" chỉ có 2 lựa chọn (GPT-5.6 Sol, GPT-5.5).
+ */
+export const modelPickerSelectModelToggleLocator = (page: Page): Locator =>
+  page.locator('[role="menuitem"][aria-label="Select model"]');
+
+/**
+ * 1 model cụ thể trong "advanced view" (menuitemradio) — khớp theo
+ * substring tên hiển thị (đủ để phân biệt, không trùng tên nào khác, vd
+ * "GPT-6 Astra" không phải substring của "GPT-5.6 Sol/Terra/Luna" hay
+ * ngược lại). Chỉ tồn tại/thấy được SAU khi đã bấm
+ * modelPickerSelectModelToggleLocator để vào advanced view.
+ */
+export const modelPickerOptionLocator = (page: Page, modelName: string): Locator =>
+  page.locator('[role="menuitemradio"]').filter({ hasText: modelName });
+
+/**
  * Tin nhắn trả lời TEXT thường (KHÔNG dùng cho phản hồi tạo ảnh — xem
  * assistantMessageLocator không có attribute này) — DOM thật xác nhận (job
  * b38b1151): `<div data-message-author-role="assistant" ...

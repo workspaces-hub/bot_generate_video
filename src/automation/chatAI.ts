@@ -12,12 +12,15 @@ import {
   downloadButtonCandidates,
   downloadFileLinkLocator,
   effortLabelLocator,
+  effortSliderAnnouncementLocator,
   effortSliderControlLocator,
   effortSliderThumbLocator,
   fileAttachmentLocator,
   fileCardLocator,
   fileUploadInputLocator,
   inlineFileLinkLocator,
+  modelPickerOptionLocator,
+  modelPickerSelectModelToggleLocator,
   modelSelectorButtonCandidates,
   promptTextareaCandidates,
   regenerateErrorButtonCandidates,
@@ -1037,6 +1040,154 @@ export async function selectMaxReasoningEffort(page: Page): Promise<void> {
 }
 
 /**
+ * Chọn model "GPT-6 Astra" + mức reasoning effort "Medium" — theo yêu cầu
+ * người dùng, dùng cho askChatAI/askChatAIWithInlineContent.
+ *
+ * Xác nhận qua khảo sát DOM thật (script inspect-chatai-model-picker.ts,
+ * storage/debug/inspect-chatai-model-picker*.html):
+ * - Model "GPT-6 Astra" CHỈ xuất hiện trong danh sách khi đang ở mode "Work"
+ *   (xem selectWorkMode) — mode "Chat" chỉ có 2 lựa chọn (GPT-5.6 Sol,
+ *   GPT-5.5), KHÔNG có GPT-6 Astra. Hàm này PHẢI được gọi SAU selectWorkMode.
+ * - Bấm nút toolbar (modelSelectorButtonCandidates) → bấm
+ *   modelPickerSelectModelToggleLocator ("Select model", chuyển sang
+ *   "advanced view") → bấm modelPickerOptionLocator(page, "GPT-6 Astra").
+ * - Sau khi CHỌN MODEL MỚI (khác model đang dùng), site TỰ ĐỘNG chuyển
+ *   sang lại menu chọn effort (aria-expanded="true" sẵn, không cần bấm gì
+ *   thêm) — nhưng effort bị RESET về mặc định "Light" (aria-valuenow="0"),
+ *   KHÔNG giữ nguyên mức cũ.
+ *
+ * SỬA (xác nhận qua test thật — script test-chatai-select-model.ts): LÚC
+ * ĐẦU đoán "nấc GIỮA thanh trượt" (Math.round(valuemax/2)) luôn là "Medium"
+ * — SAI. Thanh trượt của GPT-6 Astra có 5 nấc (aria-valuemax=4), nhưng nấc
+ * GIỮA (index 2) lại hiện nhãn "High", KHÔNG PHẢI "Medium" — tức 5 nấc
+ * KHÔNG đối xứng quanh "Medium" như đã suy đoán từ trường hợp GPT-5.6 Sol (3
+ * nấc, nấc giữa đúng là "Medium"). KHÔNG suy luận theo vị trí nữa — dò TỪNG
+ * NẤC một từ đầu (0), đọc lại nhãn thật (effortLabelLocator — span có
+ * data-max-effort, LUÔN phản ánh đúng nhãn hiện tại của thanh trượt, đã
+ * dùng ổn định cho selectMaxReasoningEffort) sau mỗi lần bấm, dừng NGAY khi
+ * nhãn chứa "Medium" (không phân biệt hoa/thường) — tổng quát cho MỌI cách
+ * đặt tên/số nấc site có thể đổi, không hard-code vị trí nào cả.
+ *
+ * best-effort — không throw nếu không chọn được (site đổi giao diện, tài
+ * khoản không có GPT-6 Astra, không có nấc nào tên "Medium"...), chỉ log
+ * cảnh báo + chụp debug snapshot, để không chặn cả pipeline vì 1 bước không
+ * bắt buộc.
+ */
+export async function selectModelGPT6AstraMediumEffort(
+  page: Page,
+  jobId: string,
+): Promise<void> {
+  const modelName = "GPT-6 Astra";
+  try {
+    const button = await firstVisible(modelSelectorButtonCandidates(page), 5000);
+    await button.hover().catch(() => {});
+    await page.waitForTimeout(200);
+    await button.click();
+    await page.waitForTimeout(500);
+
+    const selectModelToggle = modelPickerSelectModelToggleLocator(page).first();
+    const toggleVisible = await selectModelToggle
+      .isVisible({ timeout: 3000 })
+      .catch(() => false);
+    if (!toggleVisible) {
+      console.warn(
+        `[chatAI] selectModelGPT6AstraMediumEffort: không thấy "Select model" — bỏ qua, giữ model/effort hiện tại.`,
+      );
+      await page.keyboard.press("Escape").catch(() => {});
+      return;
+    }
+    await selectModelToggle.click({ timeout: 5000 });
+    await page.waitForTimeout(500);
+
+    const option = modelPickerOptionLocator(page, modelName).first();
+    const optionVisible = await option.isVisible({ timeout: 3000 }).catch(() => false);
+    if (!optionVisible) {
+      console.warn(
+        `[chatAI] selectModelGPT6AstraMediumEffort: không thấy model "${modelName}" trong danh sách (có thể tài khoản chưa có, hoặc chưa ở mode Work) — bỏ qua.`,
+      );
+      await page.keyboard.press("Escape").catch(() => {});
+      await captureSnapshot(page, jobId, "select-gpt6-astra-not-found", {
+        includeHtml: true,
+      });
+      return;
+    }
+
+    const alreadySelected =
+      (await option.getAttribute("aria-checked").catch(() => null)) === "true";
+    if (!alreadySelected) {
+      await option.click({ timeout: 5000 });
+      await page.waitForTimeout(800);
+    }
+
+    const sliderControl = await firstVisible(
+      [() => effortSliderControlLocator(page)],
+      5000,
+    ).catch(() => null);
+    if (!sliderControl) {
+      console.warn(
+        `[chatAI] selectModelGPT6AstraMediumEffort: đã chọn model "${modelName}" nhưng không thấy thanh trượt effort — bỏ qua bước set "Medium".`,
+      );
+      await page.keyboard.press("Escape").catch(() => {});
+      return;
+    }
+
+    const thumb = effortSliderThumbLocator(page).first();
+    const valueMaxText = await thumb.getAttribute("aria-valuemax").catch(() => null);
+    const valueMax = Number.parseInt(valueMaxText ?? "", 10);
+    if (!Number.isFinite(valueMax) || valueMax <= 0) {
+      console.warn(
+        `[chatAI] selectModelGPT6AstraMediumEffort: không đọc được aria-valuemax hợp lệ ("${valueMaxText}") — bỏ qua bước set "Medium".`,
+      );
+      await page.keyboard.press("Escape").catch(() => {});
+      return;
+    }
+
+    // Về hẳn nấc 0 trước (dư số lần bấm, không suy đoán vị trí ban đầu).
+    for (let i = 0; i < 8; i++) {
+      await sliderControl.press("ArrowLeft");
+      await page.waitForTimeout(100);
+    }
+
+    let reachedMedium = false;
+    const announcement = effortSliderAnnouncementLocator(page).first();
+    for (let step = 0; step <= valueMax; step++) {
+      const currentLabel = await announcement.innerText().catch(() => "");
+      if (/medium/i.test(currentLabel)) {
+        reachedMedium = true;
+        break;
+      }
+      if (step < valueMax) {
+        await sliderControl.press("ArrowRight");
+        await page.waitForTimeout(150);
+      }
+    }
+
+    const finalValue = await thumb.getAttribute("aria-valuenow").catch(() => null);
+    const finalLabel = await announcement
+      .innerText()
+      .catch(() => "(không đọc được)");
+    console.log(
+      `[chatAI] selectModelGPT6AstraMediumEffort: đã chọn model "${modelName}", effort hiện tại "${finalLabel}" (nấc ${finalValue}/${valueMax})${reachedMedium ? "" : " — KHÔNG tìm thấy nấc nào tên 'Medium', dừng ở nấc cuối đã dò"}.`,
+    );
+    if (!reachedMedium) {
+      await captureSnapshot(page, jobId, "select-gpt6-astra-no-medium-level", {
+        includeHtml: true,
+      });
+    }
+
+    await page.keyboard.press("Escape").catch(() => {});
+  } catch (err) {
+    console.warn(
+      `[chatAI] selectModelGPT6AstraMediumEffort thất bại (best-effort, bỏ qua, giữ model/effort mặc định):`,
+      err instanceof Error ? err.message : err,
+    );
+    await captureSnapshot(page, jobId, "select-gpt6-astra-failed", {
+      includeHtml: true,
+    });
+  }
+}
+
+/**
  * Mở ChatAI, gửi prompt, chờ ChatAI trả lời xong, rồi thử tải file ChatAI
  * đính kèm (nếu có, xem downloadAttachedFiles) về config.chatAIResultsDir.
  *
@@ -1081,9 +1232,11 @@ export async function askChatAI(
       .catch(() => {});
 
     await selectWorkMode(page, jobId);
-    if (config.chatAIMaxEffort) {
-      await selectMaxReasoningEffort(page);
-    }
+    // Theo yêu cầu người dùng: askChatAI luôn chọn model "GPT-6 Astra" + mức
+    // effort "Medium" — thay cho selectMaxReasoningEffort cũ (chỉ chạy khi
+    // config.chatAIMaxEffort=true). PHẢI gọi SAU selectWorkMode — model này
+    // chỉ xuất hiện trong danh sách ở mode "Work" (xem docstring hàm).
+    await selectModelGPT6AstraMediumEffort(page, jobId);
     if (attachmentPath) {
       await uploadAttachment(page, attachmentPath);
     }
@@ -1431,9 +1584,10 @@ async function attemptAskChatAIWithInlineContent(
       .catch(() => {});
 
     await selectWorkMode(page, jobId);
-    if (config.chatAIMaxEffort) {
-      await selectMaxReasoningEffort(page);
-    }
+    // Theo yêu cầu người dùng: askChatAIWithInlineContent luôn chọn model
+    // "GPT-6 Astra" + mức effort "Medium" — xem chú thích ở askChatAI/
+    // selectModelGPT6AstraMediumEffort.
+    await selectModelGPT6AstraMediumEffort(page, jobId);
 
     const fileContent = attachmentPath
       ? await fs.promises.readFile(attachmentPath, "utf-8").catch(() => null)
@@ -1575,26 +1729,41 @@ const VERIFY_VIDEO_PROMPT_TEMPLATE_PATH = path.resolve(
  * chiếu đã dùng để tạo ra nó hay không — theo yêu cầu người dùng.
  *
  * KHÁC hẳn askChatAI/askChatAIWithInlineContent — không liên quan tạo
- * storyboard: upload THẲNG file video + từng ảnh tham chiếu (refs, ĐÚNG THỨ
- * TỰ) làm đính kèm, dán prompt kiểm tra làm tin nhắn (ghép từ template
- * check_video.txt, thay 2 placeholder "[DÁN PROMPT ĐÃ DÙNG ĐỂ TẠO VIDEO VÀO
- * ĐÂY]" và "[LIỆT KÊ TÊN VÀ THỨ TỰ CÁC ẢNH THAM CHIẾU]"). Đọc JSON kết quả
+ * storyboard: upload THẲNG file video (+ video liền trước nếu có) + từng ảnh
+ * tham chiếu (refs, ĐÚNG THỨ TỰ) làm đính kèm, dán prompt kiểm tra làm tin
+ * nhắn (ghép từ template check_video.txt, thay 4 placeholder "[DÁN PROMPT ĐÃ
+ * DÙNG ĐỂ TẠO VIDEO VÀO ĐÂY]", "[LIỆT KÊ TẤT CẢ ẢNH THAM CHIẾU VÀ ID]",
+ * "[MÔ TẢ VIDEO NGAY TRƯỚC ĐÓ NẾU CÓ]" và "[MÔ TẢ VIDEO HIỆN TẠI CẦN ĐÁNH
+ * GIÁ]"). Đọc JSON kết quả
  * qua readInlineCodeBlock (dùng lại đúng cơ chế của askChatAIWithInlineContent
  * — master prompt tự yêu cầu "Không dùng Markdown fence" nhưng ChatGPT vẫn
  * có thể tự render JSON qua widget canvas #code-block-viewer, hàm này đã tự
  * fallback đọc text thô nếu không thấy widget) rồi lưu ra file NGAY CẠNH
  * video, tên = <id video>.json (id lấy từ basename videoPath, bỏ đuôi).
  *
- * refs: đường dẫn file ẢNH tham chiếu ĐÃ RESOLVE sẵn (không phải id thô) —
- * đúng THỨ TỰ cần liệt kê/upload theo yêu cầu người dùng.
+ * refs: id + đường dẫn file ẢNH tham chiếu ĐÃ RESOLVE sẵn — đúng THỨ TỰ cần
+ * liệt kê/upload theo yêu cầu người dùng. Mô tả trong REFERENCE_ASSETS dùng
+ * ĐÚNG quy ước tên file id đã dùng xuyên suốt dự án (ảnh: "<id>.png", video:
+ * "<id>.mp4") thay vì tên file thật trên đĩa — theo yêu cầu người dùng.
+ *
+ * previousVideoPath (tuỳ chọn): video liền trước CÙNG SHOT (clip số N-1) nếu
+ * có và đã tồn tại trên đĩa — dùng để ChatAI kiểm tra continuity giữa 2 clip
+ * (xem PHẦN 2A/11 trong check_video.txt). Không truyền (hoặc rỗng) thì mô tả
+ * "Không có." theo đúng quy ước NOT_APPLICABLE của template.
  *
  * Gửi ĐÚNG 1 LẦN (giống askChatAIWithInlineContent) — không lặp lượt chờ
  * hoàn thiện, không có audit.
  */
+export interface VerifyVideoRef {
+  id: string;
+  path: string;
+}
+
 export async function verifyVideo(
   prompt: string,
-  refs: string[],
+  refs: VerifyVideoRef[],
   videoPath: string,
+  previousVideoPath?: string,
 ): Promise<{ filePath: string }> {
   const id = path.basename(videoPath, path.extname(videoPath));
   const context = await getChatAIBrowserContext();
@@ -1624,23 +1793,42 @@ export async function verifyVideo(
       await selectMaxReasoningEffort(page);
     }
 
-    // Upload video TRƯỚC, rồi từng ảnh tham chiếu ĐÚNG THỨ TỰ trong refs —
-    // theo yêu cầu người dùng.
+    // Upload video trước (liền trước, nếu có) → video hiện tại → rồi từng
+    // ảnh tham chiếu ĐÚNG THỨ TỰ trong refs — theo yêu cầu người dùng.
+    if (previousVideoPath) {
+      await uploadAttachment(page, previousVideoPath);
+    }
     await uploadAttachment(page, videoPath);
-    for (const refPath of refs) {
-      await uploadAttachment(page, refPath);
+    for (const ref of refs) {
+      await uploadAttachment(page, ref.path);
     }
 
     const template = await fs.promises.readFile(
       VERIFY_VIDEO_PROMPT_TEMPLATE_PATH,
       "utf-8",
     );
-    const refsListing = refs
-      .map((refPath, i) => `${i + 1}. ${path.basename(refPath)}`)
-      .join("\n");
+    const refsListing = refs.map((ref) => `- ${ref.id}: ${ref.id}.png`).join("\n");
+
+    const currentVideoId = path.basename(videoPath, path.extname(videoPath));
+    const generatedVideoBlock = [
+      `- Tên file: ${currentVideoId}.mp4`,
+      "- Đây là video hiện tại cần đánh giá.",
+      "- So sánh frame có ý nghĩa đầu tiên với video trước.",
+    ].join("\n");
+
+    const previousVideoBlock = previousVideoPath
+      ? [
+          `- Tên file: ${path.basename(previousVideoPath, path.extname(previousVideoPath))}.mp4`,
+          "- Đây là video liền trước.",
+          "- Dùng frame có ý nghĩa cuối cùng của video này để kiểm tra continuity.",
+        ].join("\n")
+      : "Không có.";
+
     const message = template
       .replace("[DÁN PROMPT ĐÃ DÙNG ĐỂ TẠO VIDEO VÀO ĐÂY]", prompt)
-      .replace("[LIỆT KÊ TÊN VÀ THỨ TỰ CÁC ẢNH THAM CHIẾU]", refsListing);
+      .replace("[LIỆT KÊ TẤT CẢ ẢNH THAM CHIẾU VÀ ID]", refsListing)
+      .replace("[MÔ TẢ VIDEO NGAY TRƯỚC ĐÓ NẾU CÓ]", previousVideoBlock)
+      .replace("[MÔ TẢ VIDEO HIỆN TẠI CẦN ĐÁNH GIÁ]", generatedVideoBlock);
 
     await sendMessage(page, message);
 
