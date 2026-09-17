@@ -344,6 +344,32 @@ async function attemptGenerateImage(
     // dùng chung tên, sẽ mất ảnh "before" khi job lỗi (lúc cần xem nhất).
     // await captureSnapshot(page, `${jobId}_before-generate`, "before-click-generate");
     await dismissBlockingOverlays(page);
+
+    // Xác nhận LẠI Unlimited NGAY TRƯỚC lúc bấm Generate (không chỉ tin
+    // check ngay sau enableUnlimitedIfNotEnoughCredit ở trên) — theo yêu cầu
+    // người dùng. Chưa có bằng chứng thật nào cho thấy switch bị reset giữa
+    // 2 điểm này (không có bước upload/thao tác nào chen vào), nhưng vẫn
+    // kiểm tra lại cho chắc + tự bật lại nếu phát hiện tắt, giống cách
+    // generateVideo re-apply duration/aspect ratio ngay trước Generate.
+    const unlimitedSwitchLocator = page
+      .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+      .first();
+    let unlimitedCheckedBeforeGenerate = await unlimitedSwitchLocator
+      .getAttribute("aria-checked")
+      .catch(() => null);
+    if (unlimitedCheckedBeforeGenerate !== "true") {
+      console.warn(
+        `[pollo-image] Unlimited KHÔNG còn bật ngay trước Generate (aria-checked="${unlimitedCheckedBeforeGenerate}") — thử bật lại.`,
+      );
+      await enableUnlimitedIfNotEnoughCredit(page, jobId, true);
+      unlimitedCheckedBeforeGenerate = await unlimitedSwitchLocator
+        .getAttribute("aria-checked")
+        .catch(() => null);
+    }
+    console.log(
+      `[pollo-image] Unlimited switch NGAY TRƯỚC khi bấm Generate: aria-checked="${unlimitedCheckedBeforeGenerate}"`,
+    );
+
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
