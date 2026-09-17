@@ -330,9 +330,9 @@ async function attemptGenerateImage(
     console.log(
       `[pollo-image] Unlimited switch sau enableUnlimitedIfNotEnoughCredit(alwaysEnable=true): aria-checked="${unlimitedSwitchChecked}"`,
     );
-    await captureSnapshot(page, `${jobId}_unlimited-check`, "unlimited-check", {
-      includeHtml: true,
-    });
+    // await captureSnapshot(page, `${jobId}_unlimited-check`, "unlimited-check", {
+    //   includeHtml: true,
+    // });
 
     const baseline = await captureResultBaseline(page);
     // Theo yêu cầu người dùng: chụp ảnh debug NGAY TRƯỚC khi bấm Generate —
