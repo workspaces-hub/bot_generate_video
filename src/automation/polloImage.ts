@@ -313,7 +313,10 @@ async function attemptGenerateImage(
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
 
-    await enableUnlimitedIfNotEnoughCredit(page, jobId);
+    // alwaysEnable=true — theo yêu cầu người dùng: gen ẢNH luôn bật
+    // Unlimited, không cần so sánh credit/phí trước (khác generateVideo,
+    // vẫn giữ hành vi cũ chỉ bật khi credit không đủ).
+    await enableUnlimitedIfNotEnoughCredit(page, jobId, true);
 
     const baseline = await captureResultBaseline(page);
     // Theo yêu cầu người dùng: chụp ảnh debug NGAY TRƯỚC khi bấm Generate —
