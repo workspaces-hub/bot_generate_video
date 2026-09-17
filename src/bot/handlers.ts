@@ -269,12 +269,12 @@ async function markStoryboardEntrySuccess(
 function storyboardJobTypeForEntryType(
   entryType: string | undefined,
 ):
-  | "storyboardImagesAIVideo"
+  | "storyboardImagesPollo"
   | "storyboardSceneImagesAIVideo"
-  | "storyboardVideo"
+  | "storyboardVideoPollo"
   | null {
   if (entryType === "CHARACTER" || entryType === "LOCATION") {
-    return "storyboardImagesAIVideo";
+    return "storyboardImagesPollo";
   }
   if (
     entryType === "SCENE_SETTING_START" ||
@@ -283,7 +283,7 @@ function storyboardJobTypeForEntryType(
     return "storyboardSceneImagesAIVideo";
   }
   if (entryType === "VIDEO") {
-    return "storyboardVideo";
+    return "storyboardVideoPollo";
   }
   return null;
 }
