@@ -379,7 +379,10 @@ async function waitForNewImageEntry(
 ): Promise<Locator> {
   const entries = historyImageEntryLocator(page);
   const start = Date.now();
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer trong lúc queue khác
+  // đang tranh CPU, cùng lý do đã áp dụng cho các vòng poll tương tự (xem
+  // waitForNewVideo trong aiVideo.ts).
+  const pollIntervalMs = 10_000;
 
   while (Date.now() - start < timeoutMs) {
     const count = await entries.count();

@@ -12,11 +12,14 @@ import {
   captureGenerationRecordId,
   clickGenerateButton,
   fetchGenerationRecordDetail,
+  focusEditorWithRetry,
   gotoPolloWithRetry,
   resolveDownloadExtension,
+  selectModel,
   submitAssetUpload,
   waitForGenerateButtonEnabled,
   waitForGenerationApiStatus,
+  withPolloAssetUploadLock,
 } from "./pollo";
 import {
   GenerationError,
@@ -24,7 +27,7 @@ import {
   captureSnapshot,
   fetchWithRetry,
 } from "./aiVideo";
-import { firstVisible } from "./selectors";
+import { firstVisible, isPageCrashError } from "./selectors";
 import {
   creditPaywallLocator,
   generateButtonLocator,
@@ -67,15 +70,29 @@ export interface PolloGenerateImageOptions {
 async function uploadReferenceImage(page: Page, imagePath: string): Promise<void> {
   const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonLocator(page).first());
   await openDialog();
-  await submitAssetUpload(page, imagePath, openDialog);
+  // Bọc trong withPolloAssetUploadLock (khai báo cùng submitAssetUpload
+  // trong pollo.ts) — processPolloImageQueue chạy SONG SONG với
+  // processPolloVideoQueue trên CÙNG 1 tài khoản pollo.ai; nếu không khoá,
+  // submitAssetUpload của job này (nhận diện "card vừa upload" bằng cách so
+  // data-asset-url của card ĐẦU TIÊN trước/sau) có thể chọn NHẦM card của
+  // job video đang chạy đồng thời nếu nó upload xen đúng lúc. Xem docstring
+  // đầy đủ tại withPolloAssetUploadLock.
+  await withPolloAssetUploadLock(() => submitAssetUpload(page, imagePath, openDialog));
 }
 
 interface ResultBaseline {
   count: number;
+  /** Số lượng [data-slot="task-card-generating"] NGAY TRƯỚC lúc bấm Generate — xem chú thích cùng tên trong pollo.ts (clickGenerateButton). */
+  generatingCount: number;
 }
 
 async function captureResultBaseline(page: Page): Promise<ResultBaseline> {
-  return { count: await resultCardLocator(page).count() };
+  return {
+    count: await resultCardLocator(page).count(),
+    generatingCount: await page
+      .locator('[data-slot="task-card-generating"]')
+      .count(),
+  };
 }
 
 /**
@@ -109,7 +126,10 @@ async function waitForNewResult(
 ): Promise<Locator> {
   const cards = resultCardLocator(page);
   const start = Date.now();
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer trong lúc queue khác
+  // đang tranh CPU, cùng lý do đã áp dụng cho waitForGenerationApiStatus
+  // trong pollo.ts.
+  const pollIntervalMs = 10_000;
   let sawGeneratingCard = false;
 
   while (true) {
@@ -221,7 +241,35 @@ export interface PolloGenerateImageResult {
  * Tạo ảnh từ prompt + tối đa vài ảnh tham chiếu (tuỳ chọn) qua pollo.ai
  * (mode "Text/Image to Image", mặc định của trang /image).
  */
+/**
+ * Retry 1 lần khi Chrome renderer crash thật ("Target crashed" — cùng lý do
+ * đã sửa cho generateVideo trong pollo.ts, xem docstring ở đó) — submitAssetUpload/
+ * confirmAssetPickerSelection dùng chung với video nên cùng chịu rủi ro crash
+ * này khi upload/chọn ảnh tham chiếu.
+ */
 export async function generateImage(
+  prompt: string,
+  options: PolloGenerateImageOptions,
+  jobId: string,
+): Promise<PolloGenerateImageResult> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptGenerateImage(prompt, options, jobId);
+    } catch (err) {
+      if (isPageCrashError(err) && attempt < maxCrashRetries) {
+        console.warn(
+          `[polloImage] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function attemptGenerateImage(
   prompt: string,
   { referenceImagePaths = [] }: PolloGenerateImageOptions,
   jobId: string,
@@ -249,24 +297,43 @@ export async function generateImage(
       );
     }
 
+    await dismissBlockingOverlays(page);
+    await selectModel(page, "GPT Image 2");
+
     for (const refPath of referenceImagePaths) {
       await uploadReferenceImage(page, refPath);
     }
 
     const editor = promptEditorLocator(page).first();
-    await editor.focus();
+    // focusEditorWithRetry: xác nhận qua lỗi thật (job
+    // test_camera_1_CHAR_MOCKING_EUNUCH, 2026-09-10) — editor.focus() treo
+    // hết 30s dù locator đã resolve đúng element hợp lệ. Xem docstring hàm
+    // trong pollo.ts.
+    await focusEditorWithRetry(page, editor);
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
 
-    await enableUnlimitedIfNotEnoughCredit(page);
+    await enableUnlimitedIfNotEnoughCredit(page, jobId);
 
     const baseline = await captureResultBaseline(page);
-    // await captureSnapshot(page, jobId, "before-click-generate");
+    // Theo yêu cầu người dùng: chụp ảnh debug NGAY TRƯỚC khi bấm Generate —
+    // dùng để xác nhận trực quan model/prompt/ảnh tham chiếu đã đúng chưa
+    // trước khi tốn credit generate (đặc biệt hữu ích lúc đang debug model
+    // GPT Image 2 vs 2.5, mention ảnh...). Suffix "_before-generate" (KHÔNG
+    // dùng thẳng jobId) — writeSnapshotFiles ghi đè theo TÊN FILE = jobId,
+    // trùng với captureErrorSnapshot(page, jobId, err) ở catch cuối hàm nếu
+    // dùng chung tên, sẽ mất ảnh "before" khi job lỗi (lúc cần xem nhất).
+    // await captureSnapshot(page, `${jobId}_before-generate`, "before-click-generate");
     await dismissBlockingOverlays(page);
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
-      clickGenerateButton(page, generateButton, baseline.count),
+      clickGenerateButton(
+        page,
+        generateButton,
+        baseline.count,
+        baseline.generatingCount,
+      ),
     );
     // await captureSnapshot(page, jobId, "after-click-generate");
 
@@ -275,10 +342,37 @@ export async function generateImage(
     // response thất bại) thì bỏ qua hẳn, dùng lại đúng cơ chế dò DOM cũ.
     const apiStatus =
       recordId !== null
-        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs)
+        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs, jobId)
         : null;
     if (recordId !== null) {
       console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
+    }
+
+    const downloadViaMediaUrl = async (mediaUrl: string): Promise<string> => {
+      await fs.promises.mkdir(config.downloadDir, { recursive: true });
+      const response = await fetchWithRetry(page, mediaUrl);
+      const ext = resolveDownloadExtension(response, mediaUrl);
+      const filePath = path.join(config.downloadDir, `${jobId}${ext}`);
+      await fs.promises.writeFile(filePath, await response.body());
+      return filePath;
+    };
+
+    // API (generation.queryRecordDetail — xem fetchGenerationRecordDetail)
+    // trả THẲNG mediaUrl (link CDN gốc, tải được ngay) + videoId — KHÔNG cần
+    // chờ DOM cập nhật chút nào nếu generationPolling đã xác nhận "succeed".
+    // SỬA (xác nhận qua log thật production — job in "API record ... status:
+    // succeed" rồi ĐỨNG YÊN rất lâu, cùng lỗi đã sửa cho generateVideo trong
+    // pollo.ts): dùng THẲNG mediaUrl ngay khi biết "succeed" thay vì vẫn chờ
+    // waitForNewResult (dò DOM) chạy trước — chỉ dò DOM khi KHÔNG có
+    // recordId/API không xác nhận được (giữ nguyên đường cũ làm fallback).
+    if (apiStatus === "succeed" && recordId !== null) {
+      const detail = await fetchGenerationRecordDetail(page, recordId);
+      if (detail?.mediaUrl) {
+        const filePath = await downloadViaMediaUrl(detail.mediaUrl);
+        return { filePaths: [filePath], polloResultId: detail.videoId };
+      }
+      // API báo "succeed" nhưng không đọc được mediaUrl (site đổi cấu trúc?)
+      // — rơi xuống dò DOM như bình thường thay vì bỏ cuộc ngay.
     }
 
     let newCard: Locator;
@@ -294,18 +388,18 @@ export async function generateImage(
           console.warn(
             `[pollo] DOM không thấy ảnh mới dù API xác nhận record ${recordId} đã "succeed" — tải trực tiếp qua mediaUrl.`,
           );
-          await fs.promises.mkdir(config.downloadDir, { recursive: true });
-          const response = await fetchWithRetry(page, detail.mediaUrl);
-          const ext = resolveDownloadExtension(response, detail.mediaUrl);
-          const filePath = path.join(config.downloadDir, `${jobId}${ext}`);
-          await fs.promises.writeFile(filePath, await response.body());
+          const filePath = await downloadViaMediaUrl(detail.mediaUrl);
           return { filePaths: [filePath], polloResultId: detail.videoId };
         }
       }
       throw err;
     }
     const filePaths = await downloadResultImages(page, newCard, jobId);
-    const polloResultId = await captureResultId(page, newCard);
+    let polloResultId = await captureResultId(page, newCard);
+    if (!polloResultId && recordId !== null) {
+      const detail = await fetchGenerationRecordDetail(page, recordId);
+      polloResultId = detail?.videoId ?? null;
+    }
     return { filePaths, polloResultId };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);

@@ -11,6 +11,20 @@ import { launchRealChrome } from "./launch";
  * AIVideo và ChatAI) — mỗi site 1 session/storageState riêng,
  * không lẫn cookie vào nhau. Mỗi job tự mở/đóng page riêng trên context này.
  */
+export interface BrowserContextGetter {
+  (): Promise<BrowserContext>;
+  /**
+   * Đóng hẳn browser hiện tại (nếu có) và xoá cache — lần gọi getContext()
+   * tiếp theo sẽ tự khởi động lại Chrome mới. Dùng khi 1 hàng đợi đã hết
+   * job (queue rỗng) để giải phóng RAM ngay thay vì giữ Chrome sống chờ job
+   * kế tiếp không biết bao giờ mới tới — xác nhận qua đo đạc thật (2026-09-09):
+   * mỗi browser instance tốn đáng kể RAM (VPS 3.8GB, nhiều queue cùng lúc
+   * dễ chạm ngưỡng crash "Target crashed"/OOM, xem launch.ts). Best-effort —
+   * lỗi khi đóng (nếu có) chỉ log, không throw.
+   */
+  close: () => Promise<void>;
+}
+
 export function createBrowserContextManager(
   storageStatePath: string,
   logLabel: string,
@@ -18,7 +32,7 @@ export function createBrowserContextManager(
   useProxy = true,
   proxyBypass?: string,
   disableHttp2AndQuic = true,
-): () => Promise<BrowserContext> {
+): BrowserContextGetter {
   let contextPromise: Promise<BrowserContext> | null = null;
 
   async function launchNewContext(): Promise<BrowserContext> {
@@ -48,7 +62,7 @@ export function createBrowserContextManager(
     return context;
   }
 
-  return async function getContext(): Promise<BrowserContext> {
+  async function getContext(): Promise<BrowserContext> {
     if (contextPromise) {
       // Xác nhận qua log thật (nhiều job liên tiếp cùng lỗi "Target page,
       // context or browser has been closed" NGAY SAU 1 lần crash, kể cả lần
@@ -69,7 +83,24 @@ export function createBrowserContextManager(
       contextPromise = launchNewContext();
     }
     return contextPromise;
-  };
+  }
+
+  async function close(): Promise<void> {
+    if (!contextPromise) return;
+    const current = contextPromise;
+    contextPromise = null;
+    const context = await current.catch(() => null);
+    const browser = context?.browser();
+    if (browser?.isConnected()) {
+      await browser.close().catch((err) => {
+        console.warn(`[${logLabel}] Lỗi khi đóng Chrome (bỏ qua):`, err instanceof Error ? err.message : err);
+      });
+    }
+  }
+
+  const getter = getContext as BrowserContextGetter;
+  getter.close = close;
+  return getter;
 }
 
 /**

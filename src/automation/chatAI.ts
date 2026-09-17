@@ -24,14 +24,29 @@ import {
   sendButtonCandidates,
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
+  workingIndicatorLocator,
   workModeToggleLocator,
 } from "./chatAISelectors";
-import { firstVisible } from "./selectors";
+import { firstVisible, isPageCrashError } from "./selectors";
 // captureSnapshot/captureErrorSnapshot đã tổng quát (chỉ cần Page + jobId),
 // dùng lại nguyên bản thay vì viết trùng cho ChatAI.
 import { captureErrorSnapshot, captureSnapshot } from "./aiVideo";
 
-export class ChatAIError extends Error {}
+export class ChatAIError extends Error {
+  /**
+   * true khi lỗi này là do ChatGPT báo "lỗi công cụ đọc file" (fileAccessError,
+   * xem isFileAccessErrorText) LẶP LẠI tới hết lượt trong askChatAI — theo
+   * yêu cầu người dùng: processChatAIQueue đọc field này để quyết định có
+   * fallback sang askChatAIWithInlineContent (dán nội dung trực tiếp, né hẳn
+   * công cụ đọc file) hay không, thay vì phải so khớp text lỗi.
+   */
+  fileAccessError?: boolean;
+
+  constructor(message: string, options?: { fileAccessError?: boolean }) {
+    super(message);
+    this.fileAccessError = options?.fileAccessError;
+  }
+}
 
 /**
  * page.goto tới ChatGPT kèm retry — xác nhận qua lỗi thật (nhiều job khác
@@ -189,7 +204,9 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
     const networkLogs: string[] = [];
     const onResponse = (response: Response) => {
       if (response.url().includes("oaiusercontent.com")) {
-        networkLogs.push(`response ${response.status()} ${response.request().method()} ${response.url()}`);
+        networkLogs.push(
+          `response ${response.status()} ${response.request().method()} ${response.url()}`,
+        );
       }
     };
     const onRequestFailed = (request: Request) => {
@@ -230,7 +247,11 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
     );
     await page.waitForTimeout(3000);
   }
-  await captureSnapshot(page, "after-upload attachment", "after-upload attachment");
+  await captureSnapshot(
+    page,
+    "after-upload attachment",
+    "after-upload attachment",
+  );
 
   // Xác nhận qua thực tế (job 35941268, file 97KB/~2371 dòng): ChatAI trả
   // lời "file bạn gửi chưa chứa kịch bản phim" dù file THẬT SỰ có kịch bản ở
@@ -320,7 +341,31 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   }
   // await captureSnapshot(page, "before-click ask", "before-click ask");
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
-  await sendButton.click();
+  // ChatGPT điều hướng THẬT (từ "/" sang "/c/<id>") khi gửi tin nhắn ĐẦU
+  // TIÊN của 1 hội thoại mới — xác nhận qua lỗi thật ("click action done —
+  // waiting for scheduled navigations to finish" rồi timeout 30s): click ĐÃ
+  // THỰC SỰ xảy ra (log xác nhận "click action done"), chỉ là navigation đó
+  // không "settle" kịp trong thời gian actionability mặc định của
+  // Playwright. Cùng lớp lỗi đã gặp với pollo.ai (xem clickGenerateButton
+  // trong pollo.ts) — kiểm tra bằng chứng tin nhắn ĐÃ GỬI (ô nhập rỗng trở
+  // lại, hoặc nút Stop generating xuất hiện) trước khi coi là lỗi thật,
+  // thay vì luôn throw ngay khi click() timeout.
+  await sendButton.click({ timeout: 10_000 }).catch(async (err) => {
+    const textCleared = await textarea
+      .innerText()
+      .then((t) => t.trim() === "")
+      .catch(() => false);
+    const stopVisible = await firstVisible(
+      stopGeneratingButtonCandidates(page),
+      3000,
+    )
+      .then(() => true)
+      .catch(() => false);
+    if (!textCleared && !stopVisible) throw err;
+    console.warn(
+      "[chatAI] Click Send báo lỗi (navigation timeout) nhưng có bằng chứng tin nhắn đã gửi (ô nhập rỗng/nút Stop xuất hiện) — bỏ qua lỗi.",
+    );
+  });
   // await captureSnapshot(page, "after-click ask", "after-click ask");
 
   // Chờ nút "Stop generating" xuất hiện (ChatAI bắt đầu trả lời) — best-effort,
@@ -363,7 +408,13 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // file đính kèm hiện ra (fileAttachmentLocator), coi đó là dấu hiệu xong
   // THAY THẾ cho việc chờ nút Stop biến mất.
   const stableRequiredMs = 30000;
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer (query DOM mỗi lần)
+  // trong lúc queue ảnh/video khác đang tranh CPU. Vòng lặp này KHÔNG giới
+  // hạn thời gian tổng (chờ tới khi ChatAI thật sự trả lời xong), nên với
+  // model reasoning nặng có thể poll rất nhiều lần liên tục — cùng lý do đã
+  // áp dụng cho pollIntervalMs của Pollo (xem waitForGenerationApiStatus,
+  // pollo.ts).
+  const pollIntervalMs = 10_000;
   // Xác nhận qua debug thật (job d077805e, chatAIImage.ts): ChatAI đôi khi báo
   // lỗi THẬT ("Something went wrong. Please try again." kèm nút Retry,
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
@@ -398,12 +449,23 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       continue;
     }
 
-    const stillGenerating = await firstVisible(
+    const stopButtonVisible = await firstVisible(
       stopGeneratingButtonCandidates(page),
       500,
     )
       .then(() => true)
       .catch(() => false);
+    // Bổ sung tín hiệu "Working for Xm Ys" (xem docstring workingIndicatorLocator)
+    // — xác nhận qua lỗi thật (job 61d57820...test_camera_1.txt): nút Stop
+    // dò bằng stopGeneratingButtonCandidates có khoảng hở lúc tool call
+    // (đọc file...) đang chạy, khiến code coi là "đã xong" (báo 404 không
+    // có file) dù ảnh debug lúc đó cho thấy rõ ràng vẫn "Working for 1m
+    // 35s". Coi "đang generate" nếu MỘT TRONG HAI tín hiệu còn hiện.
+    const workingIndicatorVisible =
+      (await workingIndicatorLocator(page)
+        .count()
+        .catch(() => 0)) > 0;
+    const stillGenerating = stopButtonVisible || workingIndicatorVisible;
     if (stillGenerating) {
       hasSeenGenerating = true;
       // Xác nhận qua log lỗi thật (job 3b19ebae, model "High" reasoning
@@ -510,8 +572,10 @@ async function downloadAttachedFiles(
   const indicesToProcess: number[] = [];
   for (let i = 0; i < totalMatched; i++) {
     const label =
-      (await attachments.nth(i).getAttribute("aria-label").catch(() => null)) ??
-      `__no-label-${i}`;
+      (await attachments
+        .nth(i)
+        .getAttribute("aria-label")
+        .catch(() => null)) ?? `__no-label-${i}`;
     if (seenLabels.has(label)) continue;
     seenLabels.add(label);
     indicesToProcess.push(i);
@@ -753,6 +817,21 @@ function isMissingScriptText(text: string): boolean {
 }
 
 /**
+ * ChatAI báo LỖI CÔNG CỤ đọc file đính kèm — KHÁC hẳn isMissingScriptText
+ * (đó là ChatAI đọc được file nhưng KHẲNG ĐỊNH SAI nội dung không có kịch
+ * bản; đây là ChatAI KHÔNG ĐỌC ĐƯỢC file chút nào, thường do trục trặc phía
+ * hạ tầng xử lý file của chính ChatGPT) — theo yêu cầu người dùng, nhận diện
+ * qua các cách diễn đạt thực tế: "chưa thể đọc (được) file", "lỗi kết nối"
+ * kèm "môi trường xử lý (tệp|file)", hoặc ChatAI tự đề nghị "dán nội dung
+ * file vào tin nhắn" (paste content trực tiếp) thay vì đọc file đính kèm.
+ */
+function isFileAccessErrorText(text: string): boolean {
+  return /chưa thể đọc (được )?file|(lỗi|sự cố) kết nối.*(môi trường|xử lý (tệp|file))|môi trường xử lý (tệp|file).*(lỗi|sự cố)|dán (nội dung|trực tiếp) (file|tệp).*vào (tin nhắn|đây|khung chat)/i.test(
+    text,
+  );
+}
+
+/**
  * Đánh dấu đầu phần kịch bản thật trong file đính kèm (xem
  * prompt_master.txt/format_output.txt) — export để handlers.ts dùng chung
  * khi chèn nội dung config.formatOuput vào TRƯỚC marker này trong file user
@@ -807,6 +886,7 @@ async function readLatestAssistantMessage(
   downloadedFiles: string[];
   isComplete: boolean;
   missingScript: boolean;
+  fileAccessError: boolean;
   messageCount: number;
 }> {
   const messages = assistantMessageLocator(page);
@@ -849,6 +929,7 @@ async function readLatestAssistantMessage(
     isComplete:
       !isIncompleteText(text) && (hasFullJsonFile || isCompletionText(text)),
     missingScript: isMissingScriptText(text),
+    fileAccessError: isFileAccessErrorText(text),
     messageCount: count,
   };
 }
@@ -860,19 +941,35 @@ async function readLatestAssistantMessage(
  * tài khoản không có tính năng này) và bỏ qua nếu đã ở đúng mode "work"
  * (aria-checked="true") để tránh click thừa.
  */
-export async function selectWorkMode(page: Page): Promise<void> {
+export async function selectWorkMode(page: Page, jobId: string): Promise<void> {
   try {
     const workToggle = workModeToggleLocator(page).first();
     const alreadyOn =
       (await workToggle.getAttribute("aria-checked").catch(() => null)) ===
       "true";
     if (alreadyOn) return;
-    await workToggle.click({ timeout: 10000 });
+
+    // "modal-beacon" (overlay toàn màn hình thoáng qua của ChatGPT, kiểu
+    // thông báo/spotlight tính năng mới) đôi khi che mất toggle này ngay
+    // lúc click — xác nhận qua lỗi thật ("<div data-state=\"open\" ...>
+    // subtree intercepts pointer events" từ #modal-beacon), kéo dài hết cả
+    // 10s retry mặc định của Playwright, KHÔNG tự biến mất trong lúc đó.
+    // Escape trước khi thử click — cách đóng phổ biến nhất cho overlay kiểu
+    // này, best-effort (vô hại nếu không có gì để đóng).
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(300);
+
+    // 15s thay vì 10s — cùng lý do đã sửa cho các click của Pollo (Generate,
+    // upload dialog): dưới tải CPU cao, actionability check pass hết nhưng
+    // "performing click action" treo tới đúng mốc timeout dù click đã ăn
+    // thật, không phải lỗi logic/overlay.
+    await workToggle.click({ timeout: 15_000 });
   } catch (err) {
     console.warn(
       "[chatAI] Không chọn được mode 'Work' (best-effort, bỏ qua):",
       err instanceof Error ? err.message : err,
     );
+    await captureSnapshot(page, jobId, `selectWorkMode-fail-${Date.now()}`);
   }
 }
 
@@ -899,7 +996,10 @@ export async function selectMaxReasoningEffort(page: Page): Promise<void> {
         .catch(() => null)) === "true";
     if (alreadyMax) return;
 
-    const button = await firstVisible(modelSelectorButtonCandidates(page), 5000);
+    const button = await firstVisible(
+      modelSelectorButtonCandidates(page),
+      5000,
+    );
     await button.hover().catch(() => {});
     await page.waitForTimeout(200);
     await button.click();
@@ -916,8 +1016,12 @@ export async function selectMaxReasoningEffort(page: Page): Promise<void> {
 
     for (let i = 0; i < 6; i++) {
       const thumb = effortSliderThumbLocator(page).first();
-      const valueNow = await thumb.getAttribute("aria-valuenow").catch(() => null);
-      const valueMax = await thumb.getAttribute("aria-valuemax").catch(() => null);
+      const valueNow = await thumb
+        .getAttribute("aria-valuenow")
+        .catch(() => null);
+      const valueMax = await thumb
+        .getAttribute("aria-valuemax")
+        .catch(() => null);
       if (valueNow !== null && valueNow === valueMax) break;
       await sliderControl.press("ArrowRight");
       await page.waitForTimeout(150);
@@ -976,7 +1080,7 @@ export async function askChatAI(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await selectWorkMode(page);
+    await selectWorkMode(page, jobId);
     if (config.chatAIMaxEffort) {
       await selectMaxReasoningEffort(page);
     }
@@ -1001,7 +1105,15 @@ export async function askChatAI(
     let downloadedFiles: string[] = [];
     let auditRequested = false;
     let lastMessageCount = 0;
+    // Theo yêu cầu người dùng (processChatAIQueue: fallback sang
+    // askChatAIWithInlineContent khi askChatAI dính fileAccessError) — track
+    // xem LƯỢT GẦN NHẤT có phải fileAccessError hay không, reset về false mỗi
+    // lượt MỚI (chỉ true nếu lượt đó THỰC SỰ là fileAccessError) để phản ánh
+    // đúng trạng thái lúc vòng lặp kết thúc (không phải "đã từng gặp 1 lần
+    // nào đó").
+    let lastTurnWasFileAccessError = false;
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
+      lastTurnWasFileAccessError = false;
       await sendMessage(page, messageToSend);
 
       const result = await readLatestAssistantMessage(
@@ -1011,7 +1123,11 @@ export async function askChatAI(
         lastMessageCount + 1,
       );
       lastMessageCount = result.messageCount;
-      await captureSnapshot(page, jobId + "_"+(promptFileName || ""), "result");
+      await captureSnapshot(
+        page,
+        jobId + "_" + (promptFileName || ""),
+        "result",
+      );
 
       // Xác nhận qua log lỗi thật (job 35941268/1aacc019): ChatAI đọc được
       // file đính kèm nhưng khẳng định SAI là "chưa chứa kịch bản phim" dù
@@ -1046,6 +1162,36 @@ export async function askChatAI(
         } else {
           messageToSend =
             "Kịch bản phim đã có sẵn trong nội dung tôi gửi ở trên — hãy đọc lại toàn bộ (kể cả phần cuối) và tiếp tục xử lý, không cần hỏi lại.";
+        }
+        continue;
+      }
+
+      // Theo yêu cầu người dùng: ChatAI báo LỖI CÔNG CỤ đọc file (KHÁC
+      // missingScript ở trên — không phải đọc nhầm nội dung, mà KHÔNG đọc
+      // được file chút nào, thường do trục trặc hạ tầng xử lý file phía
+      // ChatGPT) — thay vì cố upload lại file (dễ lặp lại đúng lỗi công cụ
+      // đang hỏng), đọc THẲNG nội dung file từ local rồi dán trực tiếp vào
+      // tin nhắn dạng text — né hẳn công cụ đọc file đang lỗi.
+      if (result.fileAccessError) {
+        lastTurnWasFileAccessError = true;
+        for (const filePath of result.downloadedFiles) {
+          await fs.promises.unlink(filePath).catch(() => {});
+        }
+        const fileContent = attachmentPath
+          ? await fs.promises
+              .readFile(attachmentPath, "utf-8")
+              .catch(() => null)
+          : null;
+
+        if (fileContent) {
+          messageToSend = `Bạn báo không đọc được file đính kèm (lỗi môi trường/công cụ xử lý file phía bạn) — đây là TOÀN BỘ nội dung file đó, dán trực tiếp vào đây, dùng đúng nội dung này để tiếp tục xử lý, không cần đọc lại file đính kèm nữa:\n\n${fileContent}`;
+        } else if (attachmentPath) {
+          await uploadAttachment(page, attachmentPath);
+          messageToSend =
+            "Tôi vừa gửi lại file đính kèm ở trên — hãy thử đọc lại và tiếp tục xử lý theo đúng workflow/quy tắc đã nêu trong đó.";
+        } else {
+          messageToSend =
+            "Nội dung cần xử lý đã có sẵn trong tin nhắn tôi gửi trước đó — hãy đọc lại và tiếp tục xử lý, không cần file đính kèm nào nữa.";
         }
         continue;
       }
@@ -1105,9 +1251,431 @@ export async function askChatAI(
       messageToSend = CONTINUE_MESSAGE;
     }
 
+    // Theo yêu cầu người dùng: hết MAX_TURNS_WAITING_FOR_FILE lượt mà VẪN
+    // chưa có file nào, VÀ lượt cuối cùng vẫn đang dính fileAccessError (ChatGPT
+    // báo lỗi công cụ đọc file, KHÔNG phải chỉ "chưa hoàn thiện" bình thường)
+    // — throw rõ ràng kèm fileAccessError=true thay vì âm thầm trả về mảng
+    // rỗng như trước, để processChatAIQueue phát hiện được và fallback sang
+    // askChatAIWithInlineContent.
+    if (downloadedFiles.length === 0 && lastTurnWasFileAccessError) {
+      throw new ChatAIError(
+        `ChatAI báo lỗi công cụ đọc file đính kèm (fileAccessError) lặp lại tới hết ${MAX_TURNS_WAITING_FOR_FILE} lượt, không lấy được file kết quả nào.`,
+        { fileAccessError: true },
+      );
+    }
+
     return { downloadedFiles };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);
+    throw err instanceof ChatAIError
+      ? err
+      : new ChatAIError(err instanceof Error ? err.message : String(err));
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Regex khớp khối ```code fence``` markdown thô (có nhãn ngôn ngữ hay không,
+ * vd ```json) — CHỈ dùng làm fallback cuối trong readInlineCodeBlock, phòng
+ * trường hợp hiếm ChatAI trả lời bằng markdown thô thay vì widget canvas.
+ */
+const CODE_BLOCK_PATTERN = /```(?:[a-zA-Z]*)\n([\s\S]*?)```/g;
+
+/** Trích nội dung khối markdown code LỚN NHẤT trong text (phòng trường hợp có nhiều khối) — null nếu không có khối nào. */
+function extractLargestCodeBlock(text: string): string | null {
+  const matches = [...text.matchAll(CODE_BLOCK_PATTERN)];
+  if (matches.length === 0) return null;
+  let largest = matches[0][1];
+  for (const m of matches) {
+    if (m[1].length > largest.length) largest = m[1];
+  }
+  return largest.trim() || null;
+}
+
+/**
+ * Đọc nội dung khối "code block" ChatGPT trả trong tin nhắn — xác nhận qua
+ * debug DOM thật (job 67d7ec98...): ChatGPT KHÔNG render markdown backtick
+ * thô, mà dùng 1 widget canvas riêng (`<div id="code-block-viewer">` bọc 1
+ * CodeMirror readonly, nhãn "JSON" + nút Copy phía trên — xem ảnh chụp job
+ * đó) — .innerText() của cả tin nhắn KHÔNG hề chứa ký tự "```" nên
+ * extractLargestCodeBlock luôn trả null dù rõ ràng CÓ khối JSON trên màn
+ * hình.
+ *
+ * SỬA (xác nhận qua lỗi thật LẶP LẠI 2 LẦN — file lưu ra lẫn CẢ nội dung tin
+ * nhắn đã gửi/"Pasted text(...).txt", không chỉ riêng JSON trả lời): cách cũ
+ * dùng Ctrl+A/Ctrl+C (theo đúng kỹ thuật của downloadAttachedFiles, phòng
+ * CodeMirror ảo hoá nội dung dài) — kể cả sau khi sửa click đúng vào
+ * pre.cm-content (bên trong, không phải div bọc ngoài) vẫn KHÔNG cứu được:
+ * Ctrl+A trên widget readonly này không scope đúng vào riêng nó, vẫn lọt ra
+ * chọn thêm nội dung khác trên trang. Kiểm tra lại qua debug HTML THẬT: toàn
+ * bộ nội dung JSON (tới tận dấu "]" đóng cuối) đã có sẵn ĐẦY ĐỦ trong DOM
+ * tĩnh ngay từ đầu — widget này KHÔNG ảo hoá (khác panel xem trước file đính
+ * kèm mà downloadAttachedFiles xử lý, đó là 1 component khác). Bỏ hẳn
+ * Ctrl+A/clipboard — đọc thẳng textContent của CHÍNH phần tử pre.cm-content
+ * qua evaluate (không qua .innerText(), tránh CSS/visibility ảnh hưởng,
+ * cũng không cần chọn/focus/click gì cả).
+ */
+async function readInlineCodeBlock(
+  page: Page,
+  message: Locator,
+): Promise<string | null> {
+  const viewer = message.locator("#code-block-viewer").first();
+  const viewerExists = (await viewer.count().catch(() => 0)) > 0;
+  if (!viewerExists) {
+    // Fallback: ChatAI lỡ trả markdown backtick thô thay vì widget canvas.
+    const text = await message.innerText().catch(() => "");
+    return extractLargestCodeBlock(text);
+  }
+  const codeContent = viewer.locator("pre.cm-content").first();
+  const content = await codeContent
+    .evaluate((el) => el.textContent)
+    .catch(() => null);
+  return content?.trim() || null;
+}
+
+/** Text CHÍNH XÁC báo hiệu ChatAI đã gửi HẾT các phần của kết quả JSON (xem askChatAIWithInlineContent) — KHÔNG suy đoán qua isIncompleteText/isCompletionText (dành cho askChatAI, ngữ cảnh file đính kèm khác hẳn). */
+const INLINE_CONTENT_DONE_MARKER = "Đã hoàn thành";
+
+/**
+ * Bản CLONE của askChatAI — theo yêu cầu người dùng, tránh hẳn cơ chế
+ * upload/tải file đính kèm của ChatAI (đã xác nhận qua nhiều lỗi thật —
+ * missingScript, fileAccessError...: công cụ xử lý file của ChatGPT không ổn
+ * định). Khác 2 điểm so với askChatAI:
+ *
+ * 1. KHÔNG upload file lên composer — đọc thẳng nội dung file (attachmentPath)
+ *    từ local, dán TRỰC TIẾP vào tin nhắn dạng text (kèm prompt bổ sung phía
+ *    sau), cùng hướng dẫn ChatAI PHẢI trả kết quả JSON ngay trong tin nhắn
+ *    (bọc trong khối code), KHÔNG tạo file đính kèm.
+ * 2. KHÔNG tải file đính kèm nào — đọc lại tin nhắn trả lời, trích nội dung
+ *    trong khối code, tự ghi ra file cục bộ (config.chatAIResultsDir) thay vì
+ *    nhờ ChatAI tạo file.
+ *
+ * SỬA (theo yêu cầu người dùng): output JSON có thể QUÁ DÀI cho 1 lượt trả
+ * lời — cho phép ChatAI CHIA THÀNH NHIỀU PHẦN, mỗi lượt trả lời 1 khối code
+ * chứa 1 JSON ARRAY (1 phần các item, KHÔNG phải toàn bộ mảng bọc khác đi) —
+ * bot tự đọc + nối (concat) các phần lại thành 1 mảng hoàn chỉnh. KHÔNG suy
+ * đoán "đã xong" qua việc thấy 1 khối code hợp lệ (có thể chỉ là 1 phần) —
+ * CHỈ coi là xong khi tin nhắn trả lời chứa ĐÚNG text
+ * INLINE_CONTENT_DONE_MARKER ("Đã hoàn thành"); các phần TRƯỚC đó KHÔNG được
+ * chứa text này. Lặp lại (gửi tiếp yêu cầu phần kế) tới khi thấy marker hoặc
+ * hết MAX_TURNS_WAITING_FOR_FILE lượt.
+ */
+/**
+ * Xác nhận qua lỗi thật (job 300d3c38...): Chrome renderer crash ("Target
+ * crashed") giữa chừng khi hội thoại inline (file dán trực tiếp + nhiều lượt
+ * chia phần JSON) phình quá lớn trong DOM — cùng lớp lỗi đã gặp và xử lý ở
+ * pollo.ts/aiVideo.ts (xem generateVideo trong pollo.ts). Tự mở tab MỚI thử
+ * lại 1 lần trước khi chịu thua — LƯU Ý: hội thoại/tiến độ (các item JSON đã
+ * nhận được ở các lượt trước) sống TRONG page đã crash, không cách nào phục
+ * hồi được (tab mới = hội thoại ChatAI mới hoàn toàn) — retry ở đây chấp
+ * nhận làm lại TỪ ĐẦU, không cố nối tiếp phần dở dang.
+ */
+export async function askChatAIWithInlineContent(
+  prompt: string,
+  jobId: string,
+  promptFileName?: string,
+  attachmentPath?: string,
+): Promise<{ downloadedFiles: string[] }> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptAskChatAIWithInlineContent(
+        prompt,
+        jobId,
+        promptFileName,
+        attachmentPath,
+      );
+    } catch (err) {
+      // if (isPageCrashError(err) && attempt < maxCrashRetries) {
+      //   console.warn(
+      //     `[chatAI] Chrome renderer crash ("Target crashed") — mở tab mới thử lại từ đầu (lần ${attempt + 1}/${maxCrashRetries}):`,
+      //     err instanceof Error ? err.message : err,
+      //   );
+      //   continue;
+      // }
+      throw err;
+    }
+  }
+}
+
+async function attemptAskChatAIWithInlineContent(
+  prompt: string,
+  jobId: string,
+  promptFileName?: string,
+  attachmentPath?: string,
+): Promise<{ downloadedFiles: string[] }> {
+  console.log(
+    `[chatAI] askChatAIWithInlineContent(${jobId}): bắt đầu — mở trang ChatAI...`,
+  );
+  const context = await getChatAIBrowserContext();
+  const page = await context.newPage();
+  try {
+    await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await dismissCloudflareChallengeIfPresent(page);
+
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+      .then(() => true)
+      .catch(() => false);
+    if (signedOut) {
+      throw new ChatAIError(
+        "Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai",
+      );
+    }
+
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
+
+    await selectWorkMode(page, jobId);
+    if (config.chatAIMaxEffort) {
+      await selectMaxReasoningEffort(page);
+    }
+
+    const fileContent = attachmentPath
+      ? await fs.promises.readFile(attachmentPath, "utf-8").catch(() => null)
+      : null;
+
+    const INLINE_RESULT_INSTRUCTION = `QUAN TRỌNG: Trả kết quả JSON TRỰC TIẾP trong tin nhắn trả lời, bọc trong khối code — KHÔNG tạo file đính kèm, KHÔNG dùng công cụ tạo file.
+
+Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài để gửi trong 1 lượt, hãy CHIA THÀNH NHIỀU LƯỢT trả lời — mỗi lượt gửi 1 khối code chứa 1 JSON ARRAY là 1 PHẦN các item tiếp theo (không lặp lại item đã gửi, không bọc thêm object nào khác ngoài mảng). Ở CUỐI tin nhắn của lượt CUỐI CÙNG (khi đã gửi hết toàn bộ, không còn item nào nữa), viết rõ nguyên văn "${INLINE_CONTENT_DONE_MARKER}". TUYỆT ĐỐI KHÔNG viết "${INLINE_CONTENT_DONE_MARKER}" ở các lượt CHƯA gửi hết.`;
+
+    const CONTINUE_MESSAGE = `Tiếp tục gửi phần tiếp theo của mảng JSON (khối code, chỉ chứa các item CHƯA gửi) — chỉ viết "${INLINE_CONTENT_DONE_MARKER}" khi đã gửi hết toàn bộ.`;
+
+    let messageToSend = fileContent
+      ? `${fileContent}\n\n${prompt}\n\n${INLINE_RESULT_INSTRUCTION}`
+      : `${prompt}\n\n${INLINE_RESULT_INSTRUCTION}`;
+
+    const messages = assistantMessageLocator(page);
+    const allItems: unknown[] = [];
+    let done = false;
+    let lastMessageCount = 0;
+
+    for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
+      console.log(
+        `[chatAI] askChatAIWithInlineContent(${jobId}): lượt ${turn}/${MAX_TURNS_WAITING_FOR_FILE} — gửi tin nhắn, đang chờ ChatAI trả lời...`,
+      );
+      await sendMessage(page, messageToSend);
+
+      // Chờ tới khi có tin nhắn trả lời MỚI (đếm tăng so với lượt trước) —
+      // cùng cơ chế poll đã dùng trong readLatestAssistantMessage (trang có
+      // thể kẹt loading 1 lúc SAU KHI sendMessage đã xác nhận xong).
+      const minMessageCount = lastMessageCount + 1;
+      let count = await messages.count();
+      const pollDeadline = Date.now() + 30_000;
+      while (count < minMessageCount && Date.now() < pollDeadline) {
+        await page.waitForTimeout(1000);
+        count = await messages.count();
+      }
+      if (count === 0) {
+        throw new ChatAIError(
+          "Không tìm thấy câu trả lời nào từ ChatAI trên trang",
+        );
+      }
+      lastMessageCount = count;
+
+      const latest = messages.last();
+      await captureSnapshot(
+        page,
+        `${jobId}_${promptFileName || ""}_turn-${turn}`,
+        `result-turn-${turn}`,
+      );
+
+      const text = await latest.innerText().catch(() => "");
+      const chunkJson = await readInlineCodeBlock(page, latest);
+      let chunkItemCount = 0;
+      if (chunkJson) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(chunkJson);
+        } catch (err) {
+          throw new ChatAIError(
+            `ChatAI trả về khối code ở lượt ${turn} nhưng không parse được thành JSON hợp lệ: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+        if (!Array.isArray(parsed)) {
+          throw new ChatAIError(
+            `ChatAI trả về JSON ở lượt ${turn} nhưng KHÔNG PHẢI array (mỗi phần bắt buộc là 1 JSON array theo đúng hướng dẫn).`,
+          );
+        }
+        chunkItemCount = parsed.length;
+        allItems.push(...parsed);
+      }
+
+      const sawDoneMarker = text.includes(INLINE_CONTENT_DONE_MARKER);
+      console.log(
+        `[chatAI] askChatAIWithInlineContent(${jobId}): lượt ${turn} — nhận ${chunkItemCount} item mới (tổng ${allItems.length}), marker "Đã hoàn thành": ${sawDoneMarker ? "CÓ" : "chưa"}.`,
+      );
+
+      if (sawDoneMarker) {
+        done = true;
+        break;
+      }
+
+      // Chưa thấy marker HOÀN THÀNH (dù có khối code hay không) — nhắc lại
+      // đúng yêu cầu để lấy phần tiếp theo.
+      messageToSend = CONTINUE_MESSAGE;
+    }
+
+    if (!done) {
+      throw new ChatAIError(
+        `ChatAI chưa gửi text "${INLINE_CONTENT_DONE_MARKER}" sau ${MAX_TURNS_WAITING_FOR_FILE} lượt — kết quả có thể chưa đầy đủ.`,
+      );
+    }
+    if (allItems.length === 0) {
+      throw new ChatAIError(
+        "ChatAI báo đã hoàn thành nhưng không có item JSON nào được thu thập.",
+      );
+    }
+
+    await fs.promises.mkdir(config.chatAIResultsDir, { recursive: true });
+    const promptFileBaseName = promptFileName
+      ? path.basename(promptFileName, path.extname(promptFileName))
+      : jobId;
+    const filePath = path.join(
+      config.chatAIResultsDir,
+      `${promptFileBaseName}.json`,
+    );
+    await fs.promises.writeFile(
+      filePath,
+      JSON.stringify(allItems, null, 2),
+      "utf-8",
+    );
+    console.log(
+      `[chatAI] askChatAIWithInlineContent(${jobId}): xong — tổng ${allItems.length} item, đã lưu "${filePath}".`,
+    );
+
+    return { downloadedFiles: [filePath] };
+  } catch (err) {
+    await captureErrorSnapshot(page, jobId, err);
+    throw err instanceof ChatAIError
+      ? err
+      : new ChatAIError(err instanceof Error ? err.message : String(err));
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Đường dẫn master prompt dùng cho verifyVideo — resolve từ project root
+ * (KHÔNG dùng __dirname: build (tsc) không copy file .txt sang dist/, chỉ
+ * .js, nên đọc theo path tương đối cwd giống config.ts/generatedDirFor, luôn
+ * chạy từ project root).
+ */
+const VERIFY_VIDEO_PROMPT_TEMPLATE_PATH = path.resolve(
+  "./src/automation/check_video.txt",
+);
+
+/**
+ * Nhờ ChatAI (đóng vai VIDEO CHARACTER CONSISTENCY INSPECTOR — xem master
+ * prompt check_video.txt) kiểm tra 1 video kết quả có đúng prompt/ảnh tham
+ * chiếu đã dùng để tạo ra nó hay không — theo yêu cầu người dùng.
+ *
+ * KHÁC hẳn askChatAI/askChatAIWithInlineContent — không liên quan tạo
+ * storyboard: upload THẲNG file video + từng ảnh tham chiếu (refs, ĐÚNG THỨ
+ * TỰ) làm đính kèm, dán prompt kiểm tra làm tin nhắn (ghép từ template
+ * check_video.txt, thay 2 placeholder "[DÁN PROMPT ĐÃ DÙNG ĐỂ TẠO VIDEO VÀO
+ * ĐÂY]" và "[LIỆT KÊ TÊN VÀ THỨ TỰ CÁC ẢNH THAM CHIẾU]"). Đọc JSON kết quả
+ * qua readInlineCodeBlock (dùng lại đúng cơ chế của askChatAIWithInlineContent
+ * — master prompt tự yêu cầu "Không dùng Markdown fence" nhưng ChatGPT vẫn
+ * có thể tự render JSON qua widget canvas #code-block-viewer, hàm này đã tự
+ * fallback đọc text thô nếu không thấy widget) rồi lưu ra file NGAY CẠNH
+ * video, tên = <id video>.json (id lấy từ basename videoPath, bỏ đuôi).
+ *
+ * refs: đường dẫn file ẢNH tham chiếu ĐÃ RESOLVE sẵn (không phải id thô) —
+ * đúng THỨ TỰ cần liệt kê/upload theo yêu cầu người dùng.
+ *
+ * Gửi ĐÚNG 1 LẦN (giống askChatAIWithInlineContent) — không lặp lượt chờ
+ * hoàn thiện, không có audit.
+ */
+export async function verifyVideo(
+  prompt: string,
+  refs: string[],
+  videoPath: string,
+): Promise<{ filePath: string }> {
+  const id = path.basename(videoPath, path.extname(videoPath));
+  const context = await getChatAIBrowserContext();
+  const page = await context.newPage();
+  try {
+    await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await dismissCloudflareChallengeIfPresent(page);
+
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+      .then(() => true)
+      .catch(() => false);
+    if (signedOut) {
+      throw new ChatAIError(
+        "Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai",
+      );
+    }
+
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
+
+    await selectWorkMode(page, id);
+    if (config.chatAIMaxEffort) {
+      await selectMaxReasoningEffort(page);
+    }
+
+    // Upload video TRƯỚC, rồi từng ảnh tham chiếu ĐÚNG THỨ TỰ trong refs —
+    // theo yêu cầu người dùng.
+    await uploadAttachment(page, videoPath);
+    for (const refPath of refs) {
+      await uploadAttachment(page, refPath);
+    }
+
+    const template = await fs.promises.readFile(
+      VERIFY_VIDEO_PROMPT_TEMPLATE_PATH,
+      "utf-8",
+    );
+    const refsListing = refs
+      .map((refPath, i) => `${i + 1}. ${path.basename(refPath)}`)
+      .join("\n");
+    const message = template
+      .replace("[DÁN PROMPT ĐÃ DÙNG ĐỂ TẠO VIDEO VÀO ĐÂY]", prompt)
+      .replace("[LIỆT KÊ TÊN VÀ THỨ TỰ CÁC ẢNH THAM CHIẾU]", refsListing);
+
+    await sendMessage(page, message);
+
+    const messages = assistantMessageLocator(page);
+    // Chờ tới khi có ÍT NHẤT 1 tin nhắn trả lời — cùng cơ chế poll đã dùng
+    // trong askChatAIWithInlineContent/readLatestAssistantMessage (trang có
+    // thể kẹt loading 1 lúc SAU KHI sendMessage đã xác nhận xong).
+    let count = await messages.count();
+    const pollDeadline = Date.now() + 30_000;
+    while (count === 0 && Date.now() < pollDeadline) {
+      await page.waitForTimeout(1000);
+      count = await messages.count();
+    }
+    if (count === 0) {
+      throw new ChatAIError(
+        "Không tìm thấy câu trả lời nào từ ChatAI trên trang",
+      );
+    }
+
+    const latest = messages.last();
+    await captureSnapshot(page, `${id}_verify`, "result");
+
+    const resultJson = await readInlineCodeBlock(page, latest);
+    if (!resultJson) {
+      throw new ChatAIError(
+        `ChatAI không trả kết quả JSON nào cho video "${id}".`,
+      );
+    }
+
+    const filePath = path.join(path.dirname(videoPath), `${id}.json`);
+    await fs.promises.writeFile(filePath, resultJson, "utf-8");
+
+    return { filePath };
+  } catch (err) {
+    await captureErrorSnapshot(page, id, err);
     throw err instanceof ChatAIError
       ? err
       : new ChatAIError(err instanceof Error ? err.message : String(err));
@@ -1167,7 +1735,7 @@ export async function reviseGenerationPrompt(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await selectWorkMode(page);
+    await selectWorkMode(page, jobId);
     if (config.chatAIMaxEffort) {
       await selectMaxReasoningEffort(page);
     }
@@ -1186,7 +1754,7 @@ Hãy viết lại ĐÚNG prompt này để mô tả lại y hệt ý tưởng, b
     const latest = assistantMessageLocator(page).last();
     const text = await latest.innerText().catch(() => "");
     const revisedPrompt = cleanRevisedPrompt(text);
-    console.log("🚀 ~ reviseGenerationPrompt ~ revisedPrompt:", revisedPrompt)
+    console.log("🚀 ~ reviseGenerationPrompt ~ revisedPrompt:", revisedPrompt);
     if (!revisedPrompt) {
       throw new ChatAIError("ChatAI không trả về prompt viết lại nào");
     }

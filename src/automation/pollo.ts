@@ -6,19 +6,23 @@ import { getPolloBrowserContext } from "./polloBrowser";
 import {
   GenerationError,
   captureErrorSnapshot,
+  captureSnapshot,
   fetchWithRetry,
 } from "./aiVideo";
-import { firstVisible } from "./selectors";
+import { firstVisible, isPageCrashError } from "./selectors";
 import {
+  aspectRatioOptionLocator,
   assetPickerCardByUrlLocator,
   assetPickerCardLocator,
+  assetPickerGridLocator,
+  attachedReferenceImageSpinnerLocator,
+  chatFooterFieldsChipLocator,
   creditPaywallLocator,
   generateButtonLocator,
   mentionPickerItemByUrlLocator,
   modeChipLocator,
   modeMenuOptionLocator,
   modelChipLocator,
-  modelDialogOptionLocator,
   paramsChipLocator,
   promptEditorLocator,
   resultCardLocator,
@@ -29,10 +33,10 @@ import {
   uploadCardButtonForImage,
   uploadDialogFileInputLocator,
   uploadDialogSelectButtonLocator,
-  uploadingSpinnerLocator,
   videoLengthOptionLocator,
   videoLengthSliderInputLocator,
 } from "./polloSelectors";
+import { sleep } from "./storyboardPipeline";
 
 /**
  * Map Content-Type → đuôi file — dùng cho resolveDownloadExtension bên dưới,
@@ -71,8 +75,9 @@ export function resolveDownloadExtension(
   src: string,
   fallbackExt = ".png",
 ): string {
-  const contentType = response.headers()["content-type"]
-    ?.split(";")[0]
+  const contentType = response
+    .headers()
+    ["content-type"]?.split(";")[0]
     .trim()
     .toLowerCase();
   if (contentType && CONTENT_TYPE_EXTENSIONS[contentType]) {
@@ -112,9 +117,13 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
   // all" theo đúng thư viện, kèm fallback theo text phòng khi site tùy biến
   // lại attribute) TRƯỚC các bước dismiss khác.
   const cookieAcceptButton = page
-    .locator('#cc-main button[data-cc="accept-all"], #cc-main button:has-text("Accept all")')
+    .locator(
+      '#cc-main button[data-cc="accept-all"], #cc-main button:has-text("Accept all")',
+    )
     .first();
-  if (await cookieAcceptButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+  if (
+    await cookieAcceptButton.isVisible({ timeout: 1000 }).catch(() => false)
+  ) {
     await cookieAcceptButton.click().catch(() => {});
     await page.waitForTimeout(300);
   }
@@ -136,9 +145,13 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
     }
   }
 
-  const maybeLaterButtons = await page.locator('button[data-button-name="next_time"]').all();
+  const maybeLaterButtons = await page
+    .locator('button[data-button-name="next_time"]')
+    .all();
   for (const maybeLaterButton of maybeLaterButtons) {
-    if (await maybeLaterButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (
+      await maybeLaterButton.isVisible({ timeout: 1000 }).catch(() => false)
+    ) {
       await maybeLaterButton.click().catch(() => {});
       await page.waitForTimeout(300);
     }
@@ -231,7 +244,17 @@ export async function clickGenerateButton(
   page: Page,
   button: Locator,
   baselineCount: number,
-  timeoutPerAttemptMs = 4000,
+  baselineGeneratingCount: number,
+  // 4000ms cũ quá gấp — xác nhận qua lỗi thật trên VPS production
+  // (SHOT_08_CLIP_02_VIDEO, 2026-09-08): log cho thấy mọi actionability
+  // check đều pass ("visible, enabled and stable", "performing click
+  // action") rồi TREO đúng tới mốc 4000ms mới timeout — không phải bị
+  // overlay che (đã có dismissBlockingOverlays giữa các lần retry, không
+  // cứu được vì không có overlay thật). Khớp với vấn đề CPU VPS 100% đã biết
+  // khi chạy đồng thời nhiều job gen ảnh/video (xem os.setPriority trong
+  // index.ts) — trình duyệt xử lý sự kiện click chậm hơn bình thường do
+  // tranh CPU, không phải lỗi logic. Nới lên 60s/lần cho đủ chịu tải.
+  timeoutPerAttemptMs = 60_000,
   maxAttempts = 5,
 ): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -239,10 +262,46 @@ export async function clickGenerateButton(
       await button.click({ timeout: timeoutPerAttemptMs });
       return;
     } catch (err) {
-      const alreadySucceeded = (await resultCardLocator(page).count()) > baselineCount;
+      // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_08_CLIP_02_VIDEO,
+      // 2026-09-08): resultCardLocator (project_content_card) CHỈ khớp card
+      // đã nằm trong lưới kết quả — trong lúc mới generate được vài giây,
+      // trạng thái "đang chạy" hiển thị RIÊNG ở khối canvas chính dưới dạng
+      // [data-slot="task-card-generating"] (kèm % tiến độ, "This may take 5
+      // minutes...") — KHÔNG nằm trong resultCardLocator nên baselineCount
+      // check cũ không thấy được. Hậu quả thật: click() bị timeout (rất có
+      // thể do CPU VPS quá tải làm phản hồi CDP chậm — xem timeoutPerAttemptMs
+      // ở trên) NGAY CẢ KHI click đã ăn thật (video đã bắt đầu generate,
+      // snapshot chụp được "16%"), code cứ tưởng chưa bấm được nên bấm lại —
+      // dẫn tới nhiều generation trùng nhau cùng lúc. Check thêm tín hiệu này
+      // trước khi kết luận "chưa thành công, cần bấm lại".
+      //
+      // SỬA LẦN 2 (theo nghi vấn người dùng — "có khả năng chưa click button
+      // generate không", xác nhận qua log thật: job EP1_1_SHOT_12_CLIP_01_VIDEO
+      // treo 20 phút "chưa từng thấy card generate nào xuất hiện" trong lúc
+      // hàng đợi ẢNH của CÙNG tài khoản, context RIÊNG, vẫn liên tục có card
+      // "task-card-generating" của các job ảnh đó): so `> 0` (bất kỳ card nào
+      // đang generate) là SAI PHẠM VI — không phân biệt được "job VIDEO này
+      // vừa thực sự bắt đầu" với "có card generate CỦA JOB KHÁC visible sẵn
+      // trên trang do context/tài khoản dùng chung trạng thái hiển thị". Nếu
+      // click() timeout đúng lúc có card generate CỦA JOB KHÁC đang tồn tại,
+      // code cũ coi NHƯ ĐÃ THÀNH CÔNG mà không click lại — video KHÔNG BAO
+      // GIỜ thực sự được submit, giải thích đúng triệu chứng "không có API
+      // record, không có card, treo hết 20 phút". So sánh TĂNG so với
+      // baselineGeneratingCount (chụp NGAY TRƯỚC lúc bấm) thay vì so với 0.
+      const alreadySucceeded =
+        (await resultCardLocator(page).count()) > baselineCount ||
+        (await page.locator('[data-slot="task-card-generating"]').count()) >
+          baselineGeneratingCount;
       if (alreadySucceeded) {
+        const time = new Date().toISOString().replace(/[:.]/g, "-");
         console.warn(
-          "[pollo] click Generate báo lỗi nhưng đã thấy card mới xuất hiện — coi như đã bấm thành công, bỏ qua lỗi.",
+          time,
+          "[pollo] click Generate báo lỗi nhưng đã thấy generation đang chạy (card mới hoặc task-card-generating) — coi như đã bấm thành công, bỏ qua lỗi.",
+        );
+        await captureSnapshot(
+          page,
+          time,
+          "clickGenerateButton_alreadySucceeded",
         );
         return;
       }
@@ -275,6 +334,25 @@ export async function clickGenerateButton(
  * xác nhận qua lỗi thật (job LOC_IMPERIAL_CITY_OUTER_ROAD): dùng con số cứng
  * 20 phút TRÙNG với timeout 1 lượt generate khiến việc chờ luôn "suýt trượt"
  * ở đúng ranh giới, hết hạn ngay trước khi job kia kịp xong.
+ *
+ * SỬA (xác nhận qua debug snapshot THẬT chụp giữa lúc đang chờ — job
+ * SHOT_05_CLIP_01_VIDEO): trang có thể rơi về bản marketing/SEO tĩnh CHƯA
+ * hydrate NGAY GIỮA LÚC đang chờ (không chỉ lúc mới vào trang — xem
+ * ensureComposerReadyOrThrow, cùng cơ chế "JS chunks lỗi tải nên không
+ * hydrate được"). NGUYÊN NHÂN gốc CHƯA CHẮC là proxy như ensureComposerReadyOrThrow
+ * từng ghi nhận — xác nhận lại qua .env THẬT lúc gặp lỗi này (máy dev local,
+ * KHÔNG hề cấu hình PROXY_SERVER) — nên vẫn xảy ra được dù kết nối THẲNG,
+ * không qua proxy nào cả. Có thể do CDN/mạng chập chờn độc lập, hoặc
+ * Cloudflare/anti-bot của pollo.ai bắt đầu nghi ngờ IP này (chạy rất nhiều
+ * lượt test tự động liên tiếp trong ngày) — CHƯA xác nhận chắc chắn nguyên
+ * nhân cụ thể, chỉ chắc chắn KHÔNG PHẢI luôn luôn là proxy. Bug thật ở đây:
+ * trang hỏng làm `button` không còn khớp phần tử nào trên trang nữa.
+ * getAttribute() lúc đó trả về null (bị catch), và `null !== "true"` khiến
+ * vòng lặp hiểu NHẦM là "đã hết disabled", trả về ngay — bước sau
+ * (clickGenerateButton) sẽ cố click vào 1 nút không tồn tại trên trang
+ * marketing, lỗi mơ hồ khó chẩn đoán. Phải phân biệt 2 trường hợp
+ * "aria-disabled != true" (thật sự sẵn sàng) và "không tìm thấy nút" (trang
+ * đã hỏng) — throw rõ ràng ở trường hợp sau thay vì coi là thành công.
  */
 export async function waitForGenerateButtonEnabled(
   page: Page,
@@ -283,15 +361,45 @@ export async function waitForGenerateButtonEnabled(
 ): Promise<void> {
   const start = Date.now();
   while (true) {
-    const disabled = await button.getAttribute("aria-disabled").catch(() => null);
+    const buttonExists = (await button.count().catch(() => 0)) > 0;
+    // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_05_CLIP_01_VIDEO,
+    // 2026-09-08T07:00): chỉ check buttonExists KHÔNG đủ — snapshot cho
+    // thấy trang rơi về bản marketing/SEO nhưng DOM của nó VẪN có sẵn 1
+    // phần tử khớp data-testid="prompt-generate-btn" (bản SSR/skeleton
+    // tĩnh, aria-disabled="true" cố định, KHÔNG BAO GIỜ đổi vì JS thật
+    // (ProseMirror) chưa hydrate để tiếp quản) — buttonExists=true suốt,
+    // vòng lặp chờ hết timeoutMs rồi throw nhầm "vẫn bị khoá do tồn đọng
+    // generation" trong khi lỗi thật là trang hỏng. Dùng LẠI đúng tín hiệu
+    // waitForComposerReady (phần tử contenteditable="true" — CHỈ tồn tại
+    // sau khi ProseMirror hydrate xong, không có trong SSR shell) để phân
+    // biệt "trang thật đã hydrate" với "bản skeleton tĩnh trông giống thật".
+    const composerHydrated =
+      (await page
+        .locator('[data-testid="prompt-editor"] [contenteditable="true"]')
+        .first()
+        .count()
+        .catch(() => 0)) > 0;
+    if (!buttonExists || !composerHydrated) {
+      throw new GenerationError(
+        "Trang không còn ở trạng thái composer thật trong lúc đang chờ nút Generate (aria-disabled) — đã rơi về bản marketing/SEO chưa hydrate (JS chunks lỗi tải — có thể do CDN/mạng chập chờn, KHÔNG chắc do proxy), mất hết prompt/tham chiếu đã nhập.",
+      );
+    }
+    const disabled = await button
+      .getAttribute("aria-disabled")
+      .catch(() => null);
     if (disabled !== "true") return;
     if (Date.now() - start >= timeoutMs) {
       console.warn(
         `[pollo] Nút Generate vẫn bị khoá (aria-disabled="true") sau ${timeoutMs}ms — có thể tài khoản đang tồn đọng nhiều generation cũ. Thử click luôn dù nhiều khả năng vẫn lỗi.`,
       );
-      return;
+      throw new Error(
+        "Nút Generate vẫn bị khoá sau khi chờ quá thời gian cho phép.",
+      );
     }
-    await page.waitForTimeout(5000);
+    // 10s thay vì 5s — giảm tần suất đánh thức renderer (3 query DOM/lần)
+    // trong lúc queue kia (ảnh/video) đang tranh CPU; vòng này có thể chạy
+    // dài nếu tài khoản tồn đọng nhiều generation cũ (xem comment ở trên).
+    await page.waitForTimeout(10_000);
   }
 }
 
@@ -342,13 +450,52 @@ export async function captureGenerationRecordId(
     )
     .catch(() => null);
 
+  // Log chẩn đoán — theo yêu cầu điều tra job "Hết thời gian chờ tạo video —
+  // chưa từng thấy card generate nào xuất hiện" (4 job liên tiếp,
+  // EP1_1_SHOT_12..15, 2026-09-16): recordId luôn null (không có log "API
+  // record ... status") cho các job này, tức responsePromise ở trên KHÔNG
+  // khớp được request nào trong 60s — nhưng chưa rõ vì (a) trang KHÔNG hề
+  // gửi request submit nào cả (click không thực sự đăng ký được), hay (b) có
+  // gửi nhưng khớp SAI regex/tên endpoint. Bắt rộng hơn TOÀN BỘ request POST
+  // tới /api/trpc/ (không lọc theo .create|.submit) trong CÙNG khoảng thời
+  // gian để phân biệt 2 khả năng này — chỉ log khi responsePromise ở trên
+  // thất bại (không tốn gì thêm khi mọi thứ chạy bình thường).
+  const observedTrpcRequests: string[] = [];
+  const onRequest = (req: import("playwright").Request) => {
+    if (req.method() === "POST" && req.url().includes("/api/trpc/")) {
+      observedTrpcRequests.push(req.url());
+    }
+  };
+  page.on("request", onRequest);
+
   await clickAction();
 
   const res = await responsePromise;
-  if (!res) return null;
+  page.off("request", onRequest);
+  if (!res) {
+    console.warn(
+      `[pollo] captureGenerationRecordId: không bắt được response submit nào trong 60s. Các POST /api/trpc/ đã quan sát được trong lúc chờ: ${
+        observedTrpcRequests.length > 0
+          ? observedTrpcRequests.join(", ")
+          : "(không có request nào cả — click có thể chưa thực sự submit)"
+      }`,
+    );
+    return null;
+  }
   const body = await res.json().catch(() => null);
   const entry = Array.isArray(body) ? body[0] : body;
   const id = entry?.result?.data?.json?.id;
+  if (typeof id !== "number") {
+    // Cùng mục đích chẩn đoán như nhánh !res ở trên — response ĐÃ khớp
+    // URL/method mong đợi (res tồn tại) nhưng không đọc được field "id"
+    // dạng number ở đúng vị trí kỳ vọng (entry.result.data.json.id) — có thể
+    // pollo.ai đổi cấu trúc response, hoặc job KHÁC đang chạy song song
+    // khớp NHẦM response (URL đúng nhưng payload không phải của lượt
+    // generate này). Log nguyên văn URL + body để biết chính xác lệch ở đâu.
+    console.warn(
+      `[pollo] captureGenerationRecordId: bắt được response (${res.url()}) nhưng không đọc được "id" dạng number từ body — body: ${JSON.stringify(body)}`,
+    );
+  }
   return typeof id === "number" ? id : null;
 }
 
@@ -385,13 +532,32 @@ export async function waitForGenerationApiStatus(
   page: Page,
   recordId: number,
   timeoutMs: number,
-  pollIntervalMs = 5000,
+  jobId: string,
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer qua page.evaluate(fetch)
+  // trong suốt lúc chờ generate (tới 30 phút/job, ~360 lần ở mức 5s cũ),
+  // ngay trong lúc queue kia (ảnh/video) đang tranh CPU. KHÔNG thể chuyển
+  // request này ra Node-side fetch (đã thử, bị Cloudflare 403 — xem docstring
+  // trên) nên chỉ còn cách giảm tần suất.
+  pollIntervalMs = 10_000,
+  progressSnapshotIntervalMs = 30_000,
 ): Promise<string | null> {
-  const url = new URL("/api/trpc/generationPolling.fetchRecordsStatus", config.polloBaseUrl);
-  url.searchParams.set("input", JSON.stringify({ json: { recordIds: [recordId] } }));
+  const url = new URL(
+    "/api/trpc/generationPolling.fetchRecordsStatus",
+    config.polloBaseUrl,
+  );
+  url.searchParams.set(
+    "input",
+    JSON.stringify({ json: { recordIds: [recordId] } }),
+  );
   const urlStr = url.toString();
 
   const start = Date.now();
+  // Log % tiến độ định kỳ trong lúc chờ generate (theo yêu cầu người dùng) —
+  // đọc thẳng span % hiển thị trong [data-slot="task-card-generating"] (xác
+  // nhận qua ảnh debug thật "16%", 2026-09-08) thay vì chụp ảnh/dump HTML
+  // (tốn CPU hơn hẳn dưới tải cao — xem lịch sử comment cũ ở đây trước khi
+  // đổi sang console.log).
+  let nextSnapshotAt = start + progressSnapshotIntervalMs;
   while (Date.now() - start < timeoutMs) {
     const record = await page
       .evaluate(async (u) => {
@@ -404,6 +570,17 @@ export async function waitForGenerationApiStatus(
 
     if (record && !NON_TERMINAL_GENERATION_STATUSES.has(record.status)) {
       return record.status as string;
+    }
+    if (Date.now() >= nextSnapshotAt) {
+      const progressText = await page
+        .locator('[data-slot="task-card-generating"] span.tabular-nums')
+        .first()
+        .innerText()
+        .catch(() => null);
+      console.log(
+        `[pollo] ${jobId} đang generate: ${progressText ?? "(không đọc được %)"}`,
+      );
+      nextSnapshotAt += progressSnapshotIntervalMs;
     }
     await page.waitForTimeout(pollIntervalMs);
   }
@@ -425,7 +602,10 @@ export async function fetchGenerationRecordDetail(
   page: Page,
   recordId: number,
 ): Promise<{ mediaUrl: string | null; videoId: string | null } | null> {
-  const url = new URL("/api/trpc/generation.queryRecordDetail", config.polloBaseUrl);
+  const url = new URL(
+    "/api/trpc/generation.queryRecordDetail",
+    config.polloBaseUrl,
+  );
   url.searchParams.set("input", JSON.stringify({ json: { id: recordId } }));
   const urlStr = url.toString();
 
@@ -482,11 +662,43 @@ export async function ensureUploadDialogOpen(
 ): Promise<void> {
   const fileInput = uploadDialogFileInputLocator(page);
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const expanded = await trigger.getAttribute("aria-expanded").catch(() => null);
+    const expanded = await trigger
+      .getAttribute("aria-expanded")
+      .catch(() => null);
     if (expanded !== "true") {
       try {
-        await trigger.click({ timeout: 4000 });
+        // 4000ms cũ quá gấp dưới tải CPU cao trên VPS — xác nhận qua lỗi
+        // thật (SHOT_01_CLIP_01_VIDEO, SHOT_02_CLIP_02_VIDEO, 2026-09-08),
+        // cùng loại với clickGenerateButton (xem comment ở đó): actionability
+        // check pass hết nhưng "performing click action" treo tới đúng mốc
+        // timeout. Nới lên 120s cho đủ chịu tải.
+        await trigger.click({ timeout: 120_000 });
       } catch (err) {
+        // Xác nhận qua debug DOM thật (SHOT_05_CLIP_01_VIDEO, project
+        // the_king_closed_the_city, 2026-09-15): trigger timeout 120s vì
+        // KHÔNG BAO GIỜ tồn tại, không phải render chậm — count() = 0 suốt.
+        // Nguyên nhân: pollo.ai giới hạn số ảnh tham chiếu tối đa cho mode
+        // "Reference to Video" (đã thấy 9 ảnh gắn sẵn trong composer khi lỗi
+        // xảy ra) — khi đạt giới hạn, nút "+" thêm ẢNH (wrapper
+        // "group/image-upload") bị GỠ KHỎI DOM hoàn toàn, chỉ còn lại nút
+        // "+" thêm VIDEO (wrapper "group/video-upload", icon
+        // "i-cus--pol-add-video") cạnh bên. Phát hiện đúng trạng thái này để
+        // báo lỗi rõ ràng ngay, thay vì đợi hết cả maxAttempts × 120s rồi
+        // ném ra 1 timeout chung chung khó hiểu.
+        const triggerMissing = (await trigger.count().catch(() => 0)) === 0;
+        if (triggerMissing) {
+          const videoUploadWrapperExists =
+            (await page
+              .locator("div.group\\/video-upload")
+              .first()
+              .count()
+              .catch(() => 0)) > 0;
+          if (videoUploadWrapperExists) {
+            throw new GenerationError(
+              "Nút thêm ảnh tham chiếu không còn tồn tại (chỉ còn nút thêm video cạnh bên) — pollo.ai có thể đã đạt giới hạn số ảnh tham chiếu tối đa cho phiên soạn thảo này. Giảm bớt số ảnh tham chiếu cho video này rồi thử lại.",
+            );
+          }
+        }
         if (attempt === maxAttempts) throw err;
         await dismissBlockingOverlays(page);
         continue;
@@ -531,7 +743,10 @@ interface DeepLink {
   includesModel: boolean;
 }
 
-function buildDeepLinkUrl(modeName: string, modelName?: string): DeepLink | null {
+function buildDeepLinkUrl(
+  modeName: string,
+  modelName?: string,
+): DeepLink | null {
   const modeSlug = MODE_URL_SLUGS[modeName.toLowerCase()];
   if (!modeSlug) return null;
 
@@ -573,7 +788,10 @@ function buildDeepLinkUrl(modeName: string, modelName?: string): DeepLink | null
  * qua. Sau đó bắt buộc ĐỌC LẠI nhãn chip để xác nhận đã đổi đúng model — nếu
  * không đổi thì throw lỗi rõ ràng thay vì im lặng tiếp tục chạy sai model.
  */
-async function selectModel(page: Page, modelName: string): Promise<void> {
+export async function selectModel(
+  page: Page,
+  modelName: string,
+): Promise<void> {
   const chip = modelChipLocator(page).first();
   const currentLabel = await chip.innerText().catch(() => "");
   if (currentLabel.trim().toLowerCase() === modelName.toLowerCase()) return;
@@ -583,15 +801,64 @@ async function selectModel(page: Page, modelName: string): Promise<void> {
   await searchInput.fill(modelName).catch(() => {});
   await page.waitForTimeout(800);
 
-  const row = modelDialogOptionLocator(page, modelName).first();
-  await row.evaluate((el) => el.scrollIntoView({ block: "center" })).catch(() => {});
+  // SỬA (xác nhận qua debug DOM THẬT — chụp trực tiếp popup lúc đang mở,
+  // script test-pollo-generate-image.ts): pollo.ai dùng 2 cấu trúc popup
+  // chọn model KHÁC HẲN NHAU tuỳ trang:
+  // 1. Trang video (/reference-to-video...): dialog lớn, mỗi hàng là
+  //    div[data-button-name] chứa p.font-semibold (modelDialogOptionLocator
+  //    cũ, ĐÃ xác nhận hoạt động đúng cho video).
+  // 2. Trang ảnh (/image): dropdown GỌN hơn, mỗi hàng là <button> chứa
+  //    <span class="text-xs font-semibold leading-5"> (kèm "1+ credits"/
+  //    "105 sec"), KHÁC HẲN cấu trúc trên.
+  // Trang /image CÒN CÓ SẴN 1 khối "Models" duyệt nhanh trên THÂN TRANG
+  // (ngoài popup) dùng ĐÚNG cấu trúc div[data-button-name]/p.font-semibold
+  // như video — đây chính là lý do bản trước luôn click NHẦM: modelDialogOptionLocator
+  // (nhắm div[data-button-name]) tình cờ khớp card của khối duyệt nhanh này
+  // thay vì hàng THẬT trong popup đang search, dẫn tới 2 triệu chứng đã gặp:
+  // (a) job fail "không đổi được model" mà KHÔNG throw lỗi gì (click "thành
+  // công" vào sai phần tử), (b) job fail vì "<div data-base-ui-inert>...
+  // subtree intercepts pointer events" (khối duyệt nhanh nằm NGOÀI popup nên
+  // bị Base UI đánh dấu inert ĐÚNG NHƯ THIẾT KẾ trong lúc popup đang mở — không
+  // phải overlay lạ nào khác). Thử cấu trúc (2) trước (đúng cho trang ảnh),
+  // fallback cấu trúc (1) nếu không khớp (đúng cho trang video, giữ nguyên
+  // hành vi cũ không đổi).
+  const compactRow = page
+    .locator("button")
+    .filter({
+      has: page.locator(
+        `span.text-xs.font-semibold.leading-5:text-is("${modelName}")`,
+      ),
+    })
+    .first();
+  const dialogRow = page
+    .locator(
+      `div[data-button-name]:has(p.font-semibold:text-is("${modelName}"))`,
+    )
+    .first();
+  const useCompactRow = (await compactRow.count().catch(() => 0)) > 0;
+  const row = useCompactRow ? compactRow : dialogRow;
+  await row
+    .evaluate((el) => el.scrollIntoView({ block: "center" }))
+    .catch(() => {});
   await page.waitForTimeout(300);
 
+  // KHÔNG gọi dismissBlockingOverlays trong vòng retry — hàm đó bấm phím
+  // Escape để đóng overlay, nhưng Escape cũng đóng LUÔN popup chọn model
+  // đang mở (xác nhận qua lỗi thật: sau khi thêm dismissBlockingOverlays vào
+  // đây, debug snapshot cho thấy input "Search…" biến mất hẳn khỏi trang —
+  // popup đã bị chính code này đóng mất giữa chừng, khiến MỌI lần retry sau
+  // đó chắc chắn không tìm thấy gì nữa). Chỉ lặp lại click thường.
+  // position: { x: 10, y: 5 } giữ nguyên cho dialogRow (cấu trúc video cũ,
+  // đã xác nhận cần offset này) — compactRow (button, cấu trúc ảnh) click
+  // giữa (mặc định) là đủ, không cần offset.
+  const clickOptions = useCompactRow
+    ? { timeout: 1_500 }
+    : { timeout: 1_500, position: { x: 10, y: 5 } };
   const retryDeadline = Date.now() + 20_000;
   let lastError: unknown;
   while (Date.now() < retryDeadline) {
     try {
-      await row.click({ timeout: 1_500, position: { x: 10, y: 5 } });
+      await row.click(clickOptions);
       lastError = undefined;
       break;
     } catch (err) {
@@ -603,7 +870,8 @@ async function selectModel(page: Page, modelName: string): Promise<void> {
   await page.waitForTimeout(500);
   const newLabel = await chip.innerText().catch(() => "");
   if (newLabel.trim().toLowerCase() !== modelName.toLowerCase()) {
-    const detail = lastError instanceof Error ? lastError.message : String(lastError ?? "");
+    const detail =
+      lastError instanceof Error ? lastError.message : String(lastError ?? "");
     throw new GenerationError(
       `Không thể chọn model "${modelName}" trên pollo.ai (nhãn hiện tại: "${newLabel.trim()}"). ${detail}`,
     );
@@ -655,7 +923,10 @@ async function setSliderValue(input: Locator, value: number): Promise<void> {
  * cảnh báo, KHÔNG throw — giống selectDurationIfNeeded của aiVideo.ts, độ dài
  * sai không đáng để chặn cả pipeline generate).
  */
-async function selectDurationIfNeeded(page: Page, duration: string): Promise<void> {
+async function selectDurationIfNeeded(
+  page: Page,
+  duration: string,
+): Promise<void> {
   const seconds = Number.parseInt(duration, 10);
 
   const sliderInput = videoLengthSliderInputLocator(page).first();
@@ -667,8 +938,10 @@ async function selectDurationIfNeeded(page: Page, duration: string): Promise<voi
       );
       return;
     }
-    const min = Number(await sliderInput.getAttribute("min").catch(() => null)) || 0;
-    const max = Number(await sliderInput.getAttribute("max").catch(() => null)) || 999;
+    const min =
+      Number(await sliderInput.getAttribute("min").catch(() => null)) || 0;
+    const max =
+      Number(await sliderInput.getAttribute("max").catch(() => null)) || 999;
     const clamped = Math.min(max, Math.max(min, seconds));
     if (clamped !== seconds) {
       console.warn(
@@ -696,13 +969,16 @@ async function selectDurationIfNeeded(page: Page, duration: string): Promise<voi
   }
 
   const currentLabel = await chip.innerText().catch(() => "");
-  if (currentLabel.trim().toLowerCase().startsWith(duration.toLowerCase())) return;
+  if (currentLabel.trim().toLowerCase().startsWith(duration.toLowerCase()))
+    return;
 
   await chip.click({ timeout: 10_000 });
   await page.waitForTimeout(500);
 
   const option = videoLengthOptionLocator(page, duration).first();
-  const optionExists = await option.isVisible({ timeout: 3000 }).catch(() => false);
+  const optionExists = await option
+    .isVisible({ timeout: 3000 })
+    .catch(() => false);
   if (!optionExists) {
     console.warn(
       `[pollo] selectDurationIfNeeded: model hiện tại không có option độ dài "${duration}" — bỏ qua, dùng độ dài mặc định.`,
@@ -719,6 +995,67 @@ async function selectDurationIfNeeded(page: Page, duration: string): Promise<voi
     console.warn(
       `[pollo] selectDurationIfNeeded: đã bấm option "${duration}" nhưng chip vẫn hiện "${newLabel.trim()}" — có thể không áp dụng được, tiếp tục generate.`,
     );
+  }
+}
+
+/**
+ * Trích Aspect Ratio ("9:16" hoặc "16:9") từ nội dung prompt storyboard —
+ * theo yêu cầu người dùng. Không thấy giá trị nào thì mặc định "16:9".
+ */
+function extractAspectRatioFromPrompt(prompt: string): "9:16" | "16:9" {
+  if (/\b9:16\b/.test(prompt)) return "9:16";
+  if (/\b16:9\b/.test(prompt)) return "16:9";
+  return "16:9";
+}
+
+/**
+ * Chọn Aspect Ratio (vd "16:9"/"9:16") — dùng lại ĐÚNG cấu trúc dual-path như
+ * selectDurationIfNeeded ở trên: chip tổng hợp (chatFooterFieldsChipLocator,
+ * hiện text gộp vd "Auto/5s/480p/1" — xác nhận qua DOM thật mode "Reference
+ * to Video" + model MiniMax H3, KHÁC HẲN paramsChipLocator không khớp gì
+ * trong mode/model này) nếu tồn tại thì đọc giá trị hiện tại từ đó để biết có
+ * cần đổi không (BỎ QUA nếu đã đúng, theo yêu cầu người dùng) và bấm mở popup
+ * chứa các option; mode không có chip tổng hợp (section hiện trực tiếp trong
+ * composer, giống case slider của Video Length) thì bỏ qua bước đọc giá trị
+ * hiện tại, tìm option trực tiếp trên trang. Model/mode không có option
+ * Aspect Ratio yêu cầu thì BEST-EFFORT bỏ qua (log cảnh báo, không throw —
+ * giống selectDurationIfNeeded, tỉ lệ sai không đáng chặn cả pipeline).
+ */
+async function selectAspectRatioIfNeeded(
+  page: Page,
+  aspectRatio: string,
+): Promise<void> {
+  const chip = chatFooterFieldsChipLocator(page).first();
+  const chipExists = await chip.isVisible({ timeout: 2000 }).catch(() => false);
+
+  if (chipExists) {
+    const currentLabel = await chip.innerText().catch(() => "");
+    if (currentLabel.includes(aspectRatio)) return;
+
+    await chip.click({ timeout: 10_000 });
+    await page.waitForTimeout(500);
+  }
+
+  const option = aspectRatioOptionLocator(page, aspectRatio).first();
+  const optionExists = await option.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!optionExists) {
+    console.warn(
+      `[pollo] selectAspectRatioIfNeeded: model/mode hiện tại không có option Aspect Ratio "${aspectRatio}" — bỏ qua, dùng tỉ lệ mặc định.`,
+    );
+    if (chipExists) await page.keyboard.press("Escape").catch(() => {});
+    return;
+  }
+
+  await option.click({ timeout: 5_000 }).catch(() => {});
+  await page.waitForTimeout(300);
+
+  if (chipExists) {
+    const newLabel = await chip.innerText().catch(() => "");
+    if (!newLabel.includes(aspectRatio)) {
+      console.warn(
+        `[pollo] selectAspectRatioIfNeeded: đã bấm option "${aspectRatio}" nhưng chip vẫn hiện "${newLabel.trim()}" — có thể không áp dụng được, tiếp tục generate.`,
+      );
+    }
   }
 }
 
@@ -775,7 +1112,9 @@ async function switchModeIfNeeded(page: Page, modeName: string): Promise<void> {
   if (currentLabel.trim().toLowerCase() === modeName.toLowerCase()) return;
 
   await chip.click({ timeout: 10_000 });
-  await modeMenuOptionLocator(page, modeName).first().click({ timeout: 10_000 });
+  await modeMenuOptionLocator(page, modeName)
+    .first()
+    .click({ timeout: 10_000 });
 }
 
 /**
@@ -893,7 +1232,7 @@ export async function deleteStaleUploadedAssets(page: Page): Promise<void> {
  * thường, KHÔNG throw.
  */
 const ASSET_CACHE_PATH = path.resolve("./storage/pollo-asset-cache.json");
-const ASSET_CACHE_TTL_MS = 55 * 60 * 1000;
+const ASSET_CACHE_TTL_MS = 2 * 86_400_000;
 /** Xoá hẳn entry khỏi file cache sau ngần này — theo yêu cầu người dùng, tránh file phình to vô hạn (mỗi file ảnh tham chiếu MỚI của MỌI storyboard đều thêm 1 entry, KHÔNG entry nào tự mất nếu không có bước dọn này). */
 const ASSET_CACHE_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
 
@@ -947,17 +1286,119 @@ function rememberUploadedAsset(imagePath: string, assetUrl: string): void {
   }
 }
 
+/**
+ * Mutex TOÀN CỤC (KHÔNG reentrant — TUYỆT ĐỐI không gọi lồng nhau) khoá pha
+ * "upload ảnh tham chiếu + chọn nó" (submitAssetUpload) VÀ, riêng với video
+ * mode "Reference to Video", CẢ bước "@ mention" tiếp theo
+ * (insertMentionForFile) — dùng chung giữa pollo.ts (video) VÀ polloImage.ts
+ * (ảnh CHARACTER/LOCATION), vì processPolloVideoQueue/processPolloImageQueue
+ * chạy SONG SONG trên CÙNG 1 tài khoản pollo.ai (2 context riêng, xem
+ * polloBrowser.ts).
+ *
+ * XÁC NHẬN QUA LỖI THẬT (job test_normal_7_rep_SHOT_01_CLIP_01_VIDEO,
+ * 2026-09-07): insertMentionForFile hết 4 lần retry vẫn không tìm thấy ảnh
+ * vừa upload trong picker "@ mention". Đúng như chú thích tại nơi gọi
+ * insertMentionForFile đã ghi từ trước: picker "@ mention" CHỈ hiện ĐÚNG VÀI
+ * upload GẦN NHẤT CỦA CẢ TÀI KHOẢN (không riêng job này) — job Pollo khác
+ * (vd hàng đợi ảnh) upload dồn dập trong lúc job này đang giữ khoảng hở giữa
+ * "upload xong" và "click mention" đủ để đẩy hẳn ảnh của job này ra khỏi
+ * danh sách đang hiển thị. submitAssetUpload cũng tự nó không an toàn khi
+ * chạy đồng thời: hàm này nhận diện "card vừa upload" bằng cách so
+ * data-asset-url của card ĐẦU TIÊN trước/sau — nếu 1 job khác upload xen vào
+ * đúng lúc đó, card đầu tiên đổi vì URL CỦA JOB KHÁC, khiến job này chọn NHẦM
+ * ảnh của người khác làm ảnh tham chiếu (còn nguy hiểm hơn cả việc mention
+ * thất bại, vì âm thầm sai kết quả thay vì báo lỗi).
+ *
+ * Tăng số lần retry không giải quyết được gốc rễ — ảnh có thể ĐÃ THỰC SỰ
+ * biến mất khỏi cửa sổ hiển thị đó, chờ/thử lại bao lâu cũng vô ích. Khoá hẳn
+ * pha upload+chọn (và mention, với video) giữa 2 hàng đợi đảm bảo tại một
+ * thời điểm chỉ 1 job đang thao tác lên thư viện asset dùng chung, loại bỏ
+ * hoàn toàn nguồn gây race thay vì giảm xác suất. Phần còn lại của generate
+ * (gõ prompt, chờ render, tải video/ảnh — chiếm phần lớn thời gian) vẫn chạy
+ * song song bình thường giữa 2 hàng đợi, chỉ pha upload+chọn (thường vài
+ * giây/ảnh) bị nối tiếp.
+ */
+let polloAssetUploadLockTail: Promise<void> = Promise.resolve();
+
+export function withPolloAssetUploadLock<T>(fn: () => Promise<T>): Promise<T> {
+  const settled = polloAssetUploadLockTail.then(fn, fn);
+  polloAssetUploadLockTail = settled.then(
+    () => undefined,
+    () => undefined,
+  );
+  return settled;
+}
+
+/**
+ * confirmSelect (mặc định true) — có bấm nút "Select" để xác nhận NGAY sau
+ * khi check card hay không.
+ *
+ * SỬA (xác nhận qua test thật — script one-off, không lưu lại): "Select
+ * (N/9)" KHÔNG tự động chèn "@ mention" nào vào prompt cả — nó CHỈ xác nhận
+ * ảnh vào thư viện asset (URL/state), hoàn toàn TÁCH BIỆT với việc mention
+ * (mention luôn phải qua picker "@" riêng, xem insertMentionForFile). Test
+ * trực tiếp: upload+check 3 ảnh (KHÔNG bấm Select), rồi bấm Select ĐÚNG 1
+ * LẦN duy nhất — không có navigation nào xảy ra, URL không đổi (khác hẳn
+ * nghi vấn "Select N>1 gây navigation-reset" trước đó). Nghi vấn navigation
+ * thật ra đến từ việc bấm "Select" NHIỀU LẦN LIÊN TIẾP (mỗi ảnh reference
+ * gọi 1 lần) — không phải từ số lượng đang check. Vì vậy: generateVideo()
+ * giờ gọi confirmSelect=false cho từng ảnh trong loop, rồi gọi
+ * confirmAssetPickerSelection() ĐÚNG 1 LẦN sau khi cả N ảnh đã upload+check
+ * xong, trước khi chạy loop "@ mention" riêng.
+ */
+/**
+ * Click 1 card trong dialog Upload Media, có retry ngắn — xác nhận qua lỗi
+ * thật (job test_camera_10_SHOT_06_CLIP_01_VIDEO, 2026-09-09):
+ * actionability check của Playwright báo ĐỦ "visible, enabled, stable...
+ * done scrolling" rồi vẫn TREO tiếp tới hết timeout 10s ngay lúc thực sự
+ * dispatch click — noWaitAfter (đã có ở cả 2 nơi gọi) không giúp được gì ở
+ * đây vì nó chỉ bỏ qua bước chờ SAU click, không phải lúc click. Nghi do
+ * renderer tạm không phản hồi kịp input đúng thời điểm đó (thư viện Uploads
+ * của tài khoản đã rất lớn — hàng chục card cùng render trong dialog, xem
+ * docstring submitAssetUpload) — không phải lỗi sai selector (log thật cho
+ * thấy locator vẫn resolve/visible/stable đúng), nên thử lại ngắn (không mở
+ * lại dialog/nộp lại file, chỉ click lại) là hợp lý trước khi coi là lỗi
+ * thật.
+ */
+async function clickAssetPickerCard(card: Locator): Promise<void> {
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await card.click({ timeout: 30_000, noWaitAfter: true });
+      // Xác nhận qua log lỗi thật (SHOT_02_CLIP_01_VIDEO, 2026-09-10): click
+      // không báo lỗi gì nhưng nút Select vẫn "disabled" SUỐT 60s sau đó —
+      // nghi card ĐÃ ở trạng thái data-selected="true" từ trước (vd đã chọn
+      // từ 1 ảnh trước đó trong cùng job), nên click lần này TOGGLE OFF (bỏ
+      // chọn) thay vì chọn — đúng hành vi "click = toggle" đã xác nhận trước
+      // đây (lý do phải bỏ code "deselect card cũ" cũ vì nó xoá luôn
+      // mention). Verify lại attribute thật sau khi click (đợi ngắn tránh
+      // đọc trúng lúc DOM chưa kịp cập nhật) — nếu chưa "true", coi là lỗi
+      // để retry ở lượt sau: lượt click TIẾP THEO sẽ tự đảo lại về true nếu
+      // đúng là bị toggle off (tự sửa, không cần logic riêng).
+      await sleep(300);
+      const selected =
+        (await card.getAttribute("data-selected").catch(() => null)) === "true";
+      if (selected) return;
+      lastError = new Error(
+        'Click card không làm data-selected="true" (có thể bị toggle off do card đã chọn từ trước) — thử lại.',
+      );
+    } catch (err) {
+      lastError = err;
+    }
+    if (attempt < maxAttempts) await sleep(2000);
+  }
+  throw lastError;
+}
+
 export async function submitAssetUpload(
   page: Page,
   imagePath: string,
   reopenDialog: () => Promise<void>,
+  confirmSelect = true,
 ): Promise<string> {
   const cards = assetPickerCardLocator(page);
   const fileInput = uploadDialogFileInputLocator(page);
-
-  // await deleteStaleUploadedAssets(page).catch((err) => {
-  //   console.warn("[pollo] deleteStaleUploadedAssets lỗi (bỏ qua, không chặn upload):", err);
-  // });
 
   // Đã upload file NÀY trước đó (còn hạn cache) — thử CHỌN LẠI đúng card cũ
   // thay vì setInputFiles lại từ đầu. Vẫn xác minh card còn thật trong picker
@@ -965,19 +1406,58 @@ export async function submitAssetUpload(
   const cachedUrl = getCachedAssetUrl(imagePath);
   if (cachedUrl) {
     const existingCard = assetPickerCardByUrlLocator(page, cachedUrl).first();
-    const stillThere = await existingCard
+    let stillThere = await existingCard
       .waitFor({ state: "visible", timeout: 3000 })
       .then(() => true)
       .catch(() => false);
+
+    // Chưa thấy ngay — thử cuộn xuống lưới Uploads (theo yêu cầu người
+    // dùng): card cũ có thể chỉ đang nằm dưới khung nhìn ban đầu (thư viện
+    // càng nhiều ảnh, card cũ càng bị đẩy xuống), không phải đã biến mất
+    // thật. Cuộn dần từng đợt, kiểm tra lại ngay sau mỗi lần — tối đa 5 lần
+    // trước khi coi là thực sự không còn (rơi xuống upload lại bên dưới).
+    const grid = assetPickerGridLocator(page).first();
+    for (
+      let scrollAttempt = 1;
+      scrollAttempt <= 5 && !stillThere;
+      scrollAttempt++
+    ) {
+      await grid
+        .evaluate((el) => el.scrollBy(0, el.clientHeight))
+        .catch(() => {});
+      await page.waitForTimeout(5000);
+      stillThere = await existingCard
+        .waitFor({ state: "visible", timeout: 2000 })
+        .then(() => true)
+        .catch(() => false);
+      if (stillThere) break;
+    }
+
     if (stillThere) {
-      await existingCard.click({ timeout: 10_000 });
-      await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
+      // noWaitAfter — xác nhận qua log lỗi thật (SHOT_02_CLIP_01_VIDEO,
+      // 2026-09-09): "click action done" xong rồi TREO tiếp ở bước Playwright
+      // tự chờ "waiting for scheduled navigations to finish" tới hết
+      // timeout, dù click đã ăn thật — cùng loại "navigation thật do
+      // pollo.ai kích hoạt sau click" đã xác nhận trước đây với nút Select
+      // (xem comment dài ở vòng lặp mention trong generateVideo). Bỏ qua
+      // hẳn bước chờ đó — không cần Playwright tự xác nhận navigation, các
+      // bước sau (composer/hydration check) đã tự phát hiện nếu trang thật
+      // sự bị điều hướng/hỏng. clickAssetPickerCard tự retry ngắn nếu chính
+      // lúc dispatch click bị treo (xem docstring hàm đó).
+      await clickAssetPickerCard(existingCard);
+      if (confirmSelect) {
+        await confirmAssetPickerSelection(page);
+        await verifyUploadDialogClosedOrWarn(page, "upload ảnh (dùng lại cache)");
+      }
       return cachedUrl;
     }
     // Không còn thấy nữa — rơi xuống upload lại bình thường bên dưới.
   }
 
-  const firstCardUrlBefore = await cards.first().getAttribute("data-asset-url").catch(() => null);
+  const firstCardUrlBefore = await cards
+    .first()
+    .getAttribute("data-asset-url")
+    .catch(() => null);
 
   await fileInput.setInputFiles(imagePath, { timeout: 10_000 });
 
@@ -989,20 +1469,55 @@ export async function submitAssetUpload(
   // vẫn đang xử lý bình thường phía server. Phát hiện dialog đóng giữa
   // chừng thì MỞ LẠI (không nộp lại file) để đọc trạng thái mới nhất, thay
   // vì cứ chờ 1 selector không bao giờ khớp lại được nữa.
-  const deadlineMs = Date.now() + 45_000;
-  let reopenedOnce = false;
-  let resubmittedOnce = false;
+  // Nới từ 1 lần mở lại + 1 lần nộp lại lên 3 lần mỗi loại (theo yêu cầu
+  // người dùng, sau 1 lần upload thất bại thật dù composer vẫn hydrate bình
+  // thường — không phải bug marketing-shell, nghi mạng/server pollo.ai chập
+  // chờn thoáng qua lúc nhận file). Mở lại dialog TỐI ĐA maxReopenAttempts
+  // lần trước khi thử nộp lại file; sau mỗi lần nộp lại, cho phép mở lại
+  // dialog thêm 1 đợt nữa (reset reopenAttempts) — tổng cộng tối đa
+  // maxResubmitAttempts lần nộp lại file. Deadline nới theo (180s thay vì
+  // 60s) để đủ thời gian cho nhiều đợt thử.
+  const deadlineMs = Date.now() + 180_000;
+  const maxReopenAttempts = 3;
+  const maxResubmitAttempts = 3;
+  let reopenAttempts = 0;
+  let resubmitAttempts = 0;
   while (Date.now() < deadlineMs) {
-    const currentUrl = await cards.first().getAttribute("data-asset-url").catch(() => null);
+    const currentUrl = await cards
+      .first()
+      .getAttribute("data-asset-url")
+      .catch(() => null);
     if (currentUrl && currentUrl !== firstCardUrlBefore) {
       // Có data-asset-url MỚI không có nghĩa là đã xử lý xong HẲN — chờ
-      // thêm cho tới khi KHÔNG CÒN spinner "Uploading" nào trong dialog mới
-      // coi là xong, tránh chuyển sang upload ảnh kế tiếp trong khi ảnh này
-      // (hoặc 1 placeholder khác) vẫn đang xử lý dở.
-      const stillUploading = (await uploadingSpinnerLocator(page).count().catch(() => 0)) > 0;
+      // thêm cho tới khi KHÔNG CÒN spinner "Uploading" trên ĐÚNG card này
+      // mới coi là xong.
+      //
+      // SỬA (theo yêu cầu người dùng — check lại chỗ này sau khi gặp lỗi
+      // thật "Upload timeout" LẶP LẠI 100% trên NHIỀU ảnh khác nhau, mỗi lần
+      // retry đều ra assetUrl MỚI nhưng vẫn fail y hệt — job new_ep01_SHOT_01/
+      // 02_CLIP_01_VIDEO, thư viện Uploads đã có 47+ card): uploadingSpinnerLocator(page)
+      // quét TOÀN TRANG, không phân biệt card nào — CÙNG loại bug đã sửa cho
+      // spinner sau Select (xem attachedReferenceImageSpinnerLocator). Nếu
+      // BẤT KỲ card CŨ nào khác trong thư viện (không liên quan ảnh đang
+      // upload) có spinner kẹt vĩnh viễn, stillUploading LUÔN true mãi mãi —
+      // vòng lặp không bao giờ tiến tới click+Select cho card MỚI dù nó đã
+      // xử lý xong thật, cứ lặp tới hết 180s rồi rơi vào "Upload timeout" dù
+      // ảnh mới hoàn toàn ổn. Scope lại đúng vào card MỚI (cards.first()),
+      // không quét cả trang.
+      const stillUploading =
+        (await cards
+          .first()
+          .locator("span.i-cus--pol-loading")
+          .count()
+          .catch(() => 0)) > 0;
       if (!stillUploading) {
-        await cards.first().click({ timeout: 10_000 });
-        await uploadDialogSelectButtonLocator(page).click({ timeout: 10_000 });
+        // noWaitAfter — cùng lý do đã sửa ở nhánh cachedUrl phía trên (xem
+        // comment ở đó). clickAssetPickerCard tự retry ngắn (xem docstring).
+        await clickAssetPickerCard(cards.first());
+        if (confirmSelect) {
+          await confirmAssetPickerSelection(page);
+          await verifyUploadDialogClosedOrWarn(page, "upload ảnh (upload mới)");
+        }
         rememberUploadedAsset(imagePath, currentUrl);
         return currentUrl;
       }
@@ -1010,14 +1525,42 @@ export async function submitAssetUpload(
 
     const dialogClosed = (await cards.count().catch(() => 0)) === 0;
     if (dialogClosed) {
-      if (!reopenedOnce) {
-        reopenedOnce = true;
+      // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_01_CLIP_01_VIDEO,
+      // 2026-09-09): snapshot lỗi lúc hết 45s cho thấy trang đã rơi hẳn về
+      // bản marketing/SEO tĩnh chưa hydrate (h2 "Maintain Perfect Subject
+      // Consistency Across Frames" RENDER THẬT, không chỉ nằm trong i18n
+      // dict — trong khi prompt-editor/prompt-generate-btn/upload-card-
+      // asset-picker đều 0) — CÙNG bug đã gặp ở waitForGenerateButtonEnabled/
+      // ref-check, KHÔNG phải "upload chậm thật". dialogClosed=true trước
+      // giờ coi mọi trường hợp là "dialog tự đóng" rồi cứ mở lại/nộp lại vô
+      // ích tới hết 45s, ném ra thông báo "Upload timeout" sai lệch hướng
+      // chẩn đoán. Check thêm tín hiệu composer hydrate (giống
+      // waitForGenerateButtonEnabled) — nếu mất hẳn, throw rõ ràng NGAY,
+      // không phí thời gian retry vô vọng.
+      const composerHydrated =
+        (await page
+          .locator('[data-testid="prompt-editor"] [contenteditable="true"]')
+          .first()
+          .count()
+          .catch(() => 0)) > 0;
+      if (!composerHydrated) {
+        throw new GenerationError(
+          "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload ảnh (mất hết composer/dialog Upload) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi upload chậm.",
+        );
+      }
+      if (reopenAttempts < maxReopenAttempts) {
+        reopenAttempts++;
         await reopenDialog().catch(() => {});
-      } else if (!resubmittedOnce) {
-        // Mở lại 1 lần mà dialog vẫn đóng/không thấy ảnh mới — thử nộp lại
-        // file đúng 1 lần (dialog đã mở lại từ bước trên) trước khi chịu thua.
-        resubmittedOnce = true;
-        await fileInput.setInputFiles(imagePath, { timeout: 10_000 }).catch(() => {});
+      } else if (resubmitAttempts < maxResubmitAttempts) {
+        // Mở lại tối đa maxReopenAttempts lần mà dialog vẫn đóng/không thấy
+        // ảnh mới — thử nộp lại file (dialog đã mở lại từ bước trên). Reset
+        // reopenAttempts để đợt tiếp theo (nếu vẫn đóng) được mở lại dialog
+        // thêm 1 đợt nữa trước khi chịu thua hẳn.
+        resubmitAttempts++;
+        reopenAttempts = 0;
+        await fileInput
+          .setInputFiles(imagePath, { timeout: 10_000 })
+          .catch(() => {});
       }
     }
 
@@ -1025,19 +1568,80 @@ export async function submitAssetUpload(
   }
 
   throw new GenerationError(
-    "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 45s (đã thử mở lại dialog).",
+    "Upload timeout: không thấy ảnh mới xuất hiện trong picker Uploads sau 180s (đã thử mở lại dialog/nộp lại file nhiều lần).",
   );
 }
 
-/** Cùng cơ chế "phải click thumbnail để chọn trước khi Select enable" đã xác nhận qua lỗi thật — xem docstring uploadReferenceImage trong polloImage.ts. */
+/**
+ * Bấm nút "Select" để xác nhận HẾT các card đang được check trong dialog
+ * Upload Media, đóng dialog lại — gọi ĐÚNG 1 LẦN sau khi đã upload+check
+ * xong TOÀN BỘ ảnh tham chiếu cần dùng (xem confirmSelect trong
+ * submitAssetUpload), KHÔNG gọi lặp lại nhiều lần liên tiếp (nghi vấn chính
+ * gây ra navigation-reset composer trước đây — xem docstring
+ * submitAssetUpload). timeout dài (60s, không phải mặc định) vì đây có thể
+ * là 1 thao tác xử lý nhiều ảnh cùng lúc phía server, cần thêm thời gian so
+ * với 1 click thường.
+ */
+export async function confirmAssetPickerSelection(page: Page): Promise<void> {
+  // noWaitAfter — cùng lý do đã sửa ở submitAssetUpload (click chọn card):
+  // nút Select cũng đã từng thấy "waiting for scheduled navigations to
+  // finish" bị timeout trong log thật ("Select (2/9)") dù click đã ăn.
+  // Caller (generateVideo) đã tự chờ thêm 10s + tự check composer-reset sau
+  // khi gọi hàm này (xem vòng lặp mention), nên bỏ qua an toàn.
+  await uploadDialogSelectButtonLocator(page).click({
+    timeout: 60_000,
+    noWaitAfter: true,
+  });
+}
+
+/**
+ * Xác minh dialog Upload Media ĐÃ THỰC SỰ ĐÓNG sau khi bấm Select — KHÔNG
+ * chỉ tin confirmAssetPickerSelection() không throw là xong (hàm đó dùng
+ * noWaitAfter nên click có thể không ăn thật mà vẫn không throw gì, xem
+ * docstring). Dialog chỉ tự đóng khi Select ăn thật, nên dialog còn mở sau
+ * khi chờ là dấu hiệu rõ ràng Select CHƯA ăn.
+ *
+ * `context` là nhãn phân biệt dialog đang mở ở ĐÂU — theo yêu cầu người
+ * dùng, dialog chọn ảnh tham chiếu này được mở ở 2 CHỖ KHÁC NHAU trong
+ * generateVideo: (1) lúc upload ảnh tham chiếu lần đầu (uploadReferenceVideoImage
+ * → submitAssetUpload), (2) lúc "select lại" sau khi mention thất bại/spinner
+ * kẹt quá lâu (xem vòng lặp chờ spinner). Log kèm context để biết NGAY dialog
+ * nào đang bị kẹt khi đọc log thật, không phải đoán.
+ */
+async function verifyUploadDialogClosedOrWarn(
+  page: Page,
+  context: string,
+): Promise<boolean> {
+  const closed = await uploadDialogFileInputLocator(page)
+    .waitFor({ state: "detached", timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!closed) {
+    console.warn(
+      `[pollo] [${context}] Dialog Upload Media vẫn còn mở sau khi bấm Select — Select có thể chưa ăn thật.`,
+    );
+  }
+  return closed;
+}
+
+/**
+ * Cùng cơ chế "phải click thumbnail để chọn trước khi Select enable" đã xác
+ * nhận qua lỗi thật — xem docstring uploadReferenceImage trong polloImage.ts.
+ * Bọc trong withPolloAssetUploadLock (xem docstring hàm đó) — submitAssetUpload
+ * tự nó không an toàn khi 1 job Pollo khác (hàng đợi ảnh) upload xen vào cùng
+ * lúc.
+ */
 async function uploadFrameImage(
   page: Page,
   label: "Start" | "End",
   imagePath: string,
 ): Promise<void> {
-  const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonByLabel(page, label).first());
+  const openDialog = () =>
+    ensureUploadDialogOpen(page, uploadCardButtonByLabel(page, label).first());
   await openDialog();
-  await submitAssetUpload(page, imagePath, openDialog);
+  await withPolloAssetUploadLock(() =>
+    submitAssetUpload(page, imagePath, openDialog),
+  );
 }
 
 /**
@@ -1048,10 +1652,15 @@ async function uploadFrameImage(
  * insertMentionForFile: tên hiển thị có thể bị pollo.ai tự gắn nhãn SAI theo
  * "Character Library" của họ, không phải luôn theo tên file đã upload).
  */
-async function uploadReferenceVideoImage(page: Page, imagePath: string): Promise<string> {
-  const openDialog = () => ensureUploadDialogOpen(page, uploadCardButtonForImage(page).first());
+async function uploadReferenceVideoImage(
+  page: Page,
+  imagePath: string,
+  confirmSelect = true,
+): Promise<string> {
+  const openDialog = () =>
+    ensureUploadDialogOpen(page, uploadCardButtonForImage(page).first());
   await openDialog();
-  return submitAssetUpload(page, imagePath, openDialog);
+  return submitAssetUpload(page, imagePath, openDialog, confirmSelect);
 }
 
 /**
@@ -1088,13 +1697,58 @@ async function uploadReferenceVideoImage(page: Page, imagePath: string): Promise
  * item ĐÃ tìm thấy (found=true), chỉ là click bị trượt do DOM đang động. Bọc
  * try/catch quanh click() để lỗi click cũng rơi vào đúng cơ chế retry đó thay
  * vì bỏ cuộc ngay từ lần thử đầu tiên.
+ *
+ * SỬA (quan sát trực tiếp qua VNC — người dùng xác nhận): item vừa upload
+ * hiện ĐÚNG trong picker "@ mention" (khớp URL, waitFor "visible" pass) NHƯNG
+ * VẪN đang hiện spinner "Uploading" của RIÊNG hệ thống mention (khác spinner
+ * của dialog Upload Media đã chờ xong trong submitAssetUpload — 2 hệ thống
+ * xử lý/index độc lập nhau, item CÓ THỂ visible trong picker mention trong
+ * khi ảnh vẫn còn đang được server xử lý xong cho MỤC ĐÍCH mention) — click
+ * vào item lúc còn spinner không thật sự chọn được (bị bỏ qua phía UI), rồi
+ * hết cả maxAttempts vẫn fail y hệt "không chọn được ảnh". Chờ THÊM spinner
+ * (cùng class span.i-cus--pol-loading với uploadingSpinnerLocator, SCOPE
+ * riêng trong item này) biến mất hẳn trước khi click, không chỉ dựa vào
+ * "visible" của chính item.
+ *
+ * SỬA (xác nhận qua DOM thật, job SHOT_05_CLIP_01_VIDEO): dù đã chờ spinner
+ * ở trên, cần xác nhận THẬT mention đã chèn vào editor thay vì chỉ tin
+ * click() không throw — pollo.ai chèn mention thành 1
+ * `<span data-media-chip data-src="<assetUrl>">` NGAY TRONG nội dung editor
+ * (xác nhận qua script dump DOM thật, KHÔNG lưu lại trong repo). LƯU Ý: đã
+ * THỬ sai 1 lần — nhầm dùng attachedReferenceImageLocator (số ảnh gắn qua
+ * dialog "Upload Media", tăng lúc UPLOAD chứ không phải lúc MENTION, luôn
+ * đứng yên khi mention) làm bằng chứng, khiến job fail OAN dù mention đã
+ * chèn đúng (script dump chứng minh chip có mặt trong editor ngay cả khi
+ * "attachedReferenceImageLocator" không đổi) — ĐÚNG bằng chứng phải là chip
+ * này, không phải khối thumbnail phía trên composer.
  */
-async function insertMentionForFile(page: Page, assetUrl: string): Promise<void> {
+async function insertMentionForFile(
+  page: Page,
+  assetUrl: string,
+): Promise<void> {
   const item = mentionPickerItemByUrlLocator(page, assetUrl).first();
+  const itemSpinner = item.locator("span.i-cus--pol-loading");
+  const mediaChip = page.locator(`[data-media-chip][data-src="${assetUrl}"]`);
   const maxAttempts = 4;
   let lastError: unknown;
 
+  // Log chẩn đoán (xem docstring dưới) xác nhận: dialog Upload Media KHÔNG
+  // hề mở khi hàm này bắt đầu, nhưng đã mở lại NGAY SAU lần gõ " @" ĐẦU TIÊN
+  // — tức chính page.keyboard.type(" @") là thủ phạm, không phải chỗ nào
+  // khác. Nguyên nhân: đóng dialog Upload Media (dù qua Select thành công hay
+  // Escape) trả FOCUS về lại đúng nút "+" (uploadCardButtonForImage) đã mở
+  // nó ra — hành vi a11y chuẩn của dialog/modal (focus quay về phần tử đã
+  // trigger). Ký tự ĐẦU TIÊN gõ ra (dấu cách) rơi đúng vào nút "+" đang giữ
+  // focus đó thay vì vào editor — phím Space kích hoạt lại nút <button>,
+  // mở lại CHÍNH dialog vừa đóng, thay vì gõ được vào ô prompt. Mọi lần thử
+  // lại sau đó lặp lại y hệt vì Escape+Backspace không hề re-focus editor.
+  // SỬA: chủ động focus lại editor (focusEditorWithRetry, đã dùng ổn định ở
+  // generateVideo) NGAY TRƯỚC MỖI lần gõ " @" — không tin focus còn đúng chỗ
+  // sau bất kỳ bước nào trước đó (Select, Escape, Backspace).
+  const editor = promptEditorLocator(page).first();
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await focusEditorWithRetry(page, editor);
     await page.keyboard.type(" @", { delay: 50 });
     await page.waitForTimeout(500);
 
@@ -1109,10 +1763,37 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
       .then(() => true)
       .catch(() => false);
 
+    if (!found) {
+      const uploadDialogOpenNow =
+        (await uploadDialogFileInputLocator(page).count().catch(() => 0)) > 0;
+      if (uploadDialogOpenNow) {
+        console.warn(
+          `[pollo] [insertMentionForFile] Lần thử ${attempt}/${maxAttempts}: dialog Upload Media đang mở, có thể đang che picker "@ mention" (assetUrl: ${assetUrl}).`,
+        );
+      }
+    }
+
     if (found) {
+      // Best-effort: KHÔNG throw nếu spinner không có/không biến mất kịp —
+      // vẫn thử click như cũ sau khi chờ, giữ nguyên hành vi cho trường hợp
+      // item đã sẵn sàng thật (không có spinner nào để chờ).
+      await itemSpinner
+        .first()
+        .waitFor({ state: "detached", timeout: 8_000 })
+        .catch(() => {});
       try {
         await item.click({ timeout: 5_000 });
-        return;
+        // Xác nhận THẬT bằng chip trong editor — poll ngắn thay vì tin
+        // click() không throw là xong (xem docstring hàm).
+        const attached = await mediaChip
+          .first()
+          .waitFor({ state: "attached", timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false);
+        if (attached) return;
+        lastError = new Error(
+          "click() không throw nhưng không thấy media-chip tương ứng trong editor — mention có thể chưa thật sự được chèn.",
+        );
       } catch (err) {
         lastError = err;
       }
@@ -1126,7 +1807,10 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
     await page.waitForTimeout(3000);
   }
 
-  const detail = lastError instanceof Error ? ` (lần cuối lỗi click: ${lastError.message})` : "";
+  const detail =
+    lastError instanceof Error
+      ? ` (lần cuối lỗi click: ${lastError.message})`
+      : "";
   throw new GenerationError(
     `Không chọn được ảnh vừa upload (${assetUrl}) trong picker "@ mention" sau ${maxAttempts} lần thử${detail} (ảnh có thể chưa kịp index xong, hoặc danh sách liên tục bị re-render do job khác đang upload cùng lúc).`,
   );
@@ -1159,7 +1843,10 @@ async function insertMentionForFile(page: Page, assetUrl: string): Promise<void>
  * khi hydrate xong — đây mới là tín hiệu đáng tin, và cũng chính là phần tử
  * mà mọi nơi gọi promptEditorLocator() thực sự cần dùng ngay sau đó.
  */
-export async function waitForComposerReady(page: Page, timeoutMs: number): Promise<boolean> {
+export async function waitForComposerReady(
+  page: Page,
+  timeoutMs: number,
+): Promise<boolean> {
   return await page
     .locator('[data-testid="prompt-editor"] [contenteditable="true"]')
     .first()
@@ -1170,40 +1857,69 @@ export async function waitForComposerReady(page: Page, timeoutMs: number): Promi
 
 /**
  * Gọi SAU KHI đã goto() xong — chờ composer sẵn sàng (xem
- * waitForComposerReady), RELOAD TỐI ĐA maxReloads lần nếu chưa thấy, rồi
- * throw GenerationError rõ ràng nếu vẫn không được. An toàn để reload ở ĐÂY
- * (khác hẳn lúc đang chờ kết quả generate — xem findRecentVideoViaCreatePage):
- * thời điểm này CHƯA bấm Generate, chưa có gì đang chạy dở để mất.
+ * waitForComposerReady), throw GenerationError rõ ràng nếu vẫn không được
+ * sau timeoutMs.
  *
- * maxReloads=2 (không phải 1) — xác nhận qua lỗi thật (job test-gen-d5cf5eb1):
- * gốc rễ là PROXY chập chờn (xem docstring waitForComposerReady), mức lỗi có
- * thể dao động rất mạnh theo từng thời điểm (có lúc 60+ request tĩnh cùng lỗi
- * tunnel, có lúc load sạch hoàn toàn ngay lần đầu) — 1 lần reload không phải
- * lúc nào cũng đủ để "trúng" đúng lúc proxy ổn định trở lại, thêm 1 lần nữa
- * tăng cơ hội mà chi phí thời gian không đáng kể so với việc bỏ cuộc cả job.
+ * SỬA (2026-09-10, bỏ hẳn reload — trước đây RELOAD TỐI ĐA 2 lần khi chưa
+ * thấy composer): reload từng hợp lý với giả thuyết gốc là JS chunk LỖI HẲN
+ * (proxy chập chờn, request đã fail thì chờ thêm vô ích, phải load lại mới
+ * có request mới) — nhưng xác nhận qua debug THẬT (job
+ * test_camera_2_SHOT_01_CLIP_01_VIDEO, 2026-09-10): sau khi throw vì "chưa
+ * render" (đã hết 60s + 2 lần reload 20s), snapshot lỗi chụp NGAY SAU ĐÓ lại
+ * cho thấy composer đã hydrate xong hoàn chỉnh — nghĩa là request KHÔNG hề
+ * lỗi hẳn, chỉ CHẬM (CPU tranh chấp giữa nhiều browser), và bản thân
+ * reload() còn phản tác dụng: huỷ bỏ tiến trình tải/hydrate đang dở, bắt đầu
+ * lại từ đầu, tốn thêm network/CPU thay vì chỉ cần đợi thêm. Đổi sang chờ
+ * THẲNG, không reload — tin vào tín hiệu thật (giống triết lý đã áp dụng
+ * cho sendMessage/ChatAI).
  */
 export async function ensureComposerReadyOrThrow(
   page: Page,
   url: string,
   featureLabel: string,
-  maxReloads = 2,
+  timeoutMs = 180_000,
 ): Promise<void> {
-  let composerReady = await waitForComposerReady(page, 15_000);
-  for (let reloadAttempt = 1; !composerReady && reloadAttempt <= maxReloads; reloadAttempt++) {
-    console.warn(
-      `[pollo] Composer chưa render sau khi vào ${url} (proxy có thể đang chập chờn) — thử reload lại (lần ${reloadAttempt}/${maxReloads}).`,
-    );
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 0 }).catch(() => {});
-    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
-    await page.waitForTimeout(2000);
-    await dismissBlockingOverlays(page);
-    composerReady = await waitForComposerReady(page, 20_000);
-  }
+  const composerReady = await waitForComposerReady(page, timeoutMs);
   if (!composerReady) {
     throw new GenerationError(
-      `pollo.ai không hiển thị giao diện ${featureLabel} (${url}) — trang chưa hydrate xong dù đã reload lại ${maxReloads} lần. Có thể proxy đang chập chờn nặng hoặc site đổi cấu trúc trang.`,
+      `pollo.ai không hiển thị giao diện ${featureLabel} (${url}) — trang chưa hydrate xong sau ${timeoutMs}ms. Có thể proxy/CPU đang chập chờn nặng hoặc site đổi cấu trúc trang.`,
     );
   }
+}
+
+/**
+ * editor.focus() có retry ngắn — xác nhận qua lỗi thật (job
+ * test_camera_1_CHAR_MOCKING_EUNUCH, 2026-09-10): locator đã resolve đúng
+ * (element contenteditable thật, visible) nhưng focus() vẫn TREO tới hết
+ * 30000ms — dù ensureComposerReadyOrThrow (waitForComposerReady) đã xác nhận
+ * composer sẵn sàng ngay trước đó. Cùng LỚP lỗi với clickAssetPickerCard
+ * (action đơn giản, element hợp lệ, vẫn treo hết timeout ở đúng lúc dispatch)
+ * — nghi renderer tạm không phản hồi kịp (site đổi giao diện: banner khuyến
+ * mãi/modal có thể xuất hiện SAU thời điểm ensureComposerReadyOrThrow, xem
+ * dismissBlockingOverlays), không phải sai selector. gọi lại
+ * dismissBlockingOverlays trước mỗi lần thử lại — cùng lý do đã áp dụng cho
+ * mọi thao tác khác trên trang (rẻ, best-effort, không lỗi nếu không có gì
+ * để đóng).
+ */
+export async function focusEditorWithRetry(
+  page: Page,
+  editor: Locator,
+): Promise<void> {
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await editor.focus({ timeout: 60_000 });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        await dismissBlockingOverlays(page).catch(() => {});
+        await sleep(2000);
+      }
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -1222,7 +1938,10 @@ export async function ensureComposerReadyOrThrow(
  *   cạnh nút Generate, đổi theo model/setting đang chọn — PHẢI đọc SAU khi
  *   đã chọn xong model/duration/mention, ngay trước lúc bấm Generate).
  */
-export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void> {
+export async function enableUnlimitedIfNotEnoughCredit(
+  page: Page,
+  jobId: string,
+): Promise<void> {
   const switchLocator = page
     .locator('div[data-button-name="is_unlimited"] [role="switch"]')
     .first();
@@ -1230,7 +1949,8 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void
   if (!switchExists) return;
 
   const alreadyOn =
-    (await switchLocator.getAttribute("aria-checked").catch(() => null)) === "true";
+    (await switchLocator.getAttribute("aria-checked").catch(() => null)) ===
+    "true";
   if (alreadyOn) return;
 
   const creditText = await page
@@ -1239,28 +1959,76 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void
     .first()
     .innerText()
     .catch(() => "");
-  const feeText = await page
-    .locator('[data-slot="credit-cost-value"] .font-semibold')
-    .first()
-    .innerText()
-    .catch(() => "");
   const credit = Number.parseInt(creditText, 10);
-  const fee = Number.parseInt(feeText, 10);
-
-  if (!Number.isFinite(credit) || !Number.isFinite(fee)) {
+  if (!Number.isFinite(credit)) {
     console.warn(
-      `[pollo] Không đọc được credit/phí lượt tạo (credit="${creditText}", phí="${feeText}") — bỏ qua bật Unlimited.`,
+      `[pollo] Không đọc được credit hiện tại (credit="${creditText}") — bỏ qua bật Unlimited.`,
     );
     return;
   }
-  if (credit >= fee) return;
+
+  // credit === 0 → LUÔN bật Unlimited, không cần biết phí lượt tạo là bao
+  // nhiêu (0 chắc chắn không đủ trả bất kỳ phí dương nào) — theo yêu cầu
+  // người dùng. Trước đây chỉ dựa vào so sánh credit/fee: nếu không đọc được
+  // fee (vd site đổi cấu trúc, phần tử chưa kịp render) thì bail ra LUÔN dù
+  // credit=0 rõ ràng không đủ, khiến generate chạy tiếp với credit thật và
+  // fail sau đó vì hết credit thay vì tự bật Unlimited.
+  let fee: number | null = null;
+  if (credit !== 0) {
+    const feeText = await page
+      .locator('[data-slot="credit-cost-value"] .font-semibold')
+      .first()
+      .innerText()
+      .catch(() => "");
+    fee = Number.parseInt(feeText, 10);
+    if (!Number.isFinite(fee)) {
+      console.warn(
+        `[pollo] Không đọc được phí lượt tạo (credit=${credit}, phí="${feeText}") — bỏ qua bật Unlimited.`,
+      );
+      return;
+    }
+    if (credit >= fee) return;
+  }
 
   console.warn(
-    `[pollo] Credit hiện tại (${credit}) không đủ trả phí lượt tạo (${fee}) — tự bật "Unlimited".`,
+    `[pollo] Credit hiện tại (${credit})${fee !== null ? ` không đủ trả phí lượt tạo (${fee})` : ""} — tự bật "Unlimited".`,
   );
-  await switchLocator.click({ timeout: 5000 }).catch((err) => {
-    console.warn("[pollo] Bật switch Unlimited lỗi (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường):", err);
-  });
+  // Banner cookie-consent (#cc-main) có thể vẫn còn che switch tại thời điểm
+  // này (nó chỉ bị dismiss 1 lần lúc mới vào trang) và chặn click thật —
+  // xác nhận qua log thật ("<div class=\"cm-wrapper cc--anim\">… intercepts
+  // pointer events"), khiến switch KHÔNG bật được, generate dùng hết credit
+  // thật và job sau đó fail hẳn vì "không đủ credit" thay vì chỉ bỏ qua như
+  // comment best-effort ở dưới kỳ vọng.
+  //
+  // SỬA (xác nhận qua lỗi thật SAU KHI đã thêm dismiss+thử lại 1 lần cố định
+  // — vẫn còn timeout lặp lại, lúc đó đang thử nghiệm gộp ảnh+video về 1
+  // BrowserContext dùng chung, xem polloBrowser.ts — đã REVERT lại 2 context
+  // riêng vì nghi chính là nguồn gây race này, nhưng giữ lại retry mạnh hơn
+  // ở đây vì tự nó vẫn đúng/an toàn hơn bất kể nguyên nhân gốc là gì): thử
+  // đúng 1 lần lại là chưa đủ, và click() không throw KHÔNG chắc đã thật sự
+  // bật (UI có thể re-render đúng lúc click vì lý do khác — proxy chập
+  // chờn, banner khác bật lại...). Lặp lại tối đa maxAttempts lần, LUÔN đọc
+  // lại aria-checked thật sau mỗi lần click để xác nhận thay vì tin click()
+  // không throw là đã xong.
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await dismissBlockingOverlays(page);
+    await switchLocator.click({ timeout: 5000 }).catch(() => {});
+    const nowOn =
+      (await switchLocator.getAttribute("aria-checked").catch(() => null)) ===
+      "true";
+    if (nowOn) return;
+    if (attempt < maxAttempts) await page.waitForTimeout(1000);
+  }
+  console.warn(
+    "[pollo] Bật switch Unlimited lỗi sau nhiều lần thử (bỏ qua, generate vẫn tiếp tục dùng credit như bình thường).",
+  );
+  await captureSnapshot(
+    page,
+    jobId + "_unlimited-switch-failed",
+    "unlimited-switch-failed",
+    { fullPage: true, includeHtml: true },
+  );
 }
 
 /**
@@ -1284,7 +2052,10 @@ export async function enableUnlimitedIfNotEnoughCredit(page: Page): Promise<void
  * dùng lại đúng trang composer (dù hiện tại luôn gọi hàm này SAU CÙNG, ngay
  * trước khi đóng page).
  */
-export async function captureResultId(page: Page, card: Locator): Promise<string | null> {
+export async function captureResultId(
+  page: Page,
+  card: Locator,
+): Promise<string | null> {
   const item = resultItemLocator(card).first();
   const urlBefore = page.url();
   const clicked = await item
@@ -1292,7 +2063,9 @@ export async function captureResultId(page: Page, card: Locator): Promise<string
     .then(() => true)
     .catch(() => false);
   if (!clicked) {
-    console.warn("[pollo] Không bấm được vào thumbnail kết quả để lấy id (bỏ qua).");
+    console.warn(
+      "[pollo] Không bấm được vào thumbnail kết quả để lấy id (bỏ qua).",
+    );
     return null;
   }
 
@@ -1300,10 +2073,14 @@ export async function captureResultId(page: Page, card: Locator): Promise<string
   const match = page.url().match(/\/v\/([a-z0-9]+)/i);
 
   if (page.url() !== urlBefore) {
-    await page.goBack({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {});
+    await page
+      .goBack({ waitUntil: "domcontentloaded", timeout: 15_000 })
+      .catch(() => {});
   }
   if (!match) {
-    console.warn(`[pollo] Không đọc được id kết quả từ URL sau khi click (URL: ${page.url()}).`);
+    console.warn(
+      `[pollo] Không đọc được id kết quả từ URL sau khi click (URL: ${page.url()}).`,
+    );
     return null;
   }
   return match[1];
@@ -1311,10 +2088,23 @@ export async function captureResultId(page: Page, card: Locator): Promise<string
 
 interface ResultBaseline {
   count: number;
+  /** src của <video class="vjs-tech"> (nếu có) NGAY TRƯỚC lúc bấm Generate — dùng để so sánh trong waitForNewResult (mode "Reference to Video", xem docstring ở đó), KHÔNG dựa vào timestamp nhúng trong URL (không phải video result nào cũng có, xem extractAssetTimestampMs). */
+  videoSrc: string | null;
+  /** Số lượng [data-slot="task-card-generating"] NGAY TRƯỚC lúc bấm Generate — dùng để phân biệt "job NÀY vừa bắt đầu generate" với "có job KHÁC (vd hàng đợi ảnh, context riêng nhưng cùng tài khoản) đang generate sẵn từ trước", xem clickGenerateButton. */
+  generatingCount: number;
 }
 
 async function captureResultBaseline(page: Page): Promise<ResultBaseline> {
-  return { count: await resultCardLocator(page).count() };
+  return {
+    count: await resultCardLocator(page).count(),
+    videoSrc: await resultVideoLocator(page)
+      .first()
+      .getAttribute("src")
+      .catch(() => null),
+    generatingCount: await page
+      .locator('[data-slot="task-card-generating"]')
+      .count(),
+  };
 }
 
 /** URL asset pollo.ai luôn có dạng ".../<13 số epoch ms>-<uuid>.<ext>" — dùng để xếp thời gian tạo, xem findRecentVideoViaCreatePage. */
@@ -1346,7 +2136,9 @@ async function findRecentVideoViaCreatePage(
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
-    await checkPage.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+    await checkPage
+      .waitForLoadState("networkidle", { timeout: 20_000 })
+      .catch(() => {});
     await checkPage.waitForTimeout(1500);
     await dismissBlockingOverlays(checkPage);
 
@@ -1354,7 +2146,10 @@ async function findRecentVideoViaCreatePage(
     const count = await videos.count();
     let best: { src: string; ts: number } | null = null;
     for (let i = 0; i < count; i++) {
-      const src = await videos.nth(i).getAttribute("src").catch(() => null);
+      const src = await videos
+        .nth(i)
+        .getAttribute("src")
+        .catch(() => null);
       if (!src) continue;
       const ts = extractAssetTimestampMs(src);
       if (ts === null || ts < sinceMs - 60_000) continue;
@@ -1401,7 +2196,10 @@ async function waitForNewResult(
 ): Promise<VideoResult> {
   const cards = resultCardLocator(page);
   const start = Date.now();
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer trong lúc queue khác
+  // đang tranh CPU, cùng lý do đã áp dụng cho waitForGenerationApiStatus
+  // (đường API chính) ở trên trong file này.
+  const pollIntervalMs = 10_000;
   const createCheckEveryMs = 45_000;
   let lastCreateCheckAt = 0;
   let sawGeneratingCard = false;
@@ -1411,13 +2209,16 @@ async function waitForNewResult(
     if (count > baseline.count) {
       const newCard = cards.last();
       const stillGenerating =
-        (await newCard.locator('[data-slot="task-card-generating"]').count()) > 0;
+        (await newCard.locator('[data-slot="task-card-generating"]').count()) >
+        0;
       if (stillGenerating) {
         sawGeneratingCard = true;
       } else {
         const videoCount = await resultVideoLocator(newCard).count();
         if (videoCount > 0) {
-          const src = await resultVideoLocator(newCard).first().getAttribute("src");
+          const src = await resultVideoLocator(newCard)
+            .first()
+            .getAttribute("src");
           if (src) return { src, card: newCard };
         }
         // Cùng cơ chế card kết quả với polloImage.ts (xem docstring
@@ -1451,19 +2252,25 @@ async function waitForNewResult(
     // BAO GIỜ kích hoạt được ở mode này, và job vẫn treo tới hết timeoutMs dù
     // đã xong từ lâu. /create fallback (bên dưới) cũng không cứu được lần
     // này (có thể do "Reference to Video" thuộc project riêng, không lên
-    // feed /create chung). Kiểm tra thẳng resultVideoLocator(page) mỗi vòng
-    // lặp — chỉ nhận nếu timestamp nhúng trong URL (extractAssetTimestampMs)
-    // MỚI HƠN lúc bấm Generate, tránh nhận nhầm video CŨ còn sót lại từ job
-    // trước trong cùng phiên chat.
+    // feed /create chung).
+    //
+    // SỬA (xác nhận qua lỗi thật LẶP LẠI — job you_can't_take_him_SHOT_02_CLIP_01_VIDEO):
+    // check timestamp (extractAssetTimestampMs, yêu cầu URL dạng ".../<13 số
+    // epoch ms>-<uuid>.<ext>") KHÔNG áp dụng được cho URL video RESULT — debug
+    // snapshot cho thấy video đã xong THẬT (poster/controls/HD badge đầy đủ)
+    // với src dạng ".../ori/<id không phải số>-0-<hash>.mp4" (KHÔNG có 13 số
+    // epoch nào), khiến extractAssetTimestampMs luôn trả null, nhánh này
+    // không bao giờ kích hoạt được cho mode video — bot treo tới hết
+    // timeoutMs dù video đã hiện ngay trên page từ lâu. So sánh trực tiếp với
+    // src TRƯỚC lúc bấm Generate (baseline.videoSrc, xem captureResultBaseline)
+    // thay vì đoán qua timestamp — đáng tin cậy hơn vì không phụ thuộc format
+    // URL cụ thể.
     const pageVideoSrc = await resultVideoLocator(page)
       .first()
       .getAttribute("src")
       .catch(() => null);
-    if (pageVideoSrc) {
-      const ts = extractAssetTimestampMs(pageVideoSrc);
-      if (ts !== null && ts >= generateClickedAtMs - 60_000) {
-        return { src: pageVideoSrc, card: null };
-      }
+    if (pageVideoSrc && pageVideoSrc !== baseline.videoSrc) {
+      return { src: pageVideoSrc, card: null };
     }
 
     // Xác nhận qua lỗi thật (xem docstring creditPaywallLocator trong
@@ -1482,9 +2289,10 @@ async function waitForNewResult(
 
     if (Date.now() - lastCreateCheckAt >= createCheckEveryMs) {
       lastCreateCheckAt = Date.now();
-      const foundSrc = await findRecentVideoViaCreatePage(page, generateClickedAtMs).catch(
-        () => null,
-      );
+      const foundSrc = await findRecentVideoViaCreatePage(
+        page,
+        generateClickedAtMs,
+      ).catch(() => null);
       if (foundSrc) return { src: foundSrc, card: null };
     }
 
@@ -1505,7 +2313,11 @@ async function waitForNewResult(
  * (storyboardPipeline.ts sau này) tự đổi tên theo id giống generateVideosForFile
  * của AIVideo.
  */
-async function downloadResultVideo(page: Page, src: string, jobId: string): Promise<string> {
+async function downloadResultVideo(
+  page: Page,
+  src: string,
+  jobId: string,
+): Promise<string> {
   await fs.promises.mkdir(config.downloadDir, { recursive: true });
 
   const response = await fetchWithRetry(page, src);
@@ -1521,11 +2333,67 @@ export interface PolloGenerateVideoResult {
   polloResultId: string | null;
 }
 
+/**
+ * Xác nhận qua log lỗi thật (SHOT_03_CLIP_01_VIDEO/SHOT_04_CLIP_01_VIDEO,
+ * 2026-09-09): Chrome renderer của tab đôi khi CRASH THẬT giữa chừng
+ * ("Target crashed" — nghi do OOM dưới Xvfb khi nhiều context ảnh/video chạy
+ * song song, xem launch.ts) — page đã crash không dùng lại được nữa (mọi
+ * thao tác tiếp theo đều throw "Target crashed"), không phải lỗi
+ * selector/timeout thường nên KHÔNG cách nào tự phục hồi được trên CHÍNH page
+ * đó. Cùng cơ chế đã có sẵn ở aiVideo.ts/chatAIImage.ts (isPageCrashError) —
+ * pollo.ts trước đây THIẾU hẳn lớp retry này, khiến crash giữa chừng làm rớt
+ * cả job dù phần lớn chỉ là sự cố thoáng qua. Tự mở tab MỚI (gọi lại
+ * attemptGenerateVideo từ đầu — hàm đó tự tạo page riêng) thử lại 1 lần
+ * trước khi chịu thua.
+ */
 export async function generateVideo(
   prompt: string,
-  { startFramePath, endFramePath, referenceImagePaths = [], model, duration }: PolloGenerateVideoOptions,
+  options: PolloGenerateVideoOptions,
   jobId: string,
 ): Promise<PolloGenerateVideoResult> {
+  const maxCrashRetries = 1;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await attemptGenerateVideo(prompt, options, jobId);
+    } catch (err) {
+      if (isPageCrashError(err) && attempt < maxCrashRetries) {
+        console.warn(
+          `[pollo] Chrome renderer crash ("Target crashed") — mở tab mới thử lại (lần ${attempt + 1}/${maxCrashRetries}):`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// Xác nhận qua debug DOM thật (SHOT_05_CLIP_01_VIDEO, project
+// the_king_closed_the_city, 2026-09-15, xem comment ở ensureUploadDialogOpen):
+// mode "Reference to Video" của pollo.ai chỉ nhận tối đa 9 ảnh tham chiếu
+// trong một composer — vượt quá số này, nút "+" thêm ảnh (wrapper
+// "group/image-upload") bị gỡ khỏi DOM hoàn toàn, không còn cách nào mở dialog
+// upload để thêm ảnh thứ 10. Chặn ngay từ đầu (trước khi mở browser) để báo
+// lỗi rõ ràng, tránh tốn thời gian upload xong 9 ảnh rồi mới treo 120s trên
+// ảnh thứ 10.
+const MAX_REFERENCE_IMAGES = 9;
+
+async function attemptGenerateVideo(
+  prompt: string,
+  {
+    startFramePath,
+    endFramePath,
+    referenceImagePaths = [],
+    model,
+    duration,
+  }: PolloGenerateVideoOptions,
+  jobId: string,
+): Promise<PolloGenerateVideoResult> {
+  if (referenceImagePaths.length > MAX_REFERENCE_IMAGES) {
+    throw new GenerationError(
+      `Quá nhiều ảnh tham chiếu (${referenceImagePaths.length}/${MAX_REFERENCE_IMAGES}) — pollo.ai chỉ cho tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu trong mode "Reference to Video". Giảm số ref cho video này rồi thử lại.`,
+    );
+  }
   const context = await getPolloBrowserContext();
   const page = await context.newPage();
   try {
@@ -1536,15 +2404,21 @@ export async function generateVideo(
     if (!startFramePath && referenceImagePaths.length > 0) {
       deepLink = buildDeepLinkUrl("Reference to Video", model);
     }
-    const url = deepLink?.url ?? new URL("/video", config.polloBaseUrl).toString();
+    const url =
+      deepLink?.url ?? new URL("/video", config.polloBaseUrl).toString();
     // timeout: 0 = tắt hẳn giới hạn thời gian — xác nhận qua lỗi thật (job
     // microdrama_co_dau_phan_boi_twist_prompt_SHOT_05_CLIP_01_VIDEO): mạng
     // VPS/site pollo.ai chậm thoáng qua khiến goto vượt quá 60s dù không có
     // gì sai, làm rớt cả job dù chỉ là chậm tạm thời. Cùng lý do đã áp dụng
     // cho fetchWithRetry (tải file lớn qua mạng chậm không nên bị huỷ giữa
     // chừng chỉ vì quá 1 mốc thời gian cố định).
-    await gotoPolloWithRetry(page, url, { waitUntil: "domcontentloaded", timeout: 0 });
-    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
+    await gotoPolloWithRetry(page, url, {
+      waitUntil: "domcontentloaded",
+      timeout: 0,
+    });
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
     await page.waitForTimeout(2000);
     await dismissBlockingOverlays(page);
 
@@ -1579,45 +2453,409 @@ export async function generateVideo(
       await selectDurationIfNeeded(page, duration);
     }
 
+    const aspectRatio = extractAspectRatioFromPrompt(prompt);
+    await dismissBlockingOverlays(page);
+    await selectAspectRatioIfNeeded(page, aspectRatio);
+
+    // Cổng debug tạm — xem chú thích POLLO_DEBUG_STOP_BEFORE_GENERATE bên
+    // dưới, đây là bản chụp SỚM (ngay sau lần chọn Aspect Ratio đầu tiên,
+    // trước khi gõ prompt/upload ref) để so sánh cấu trúc DOM composer lúc
+    // còn "sạch" (chưa qua bước nào có thể làm page rơi về bản marketing).
+    if (process.env.POLLO_DEBUG_STOP_EARLY === "1") {
+      await captureSnapshot(page, `${jobId}_stop-early`, "debug-stop-early", {
+        includeHtml: true,
+      });
+      throw new GenerationError(
+        `[debug] Dừng sớm theo POLLO_DEBUG_STOP_EARLY=1 (không phải lỗi thật) — xem storage/debug/${jobId}_stop-early.{png,html}.`,
+      );
+    }
+
+    // Bật "Unlimited" (nếu cần) TRƯỚC KHI gõ prompt/mention ảnh — xác nhận
+    // qua báo cáo thật (2026-09-08): "nhập prompt xong rồi đến khi click
+    // unlimited thì lại clear hết prompt". Switch này cũng là 1 control thật
+    // (không phải nút tĩnh) — khi tài khoản hết credit, bấm nó rất có thể
+    // kích hoạt cùng loại "client-side navigation reset" đã xác nhận với nút
+    // Select (xem comment dài ở vòng lặp mention bên dưới), chỉ khác là trước
+    // đây gọi hàm này SAU CÙNG (ngay trước lúc bấm Generate) nên mất trắng cả
+    // prompt lẫn toàn bộ mention vừa chèn. Chuyển lên gọi NGAY ĐẦU, trước khi
+    // có bất kỳ nội dung gì trong composer, để nếu nó có reset trang thì
+    // không mất gì cả — không cần thêm cơ chế phát hiện/khôi phục.
+    await enableUnlimitedIfNotEnoughCredit(page, jobId);
+
     const editor = promptEditorLocator(page).first();
-    await editor.focus();
+    await focusEditorWithRetry(page, editor);
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
 
     // Reference to Video BẮT BUỘC "@ mention" từng ảnh vào prompt thì model
     // mới thực sự dùng ảnh đó — xem chú thích đầu file/insertMentionForFile.
     // Upload rồi mention NGAY từng ảnh 1 (KHÔNG upload hết cả loạt rồi mới
-    // mention hết cả loạt như trước) — xác nhận qua lỗi thật (job
-    // cay_khe_rm_end_SHOT_01_CLIP_02_VIDEO): ảnh CHAR_OLDER_BROTHER upload
-    // thành công nhưng biến mất khỏi picker "@ mention" trước khi kịp tới
-    // lượt mention nó. Picker chỉ hiện ĐÚNG vài upload GẦN NHẤT của CẢ tài
-    // khoản (không phải riêng job này — job Pollo khác, vd hàng đợi ảnh, chạy
-    // song song trên CÙNG tài khoản cũng tính), nên khoảng hở giữa lúc upload
-    // xong và lúc mention càng dài càng dễ bị đẩy khỏi danh sách. Mention
-    // ngay sau khi upload xong để giảm tối đa khoảng hở đó.
+    // mention hết cả loạt) — xác nhận LẠI qua test thật (2026-09-08): batch
+    // (upload hết N ảnh → Select 1 lần → mention hết N ảnh) từng được thử vì
+    // nghi ngờ Select gọi nhiều lần gây navigation-reset, nhưng lại lộ ra vấn
+    // đề KHÁC nặng hơn — cùng 1 assetUrl cache từ 1 ảnh đã upload TỪ TRƯỚC
+    // vẫn fail mention y hệt: picker "@ mention" có cửa sổ "gần đây" RẤT
+    // HẸP (hẹp hơn hẳn danh sách chung trong dialog Upload Media, nơi ảnh đó
+    // vẫn còn thấy được để re-select từ cache) — chỉ cần xen thêm 2 upload
+    // khác (2 ảnh còn lại trong CHÍNH batch này) ở giữa là ảnh đầu đã bị đẩy
+    // khỏi cửa sổ đó. Nới thời gian chờ index cũng không cứu được. Kết luận:
+    // khoảng hở giữa lúc 1 ảnh upload xong và lúc mention nó phải NGẮN NHẤT
+    // có thể — quay lại xen kẽ từng ảnh, chấp nhận rủi ro Select gọi lại
+    // nhiều lần (đã có sẵn timeout 60s cho từng lần, xem confirmAssetPickerSelection),
+    // nhưng THÊM kiểm tra composer có bị navigation-reset sau mỗi lần Select
+    // hay không (so sánh độ dài prompt trước/sau — reset thật sẽ làm prompt
+    // rớt về rỗng) để throw rõ ràng ngay, thay vì tiếp tục generate với
+    // composer đã hỏng.
     if (!startFramePath && referenceImagePaths.length > 0) {
-      for (const refPath of referenceImagePaths) {
-        // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc mới
-        // vào trang — xác nhận qua lỗi thật (job microdrama_co_dau_phan_boi_
-        // twist_prompt_SHOT_01_CLIP_01_VIDEO): 1 popup coco-modal-wrap MỚI
-        // xuất hiện SAU đó (lúc đã chọn model/gõ prompt xong), chặn click nút
-        // "Upload Media" mà không có gì dismiss lại. Gọi lại NGAY TRƯỚC mỗi
-        // lần upload — rẻ, best-effort, không lỗi nếu không có gì để đóng.
+      const promptTextBeforeRefs = await editor.innerText().catch(() => "");
+
+      const uploadAndMentionReferenceImage = async (
+        refPath: string,
+      ): Promise<void> => {
+        // dismissBlockingOverlays ở đầu hàm (dòng ~687) chỉ chạy 1 LẦN lúc
+        // mới vào trang — xác nhận qua lỗi thật (job
+        // microdrama_co_dau_phan_boi_twist_prompt_SHOT_01_CLIP_01_VIDEO): 1
+        // popup coco-modal-wrap MỚI xuất hiện SAU đó (lúc đã chọn model/gõ
+        // prompt xong), chặn click nút "Upload Media" mà không có gì dismiss
+        // lại. Gọi lại NGAY TRƯỚC mỗi lần upload — rẻ, best-effort, không
+        // lỗi nếu không có gì để đóng.
         await dismissBlockingOverlays(page);
         const assetUrl = await uploadReferenceVideoImage(page, refPath);
-        await editor.focus();
+
+        // SỬA (xác nhận qua test thật — người dùng quan sát trực tiếp):
+        // click "Select" xong không có nghĩa là navigation (nếu có) đã
+        // hoàn tất hẳn — chờ thêm 10s NGAY SAU Select trước khi kiểm tra
+        // composer/mention giúp loại bỏ hẳn hiện tượng "composer bị clear"
+        // (không còn tái hiện được sau khi thêm chờ này, trong khi không
+        // chờ thì tái hiện được). Chấp nhận tốn thêm 10s/ảnh — rẻ hơn hẳn
+        // so với generate hỏng vì thiếu tham chiếu.
+        await page.waitForTimeout(10_000);
+
+        // Xác nhận composer chưa bị navigation-reset SAU KHI Select (bên
+        // trong uploadReferenceVideoImage) — kiểm tra NGAY trước khi mention,
+        // tránh mention vào 1 editor đã rỗng/sai (throw sẽ mơ hồ hơn hẳn ở
+        // đây so với để lọt xuống insertMentionForFile).
+        //
+        // SỬA (xác nhận qua lỗi thật — job firemetwice_SHOT_01/02/06: throw
+        // liên tiếp dù composer HOÀN TOÀN BÌNH THƯỜNG): check cũ coi BẤT KỲ
+        // giảm nào (dù chỉ 7-11 ký tự) là reset — quá nhạy. Debug snapshot
+        // xác nhận composer vẫn còn nguyên prompt + media-chip thật (Select
+        // tự chèn mention như side-effect, xem ensureUploadDialogOpen) —
+        // chênh lệch nhỏ chỉ là nhiễu bình thường từ việc chèn chip (khác
+        // hẳn navigation-reset THẬT, vốn luôn làm rớt về GẦN RỖNG theo lịch
+        // sử đã ghi nhận). Chỉ coi là reset khi giảm ĐÁNG KỂ (còn chưa tới
+        // nửa độ dài ban đầu), tránh false positive với nhiễu nhỏ.
+        const promptTextAfterSelect = await editor.innerText().catch(() => "");
+        if (
+          promptTextBeforeRefs.length > 0 &&
+          promptTextAfterSelect.length < promptTextBeforeRefs.length * 0.5
+        ) {
+          throw new GenerationError(
+            `Composer có dấu hiệu bị reset (navigation thật của pollo.ai) ngay sau khi Select ảnh "${refPath}" — prompt trước ${promptTextBeforeRefs.length} ký tự, sau chỉ còn ${promptTextAfterSelect.length} ký tự.`,
+          );
+        }
+
+        await focusEditorWithRetry(page, editor);
+
+        // SỬA (xác nhận qua debug snapshot THẬT — job SHOT_38_CLIP_01_VIDEO,
+        // THE_NORTHERN_DUKE'S_BLADE_first_10, 2026-09-11): 5 job liên tiếp
+        // fail 100% ở insertMentionForFile ("Không chọn được ảnh... sau 4
+        // lần thử") ngay SAU KHI Select đã confirm xong. Lúc đầu nghi Select
+        // tự chèn mention khiến ảnh "biến mất" khỏi picker "@" — SAI: ảnh
+        // chụp lúc lỗi cho thấy khay thumbnail composer VẪN còn spinner
+        // "i-cus--pol-loading" (đang xử lý dở) trên ĐÚNG ảnh vừa Select,
+        // đồng thời picker "@" hiện "No assets yet" — ảnh CHƯA index xong
+        // để trở thành mentionable, không phải đã "dùng rồi". submitAssetUpload
+        // chỉ chờ hết spinner "Uploading" BÊN TRONG dialog Upload Media
+        // (giai đoạn 1: nhận file) — có 1 giai đoạn xử lý SAU đó (giai đoạn
+        // 2: index cho "@ mention", lộ ra bằng CÙNG class spinner nhưng trên
+        // khay thumbnail của composer, sau khi dialog đã đóng) mà code cũ
+        // chưa chờ. Chờ thêm tới khi HẾT spinner này (page-scope, cùng
+        // uploadingSpinnerLocator) trước khi mention — không suy đoán mù,
+        // bounded timeout để không treo vô hạn nếu spinner kẹt vì lý do
+        // khác.
+        //
+        // SỬA (xác nhận qua lỗi thật: chờ tới khi hết uploadingSpinnerLocator
+        // — quét TOÀN TRANG — treo tới 1500s/25 phút KHÔNG hết, job
+        // SHOT_19_CLIP_01_VIDEO, PROP_WHEELCHAIR.png): "chờ tới khi thực sự
+        // xong" đúng hướng, nhưng quét CẢ TRANG là sai phạm vi — bắt nhầm
+        // spinner của 1 ảnh KHÁC (job khác cùng tài khoản, hoặc ảnh trước đó
+        // kẹt xử lý vĩnh viễn phía server) thay vì ĐÚNG ảnh vừa Select. Scope
+        // lại theo assetUrl (attachedReferenceImageSpinnerLocator) — chỉ chờ
+        // spinner của CHÍNH ảnh này. Giữ thêm 1 ceiling hợp lý (10 phút) làm
+        // lưới an toàn cuối: khác "1 con số đoán mù cho MỌI ảnh" (đã sai 2
+        // lần, 60s rồi 180s) — ceiling này chỉ chặn trường hợp ảnh THẬT SỰ
+        // kẹt vĩnh viễn (bug/lỗi phía pollo.ai), throw rõ ràng thay vì treo
+        // job mãi vô ích.
+        // Chờ hết spinner "đang xử lý" trên khay thumbnail composer TRƯỚC
+        // khi mention — xác nhận qua lỗi thật (job put_the_ring_on_her_SHOT_01_CLIP_01_VIDEO):
+        // thiếu bước chờ này thì bấm Generate/mention ngay khi ảnh còn xử
+        // lý dở, nút Generate bị pollo.ai tự khoá (aria-disabled="true"),
+        // KHÔNG PHẢI vì "tài khoản tồn đọng generation khác" như
+        // waitForGenerateButtonEnabled từng giả định. Ceiling 10 phút/ảnh
+        // làm lưới an toàn: ảnh có thể bị pollo.ai giữ ở hàng chờ kiểm
+        // duyệt nội dung KHÔNG BAO GIỜ tự xong (xem job A_MILLION_BOTTLES_SCREAM_
+        // SHOT_01_CLIP_02_VIDEO, CHAR_MAXENCE_DE_VILLANDRY.png) — throw rõ
+        // ràng sau 10 phút thay vì treo vô hạn.
+        const spinner = attachedReferenceImageSpinnerLocator(page, assetUrl);
+        const uploadIndexDeadlineMs = Date.now() + 5 * 60_000;
+        let waitedMs = 0;
+        while ((await spinner.count().catch(() => 0)) > 0) {
+          if (Date.now() >= uploadIndexDeadlineMs) {
+            // Theo yêu cầu người dùng: TRƯỚC KHI chịu thua hẳn, thử SELECT
+            // LẠI ảnh (mở lại dialog Upload, bấm lại card + Select) rồi kiểm
+            // tra lại spinner — nghi ngờ spinner đôi khi chỉ là trạng thái UI
+            // CŨ không tự refresh (server đã xử lý xong thật từ lâu), thao
+            // tác select lại buộc composer tải lại đúng trạng thái asset mới
+            // nhất thay vì hiển thị cache cũ. clickAssetPickerCard tự xử lý
+            // đúng hành vi "click = toggle" (xem docstring hàm đó) nên gọi
+            // lại an toàn dù card đang ở trạng thái nào.
+            console.warn(
+              `[pollo] Ảnh "${refPath}" vẫn còn spinner sau ${Math.round(waitedMs / 1000)}s — thử select lại trước khi chịu thua.`,
+            );
+            const reopenDialog = () =>
+              ensureUploadDialogOpen(
+                page,
+                uploadCardButtonForImage(page).first(),
+              );
+            await reopenDialog().catch(() => {});
+            const card = assetPickerCardByUrlLocator(page, assetUrl).first();
+            let cardStillThere = await card
+              .waitFor({ state: "visible", timeout: 5_000 })
+              .then(() => true)
+              .catch(() => false);
+
+            // Chưa thấy ngay — thử cuộn xuống lưới Uploads (giống nhánh
+            // cachedUrl trong submitAssetUpload): card có thể chỉ đang nằm
+            // dưới khung nhìn ban đầu do thư viện đã có thêm nhiều ảnh mới kể
+            // từ lúc upload ảnh này, không phải đã biến mất thật. Cuộn dần,
+            // kiểm tra lại sau mỗi lần — tối đa 5 lần.
+            if (!cardStillThere) {
+              const grid = assetPickerGridLocator(page).first();
+              for (
+                let scrollAttempt = 1;
+                scrollAttempt <= 5 && !cardStillThere;
+                scrollAttempt++
+              ) {
+                await grid
+                  .evaluate((el) => el.scrollBy(0, el.clientHeight))
+                  .catch(() => {});
+                await page.waitForTimeout(5000);
+                cardStillThere = await card
+                  .waitFor({ state: "visible", timeout: 2_000 })
+                  .then(() => true)
+                  .catch(() => false);
+                if (cardStillThere) break;
+              }
+            }
+
+            if (cardStillThere) {
+              // Xác nhận qua debug snapshot THẬT (job
+              // HER_NAME_CAME_OFF_THE_DOOR_SHOT_01_CLIP_01_VIDEO,
+              // THE_WOMAN_WHO_KEPT_THE_SKY_MOVING_SHOT_05_CLIP_01_VIDEO,
+              // 2026-09-15/16): clickAssetPickerCard/confirmAssetPickerSelection
+              // trước đây bọc .catch(() => {}) NUỐT LUÔN lỗi nếu click thất
+              // bại — snapshot lúc lỗi mention cho thấy card vẫn "chưa chọn"
+              // hoặc dialog vẫn mở với nút "Select (1/9)" chưa từng được bấm
+              // thành công, mà code không hề biết vì lỗi bị nuốt âm thầm.
+              // SỬA: thử lại tối đa 3 lần (click card + confirm), xác minh
+              // dialog ĐÃ ĐÓNG sau mỗi lần trước khi coi là thành công — chỉ
+              // khi dialog thật sự đóng mới rõ ràng Select đã ăn (dialog
+              // Uploads chỉ tự đóng khi bấm "Select" thành công). Chỉ bấm
+              // Escape ép đóng ở lần thử CUỐI nếu vẫn thất bại (chấp nhận có
+              // thể mention sẽ vẫn fail sau đó, nhưng ít nhất không tiếp tục
+              // giữ composer bị dialog che khuất).
+              const dialogContext = `select lại lúc mention thất bại — ảnh "${refPath}"`;
+              const maxConfirmAttempts = 3;
+              let dialogClosed = false;
+              for (
+                let confirmAttempt = 1;
+                confirmAttempt <= maxConfirmAttempts;
+                confirmAttempt++
+              ) {
+                const clickErr = await clickAssetPickerCard(card)
+                  .then(() => null)
+                  .catch((err) => err);
+                const confirmErr = await confirmAssetPickerSelection(page)
+                  .then(() => null)
+                  .catch((err) => err);
+                if (clickErr || confirmErr) {
+                  console.warn(
+                    `[pollo] [${dialogContext}] Lỗi khi click card/Select (lần ${confirmAttempt}/${maxConfirmAttempts}):`,
+                    clickErr ?? confirmErr,
+                  );
+                }
+                dialogClosed = await verifyUploadDialogClosedOrWarn(
+                  page,
+                  `${dialogContext}, lần ${confirmAttempt}/${maxConfirmAttempts}`,
+                );
+                if (dialogClosed) break;
+              }
+              if (!dialogClosed) {
+                console.warn(
+                  `[pollo] [${dialogContext}] Vẫn còn mở sau ${maxConfirmAttempts} lần thử — chủ động đóng bằng Escape trước khi mention (Select có thể chưa thực sự ăn, mention phía sau có thể vẫn fail).`,
+                );
+                await page.keyboard.press("Escape").catch(() => {});
+                await uploadDialogFileInputLocator(page)
+                  .waitFor({ state: "detached", timeout: 5_000 })
+                  .catch(() => {});
+              }
+            } else {
+              // Xác nhận qua debug snapshot THẬT (job
+              // he_learned_the_way_SHOT_03_CLIP_01_VIDEO, 2026-09-16): không
+              // tìm thấy card dù đã cuộn 5 lần — nhánh này TRƯỚC ĐÂY không hề
+              // đóng lại dialog Uploads đã mở ở reopenDialog() phía trên, nên
+              // dialog vẫn còn mở khi rơi xuống bước mention ngay sau đó
+              // (snapshot lúc lỗi cho thấy dialog "Uploads" còn che nguyên
+              // composer) — y hệt lỗi "dialog chưa đóng" đã sửa ở nhánh
+              // cardStillThere, chỉ khác là không có Select nào để mà xác
+              // minh, phải chủ động đóng ngay.
+              console.warn(
+                `[pollo] [reopen dialog để select lại — ảnh "${refPath}"] Không tìm thấy card (kể cả sau khi cuộn 5 lần) — chủ động đóng dialog Uploads bằng Escape trước khi mention.`,
+              );
+              await page.keyboard.press("Escape").catch(() => {});
+              await uploadDialogFileInputLocator(page)
+                .waitFor({ state: "detached", timeout: 5_000 })
+                .catch(() => {});
+            }
+
+            if ((await spinner.count().catch(() => 0)) > 0) {
+              throw new GenerationError(
+                `Ảnh "${refPath}" (assetUrl: ${assetUrl}) vẫn còn spinner "đang xử lý" sau ${Math.round(waitedMs / 1000)}s (đã thử select lại) — có thể ảnh bị lỗi xử lý vĩnh viễn phía pollo.ai. Thử lại hoặc đổi ảnh tham chiếu khác.`,
+              );
+            }
+            console.warn(
+              `[pollo] Ảnh "${refPath}" hết spinner sau khi select lại — tiếp tục mention bình thường.`,
+            );
+            break;
+          }
+          if (waitedMs > 0 && waitedMs % 60_000 === 0) {
+            console.warn(
+              `[pollo] Ảnh "${refPath}" vẫn đang xử lý (spinner Uploading chưa hết) sau ${waitedMs / 1000}s — tiếp tục chờ trước khi mention.`,
+            );
+          }
+          await page.waitForTimeout(5_000);
+          waitedMs += 5_000;
+        }
+
+        // BẬT LẠI mention — theo yêu cầu người dùng: pollo.ai yêu cầu PHẢI
+        // "@ mention" thì model mới thực sự dùng ảnh làm tham chiếu (xác
+        // nhận qua placeholder thật của pollo.ai: "Upload images or videos
+        // and @ them as references to guide your video."), không mention
+        // thì video generate KHÔNG dùng ảnh tham chiếu nào cả. Đã chờ hết
+        // spinner "đang xử lý" ở trên (xác nhận qua job SHOT_38_CLIP_01_VIDEO
+        // trước đây: mention fail vì ảnh CHƯA index xong, không phải vì
+        // Select đã "dùng" ảnh) nên giờ mention lại an toàn hơn hẳn lần
+        // trước.
+        const textBeforeMention = await editor.innerText().catch(() => "");
         await insertMentionForFile(page, assetUrl);
+        const textAfterMention = await editor.innerText().catch(() => "");
+        if (textAfterMention.length <= textBeforeMention.length) {
+          throw new GenerationError(
+            `Mention ảnh "${refPath}" (assetUrl: ${assetUrl}) báo click thành công nhưng nội dung prompt KHÔNG tăng thêm ký tự nào — có thể mention không thực sự được chèn (silent fail). Prompt trước: ${textBeforeMention.length} ký tự, sau: ${textAfterMention.length} ký tự.`,
+          );
+        }
+      };
+
+      // SỬA (theo yêu cầu người dùng): BỎ retry 2-3 lần khi upload/mention ảnh
+      // tham chiếu lỗi — xác nhận qua lỗi thật (job A_MILLION_BOTTLES_SCREAM_
+      // SHOT_01_CLIP_02_VIDEO, ảnh CHAR_MAXENCE_DE_VILLANDRY.png): ảnh có tay
+      // áo rách dính vệt như máu, nghi bị pollo.ai đưa vào hàng chờ kiểm
+      // duyệt nội dung KHÔNG BAO GIỜ tự xong — retry chỉ tốn thêm ~10-15
+      // phút/lần (chờ hết ceiling 10 phút + upload 180s) mà chắc chắn vẫn
+      // fail y hệt, không giúp gì. Fail ngay ở lần đầu để job báo lỗi sớm,
+      // người dùng tự quyết định đổi ảnh tham chiếu hay thử lại thủ công qua
+      // "Tiếp tục tạo video" thay vì bot tự đốt thời gian retry mù quáng.
+      for (const refPath of referenceImagePaths) {
+        await withPolloAssetUploadLock(() =>
+          uploadAndMentionReferenceImage(refPath),
+        );
+      }
+      await sleep(5_000);
+      // Theo yêu cầu người dùng: chụp ảnh xác nhận đã upload/mention ĐỦ hết
+      // referenceImagePaths trước khi generate — bằng chứng trực quan (ảnh)
+      // dễ đối chiếu hơn số liệu trong log, đặc biệt lúc cần xem lại sau khi
+      // job đã chạy xong. Đếm chip `[data-media-chip]` THẬT trong editor
+      // (cùng bằng chứng dùng trong insertMentionForFile) làm số liệu chính,
+      // KHÔNG chỉ tin đường vòng lặp đã chạy đủ referenceImagePaths.length
+      // lần — mỗi lần lặp tự nó đã xác nhận (xem check textBeforeMention/
+      // textAfterMention ở trên), nhưng tally cuối cùng vẫn là lưới an toàn
+      // rẻ, phòng trường hợp hiếm (vd 1 mention bị trùng lặp/xoá nhầm bởi
+      // thao tác của lần lặp sau).
+      //
+      // SỬA (xác nhận qua ảnh debug THẬT — 2 lần liên tiếp): count() thấp
+      // hơn kỳ vọng KHÔNG LUÔN có nghĩa là mention thiếu thật — snapshot lần
+      // đầu (ref-check) chụp ra ĐÚNG bản marketing/SEO tĩnh chưa hydrate
+      // (cùng bug đã gặp ở waitForGenerateButtonEnabled/generate_button.png:
+      // trang rơi về bản tĩnh GIỮA CHỪNG, không phải lúc mới vào trang),
+      // khiến count() đọc trúng lúc trang đang chuyển đổi dở dang. Nguyên
+      // nhân gốc CHƯA CHẮC chắn là proxy (xem docstring waitForGenerateButtonEnabled
+      // — xác nhận lại .env THẬT lúc gặp: máy dev local KHÔNG cấu hình
+      // PROXY_SERVER, vẫn gặp y hệt) — có thể do CDN/mạng chập chờn, hoặc
+      // anti-bot pollo.ai nghi ngờ IP chạy nhiều test tự động liên tiếp. Phân
+      // biệt rõ 2 trường hợp — kiểm tra composer còn tồn tại
+      // (promptEditorLocator) trước khi kết luận "thiếu mention thật", tránh
+      // báo sai chẩn đoán khiến người đọc log đi sửa nhầm hướng.
+      const composerStillAlive =
+        (await promptEditorLocator(page)
+          .count()
+          .catch(() => 0)) > 0;
+      if (!composerStillAlive) {
+        await captureSnapshot(page, `${jobId}_ref-check`, "composer-gone", {
+          fullPage: true,
+          includeHtml: true,
+        });
+        throw new GenerationError(
+          "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload/mention ảnh tham chiếu (mất hết composer/prompt) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi mention.",
+        );
+      }
+      const mentionedCount = await page.locator("[data-media-chip]").count();
+      // await captureSnapshot(
+      //   page,
+      //   `${jobId}_ref-check`,
+      //   `mentioned-${mentionedCount}-of-${referenceImagePaths.length}`,
+      // );
+      if (mentionedCount < referenceImagePaths.length) {
+        throw new GenerationError(
+          `Chỉ mention được ${mentionedCount}/${referenceImagePaths.length} ảnh tham chiếu vào prompt trước khi generate — dừng lại để tránh generate thiếu tham chiếu (xem storage/debug/${jobId}_ref-check.png).`,
+        );
       }
     }
 
-    await enableUnlimitedIfNotEnoughCredit(page);
+    if (duration) {
+      await dismissBlockingOverlays(page);
+      await selectDurationIfNeeded(page, duration);
+    }
+
+    await dismissBlockingOverlays(page);
+    await selectAspectRatioIfNeeded(page, aspectRatio);
+
+    // Cổng debug tạm — chỉ bật khi set biến môi trường
+    // POLLO_DEBUG_STOP_BEFORE_GENERATE=1 (dùng để test model/duration/aspect
+    // ratio đã chọn đúng chưa MÀ KHÔNG bấm Generate thật, tốn credit/thời
+    // gian). Điều kiện (không phải throw vô điều kiện) nên KHÔNG ảnh hưởng
+    // type narrowing của code phía dưới trong chạy production bình thường.
+    if (process.env.POLLO_DEBUG_STOP_BEFORE_GENERATE === "1") {
+      await captureSnapshot(page, `${jobId}_stop-before-generate`, "debug-stop", {
+        includeHtml: true,
+      });
+      throw new GenerationError(
+        `[debug] Dừng trước khi bấm Generate theo POLLO_DEBUG_STOP_BEFORE_GENERATE=1 (không phải lỗi thật) — xem storage/debug/${jobId}_stop-before-generate.{png,html} để kiểm tra model/duration/aspect ratio đã chọn.`,
+      );
+    }
+
+    await enableUnlimitedIfNotEnoughCredit(page, jobId);
 
     const baseline = await captureResultBaseline(page);
-
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
-      clickGenerateButton(page, generateButton, baseline.count),
+      clickGenerateButton(
+        page,
+        generateButton,
+        baseline.count,
+        baseline.generatingCount,
+      ),
     );
     const generateClickedAtMs = Date.now();
 
@@ -1626,10 +2864,41 @@ export async function generateVideo(
     // bỏ qua hẳn, dùng lại đúng cơ chế dò DOM cũ.
     const apiStatus =
       recordId !== null
-        ? await waitForGenerationApiStatus(page, recordId, config.generationTimeoutMs)
+        ? await waitForGenerationApiStatus(
+            page,
+            recordId,
+            config.generationTimeoutMs,
+            jobId,
+          )
         : null;
     if (recordId !== null) {
-      console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
+      console.log(
+        `[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`,
+      );
+    }
+
+    // API (generation.queryRecordDetail — xem fetchGenerationRecordDetail)
+    // trả THẲNG mediaUrl (link CDN gốc, tải được ngay) + videoId — KHÔNG cần
+    // chờ DOM cập nhật chút nào nếu generationPolling đã xác nhận "succeed".
+    // SỬA (xác nhận qua log thật production — job in "API record ... status:
+    // succeed" rồi ĐỨNG YÊN rất lâu): trước đây vẫn cho waitForNewResult (dò
+    // DOM) chạy trước, biến API-status thành 1 lớp "biết trước" vô dụng vì
+    // vẫn phải đợi DOM mới thật sự dùng tới nó. Giờ dùng THẲNG mediaUrl ngay
+    // khi biết "succeed" — bỏ hẳn bước chờ DOM cho trường hợp này, chỉ dò
+    // DOM khi KHÔNG có recordId/API không xác nhận được (giữ nguyên đường cũ
+    // làm fallback).
+    if (apiStatus === "succeed" && recordId !== null) {
+      const detail = await fetchGenerationRecordDetail(page, recordId);
+      if (detail?.mediaUrl) {
+        const filePath = await downloadResultVideo(
+          page,
+          detail.mediaUrl,
+          jobId,
+        );
+        return { filePath, polloResultId: detail.videoId };
+      }
+      // API báo "succeed" nhưng không đọc được mediaUrl (site đổi cấu trúc?)
+      // — rơi xuống dò DOM như bình thường thay vì bỏ cuộc ngay.
     }
 
     let videoSrc: string;
@@ -1651,7 +2920,11 @@ export async function generateVideo(
           console.warn(
             `[pollo] DOM không thấy video mới dù API xác nhận record ${recordId} đã "succeed" — tải trực tiếp qua mediaUrl.`,
           );
-          const filePath = await downloadResultVideo(page, detail.mediaUrl, jobId);
+          const filePath = await downloadResultVideo(
+            page,
+            detail.mediaUrl,
+            jobId,
+          );
           return { filePath, polloResultId: detail.videoId };
         }
       }
@@ -1659,9 +2932,22 @@ export async function generateVideo(
     }
     const filePath = await downloadResultVideo(page, videoSrc, jobId);
     // resultCard null = kết quả chỉ tìm thấy qua /create (xem
-    // findRecentVideoViaCreatePage), không có card nào trên page hiện tại để
-    // lấy id — best-effort bỏ qua, không cố gắng thêm (trường hợp hiếm).
-    const polloResultId = resultCard ? await captureResultId(page, resultCard) : null;
+    // findRecentVideoViaCreatePage) HOẶC qua nhánh video-src trực tiếp trên
+    // page (mode "Reference to Video"/chat_box — xem waitForNewResult phía
+    // trên), không có card nào để lấy id qua click thumbnail. Xác nhận qua
+    // NHIỀU lần test thật liền nhau (mọi lần generateVideo mode Reference to
+    // Video đều trả polloResultId=null dù job thành công): mode này KHÔNG
+    // BAO GIỜ có card, nên nhánh captureResultId gần như vô dụng cho video —
+    // dùng recordId (đã có sẵn từ captureGenerationRecordId) qua
+    // fetchGenerationRecordDetail làm nguồn videoId đáng tin cậy hơn hẳn,
+    // best-effort, không throw nếu thất bại.
+    let polloResultId = resultCard
+      ? await captureResultId(page, resultCard)
+      : null;
+    if (!polloResultId && recordId !== null) {
+      const detail = await fetchGenerationRecordDetail(page, recordId);
+      polloResultId = detail?.videoId ?? null;
+    }
     return { filePath, polloResultId };
   } catch (err) {
     await captureErrorSnapshot(page, jobId, err);

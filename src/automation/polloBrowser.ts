@@ -27,6 +27,19 @@ export const getPolloBrowserContext = createBrowserContextManager(
  * polloImageJobs/polloVideoJobs trong queue.ts không còn phải chờ nhau qua
  * 1 context dùng chung nữa).
  *
+ * ĐÃ THỬ gộp về 1 BrowserContext dùng chung (2 tab, 1 profile) để giảm CPU
+ * (2 cây process Chrome → 1) — REVERT lại 2 context riêng theo yêu cầu người
+ * dùng. Lý do (suy đoán, chưa xác nhận hẳn qua bằng chứng đầy đủ nhưng đủ
+ * để revert phòng ngừa): lúc dùng chung profile, "enableUnlimitedIfNotEnoughCredit"
+ * (switch Unlimited) bắt đầu treo/timeout lặp lại theo kiểu MỚI (không còn
+ * do cookie banner) — nghi ngờ 2 tab CÙNG 1 origin storage partition (chung
+ * localStorage/BroadcastChannel/IndexedDB, khác hẳn 2 browser instance riêng
+ * trước đó dù cùng tài khoản) khiến pollo.ai đồng bộ trạng thái credit/
+ * Unlimited giữa 2 tab, tab kia render lại đúng lúc tab này đang thao tác.
+ * 2 context riêng (2 process Chrome thật, KHÔNG chung storage partition) né
+ * hẳn nguồn race này, đổi lại tốn thêm ~1 cây process Chrome — chấp nhận
+ * được, ưu tiên ổn định hơn tối ưu CPU ở đây.
+ *
  * THEO LỰA CHỌN CỦA NGƯỜI DÙNG: chấp nhận rủi ro 2 context cùng đăng nhập 1
  * tài khoản pollo.ai đồng thời (KHÁC với giải pháp AIVideo đã dùng — 2 TÀI
  * KHOẢN riêng, an toàn hơn nhưng cần tài khoản/credit mới) — pollo.ai CHƯA

@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     );
     await page.waitForTimeout(300);
 
-    await enableUnlimitedIfNotEnoughCredit(page);
+    await enableUnlimitedIfNotEnoughCredit(page, "test-pollo-network-trace");
 
     const baseline = await resultCardLocator(page).count();
     const generateButton = generateButtonLocator(page).first();

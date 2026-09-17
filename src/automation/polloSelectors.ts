@@ -63,6 +63,10 @@ export const uploadDialogFileInputLocator = (page: Page): Locator =>
 export const assetPickerCardLocator = (page: Page): Locator =>
   page.locator('[data-testid="asset-picker-card"]');
 
+/** Container lưới "Uploads" chứa các assetPickerCardLocator — dùng để cuộn xuống tìm card cũ (xem submitAssetUpload, nhánh cachedUrl). */
+export const assetPickerGridLocator = (page: Page): Locator =>
+  page.locator('[data-testid="asset-picker-grid"]');
+
 /**
  * Cùng 1 card như assetPickerCardLocator, khớp ĐÚNG theo data-asset-url (thay
  * vì vị trí) — dùng để CHỌN LẠI 1 ảnh ĐÃ upload trước đó (xem cache
@@ -136,6 +140,18 @@ export const modelDialogOptionLocator = (page: Page, modelName: string): Locator
 export const paramsChipLocator = (page: Page): Locator =>
   page.locator('div[data-button-name="params"][role="button"]');
 
+/**
+ * Chip tổng hợp Aspect Ratio/Video Length/Resolution/count — xác nhận qua DOM
+ * thật (mode "Reference to Video" + model MiniMax H3, job
+ * test-aspect-ratio-*): KHÁC HẲN paramsChipLocator ở trên (locator đó không
+ * khớp gì trong mode/model này — chỉ khớp chip MODEL, không phải chip params
+ * tổng hợp). Chip thật là [data-testid="chat-footer-fields"], hiện text dạng
+ * "Auto/5s/480p/1" (Aspect Ratio/Video Length/Resolution/count), bấm mở popup
+ * chứa các section (Aspect Ratio, Video Length, Resolution...).
+ */
+export const chatFooterFieldsChipLocator = (page: Page): Locator =>
+  page.locator('[data-testid="chat-footer-fields"]');
+
 /** Popup/dialog mở ra sau khi bấm modelChipLocator/paramsChipLocator — CHƯA có DOM thật xác nhận cấu trúc bên trong, cần bằng chứng thêm khi cần đổi model/tỉ lệ thật. */
 export const openDialogLocator = (page: Page): Locator => page.locator('[role="dialog"]');
 
@@ -185,6 +201,24 @@ export const videoLengthOptionLocator = (page: Page, duration: string): Locator 
  */
 export const videoLengthSliderInputLocator = (page: Page): Locator =>
   videoLengthLabelLocator(page).locator('xpath=following-sibling::div[1]//input[@type="range"]');
+
+/**
+ * Nhãn section "Aspect Ratio" — CÙNG cấu trúc/class marker với
+ * videoLengthLabelLocator ở trên (xem docstring đó), chỉ khác text lọc.
+ * Options con (16:9/9:16/...) nằm trong div.grid ngay sau label, dùng chung
+ * cấu trúc với Video Length/Resolution — khớp CHÍNH XÁC theo text để tránh
+ * nhầm (xem docstring videoLengthOptionLocator).
+ */
+const aspectRatioLabelLocator = (page: Page): Locator =>
+  page
+    .locator("div.text-f-text-quaternary.text-xs.font-normal")
+    .filter({ hasText: /^Aspect Ratio$/ });
+
+/** 1 option "Aspect Ratio" dạng nút bấm (vd "16:9"/"9:16") — xem docstring aspectRatioLabelLocator. */
+export const aspectRatioOptionLocator = (page: Page, ratio: string): Locator =>
+  aspectRatioLabelLocator(page).locator(
+    `xpath=following-sibling::div[1]//span[normalize-space(text())="${ratio}"]`,
+  );
 
 /** Nút Generate — luôn có data-testid cố định, tự "aria-disabled=true" khi chưa nhập prompt. */
 export const generateButtonLocator = (page: Page): Locator =>
@@ -305,3 +339,46 @@ export const mentionPickerItemByUrlLocator = (page: Page, assetUrl: string): Loc
   page
     .locator('[data-testid="asset-item-upload"]')
     .filter({ has: page.locator(`img[src="${assetUrl}"]`) });
+
+/**
+ * Số ảnh tham chiếu ĐÃ THỰC SỰ gắn vào composer (hiện thành thumbnail phía
+ * trên ô nhập prompt, mode "Reference to Video") — xác nhận qua DOM thật
+ * (storage/debug/..._progress.html của job SHOT_05_CLIP_01_VIDEO, quan sát
+ * trực tiếp qua VNC kèm bằng chứng): `[data-testid="chat-reference-uploader"]`
+ * xuất hiện 2 LẦN trên trang (lần 1 = khối ảnh tham chiếu, lần 2 = khối audio
+ * — `data-testid="chat-audio-slot"` bên trong), PHẢI `.first()` để chỉ lấy
+ * đúng khối ảnh. Mỗi ảnh đã gắn là 1 `<img alt="image">` bên trong khối đó.
+ * Dùng để XÁC NHẬN insertMentionForFile (pollo.ts) đã thật sự chèn được
+ * mention — click() không throw KHÔNG đủ để tin cậy (xem docstring hàm đó).
+ */
+export const attachedReferenceImageLocator = (page: Page): Locator =>
+  page.locator('[data-testid="chat-reference-uploader"]').first().locator('img[alt="image"]');
+
+/**
+ * Spinner "đang xử lý" (span.i-cus--pol-loading, CÙNG class với
+ * uploadingSpinnerLocator) NHƯNG scope ĐÚNG vào thumbnail của 1 ảnh cụ thể
+ * (khớp qua src=assetUrl) trong khay [data-testid="chat-reference-uploader"]
+ * — xác nhận qua DOM thật (storage/debug/..._SHOT_38.../..._SHOT_19...):
+ * `<div class="relative size-full"><img src="<assetUrl>">
+ * <div class="...overlay..."><span class="i-cus--pol-loading"/></div></div>`
+ * — img và overlay chứa spinner là 2 SIBLING cùng cha, nên tìm cha của img
+ * rồi tìm spinner trong đó là khớp đúng.
+ *
+ * KHÁC uploadingSpinnerLocator (quét TOÀN TRANG, không phân biệt ảnh nào) —
+ * xác nhận qua lỗi thật (job SHOT_19_CLIP_01_VIDEO, PROP_WHEELCHAIR.png):
+ * chờ hết uploadingSpinnerLocator page-scope trước khi mention treo tới
+ * 1500s (25 phút) không hết, dù ảnh CỤ THỂ đang mention có thể đã xử lý xong
+ * từ lâu — nghi bắt nhầm spinner của 1 ảnh KHÁC (job khác cùng tài khoản,
+ * hoặc 1 ảnh trước đó bị lỗi xử lý vĩnh viễn) đang kẹt vĩnh viễn ở nơi khác
+ * trên trang. Scope theo assetUrl để chỉ chờ ĐÚNG ảnh đang cần mention.
+ */
+export const attachedReferenceImageSpinnerLocator = (
+  page: Page,
+  assetUrl: string,
+): Locator =>
+  page
+    .locator('[data-testid="chat-reference-uploader"]')
+    .first()
+    .locator(`img[src="${assetUrl}"]`)
+    .locator("xpath=..")
+    .locator("span.i-cus--pol-loading");

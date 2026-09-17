@@ -1,5 +1,16 @@
+import fs from "node:fs";
 import { chromium, type Browser } from "playwright";
 import { config } from "../config";
+
+// Set TMPDIR TRƯỚC khi bất kỳ browser nào launch — Playwright tự tạo
+// user-data-dir (profile Chrome) qua os.tmpdir() (đọc biến này) NGAY TRONG
+// process Node của chính bot, không phải trong process Chrome con, nên phải
+// set ở đây (module-level, chạy 1 lần lúc import) trước lần gọi
+// chromium.launch() đầu tiên. Xem chú thích config.chromeTmpDir để biết lý
+// do (tránh ghi profile/cache Chrome vào "/tmp" nếu đó là tmpfs — tốn RAM
+// thay vì đĩa).
+fs.mkdirSync(config.chromeTmpDir, { recursive: true });
+process.env.TMPDIR = config.chromeTmpDir;
 
 /**
  * Google OAuth ("Đăng nhập bằng Google") chặn với lỗi "This browser or app
@@ -82,12 +93,39 @@ export async function launchRealChrome(
 
   const args = [
     "--disable-blink-features=AutomationControlled",
-    // /dev/shm mặc định rất nhỏ trên nhiều VPS/container (thường 64MB) —
-    // Chrome dùng /dev/shm cho shared memory khi decode/render video, dễ
-    // gây "Target crashed" (crash cả tiến trình renderer) khi xử lý file
-    // video nặng (tính năng Omni Reference). Chuyển sang dùng /tmp thay vì
-    // /dev/shm để tránh giới hạn này.
-    "--disable-dev-shm-usage",
+    // VPS chạy qua Xvfb (X server ẢO, không có GPU thật) — mặc định Chrome
+    // vẫn tự bật 1 process "gpu-process" riêng dùng SwiftShader (giả lập
+    // GPU BẰNG CHÍNH CPU, xem --enable-unsafe-swiftshader/--use-angle=
+    // swiftshader-webgl trong command line thật) để render/composite, dù
+    // không hề có tăng tốc phần cứng nào — chỉ tốn thêm CPU cho lớp giả lập
+    // đó. Xác nhận qua htop THẬT (2026-09-09): riêng process này chiếm
+    // 68.2% CPU một mình, đúng lúc CPU cả máy 100% (vấn đề gốc từ đầu phiên
+    // làm việc). Tắt hẳn GPU — Chrome quay lại render bằng CPU trực tiếp
+    // trong chính renderer process (không qua lớp gpu-process/SwiftShader
+    // trung gian), tránh lãng phí thêm CPU cho giả lập vô ích trên máy vốn
+    // không có GPU. Rủi ro: trang web dùng WebGL thật sẽ không chạy được
+    // (hiện chưa có bằng chứng pollo.ai/ChatAI/AIVideo cần WebGL cho phần
+    // composer/generate — cần theo dõi sau khi bật cờ này).
+    "--disable-gpu",
+    // Đi kèm "--disable-gpu" — chặn luôn đường lùi software-rasterizer
+    // (Skia raster bằng CPU qua đường GPU-process) phòng khi "--disable-gpu"
+    // một mình không chặn hết được mọi fallback.
+    "--disable-software-rasterizer",
+    // ĐÃ THỬ (theo yêu cầu người dùng lúc VPS 100% CPU khi gen ảnh+video
+    // chạy song song) rồi REVERT: "--disable-features=IsolateOrigins,site-
+    // per-process" + "--renderer-process-limit=1" từng được thêm để ép
+    // dùng chung renderer process, giảm số process OS/CPU overhead. Xác
+    // nhận qua bằng chứng thật trên VPS (2026-09-09, theo dõi `ps` liên tục
+    // qua nhiều video job): renderer của page ĐÃ ĐÓNG không hề bị kill khi
+    // ép dùng chung kiểu này — mỗi job mới CHỒNG THÊM renderer mới thay vì
+    // thay thế renderer cũ (1 renderer "mồ côi" sống sót 25+ phút, không
+    // được dọn), tích luỹ RAM dần tới khi crash ("Target crashed") sau vài
+    // video liên tiếp — đúng mẫu hình "restart xong job đầu ổn, càng về sau
+    // càng crash" người dùng báo cáo. Bỏ hẳn 2 cờ này để Chrome quay lại mô
+    // hình mặc định (1 page = renderer riêng, đóng page = kill sạch process
+    // đó, RAM được giải phóng ngay) — đổi CPU/số process cao hơn 1 chút để
+    // lấy ổn định RAM, vì RAM mới là nút thắt thật (xem free -h/ps aux thu
+    // thập lúc chẩn đoán: 1 browser đã dùng ~2GB RSS trên VPS chỉ có 3.8GB).
   ];
   if (disableHttp2AndQuic) {
     args.push("--disable-quic", "--disable-http2");
@@ -97,13 +135,25 @@ export async function launchRealChrome(
   }
 
   return chromium.launch({
-    // "chromium" = dùng bản Chromium bundled sẵn của Playwright thay vì đòi
-    // hỏi Google Chrome đã cài trên máy (tiện cho VPS chỉ tái sử dụng session).
     channel:
       config.browserChannel === "chromium" ? undefined : config.browserChannel,
     headless: config.headless,
     args,
-    ignoreDefaultArgs: ["--enable-automation"],
+
+    ignoreDefaultArgs: [
+      "--enable-automation",
+      "--enable-unsafe-swiftshader",
+      "--enable-features=CDPScreenshotNewSurface",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+
+      // Playwright mặc định thêm flag này.
+      // VPS hiện có /dev/shm = 2GB, trong khi /tmp là tmpfs cũng dùng RAM.
+      // Bỏ flag để Chrome quay lại sử dụng /dev/shm đúng mục đích.
+      "--disable-dev-shm-usage",
+    ],
+
     proxy:
       useProxy && config.proxyServer
         ? {

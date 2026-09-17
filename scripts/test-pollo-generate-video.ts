@@ -15,10 +15,10 @@ async function main(): Promise<void> {
   console.log("Bắt đầu generate video, jobId:", jobId);
   const t0 = Date.now();
   const { filePath, polloResultId } = await generateVideo(
-    "The apple slowly rotates on the table, soft light shifting gently across its surface",
+    "Gentle camera push-in toward the scene, soft ambient light shifting slowly",
     {
       referenceImagePaths: [
-        path.resolve("./storage/downloads/test-gen-75274774-0d30-4084-bc6d-afe27fc5c3c1.png"),
+        path.resolve("./storage/reference-images/cay_khe/LOC_TREASURE_ISLAND.png"),
       ],
       model: "MiniMax H3",
     },

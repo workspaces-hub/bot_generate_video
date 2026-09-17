@@ -1246,7 +1246,7 @@ export async function fetchWithRetry(
       // theo số lần thử (30/60/90s) — vẫn KHÔNG đủ, xem log chi tiết ở trên
       // để tìm nguyên nhân thật thay vì tiếp tục kéo dài backoff mù quáng.
       const wait =
-        lastStatus === 429 ? resolveRetryAfterMs(response, 30_000 * attempt) : delayMs;
+        lastStatus === 429 ? resolveRetryAfterMs(response, 30_000) : delayMs;
       await page.waitForTimeout(wait);
     }
   }
@@ -1578,7 +1578,12 @@ async function waitForNewVideo(
   baseline: VideoBaseline,
 ): Promise<Locator> {
   const videos = historyVideoLocator(page);
-  const pollIntervalMs = 5000;
+  // 10s thay vì 5s — giảm tần suất đánh thức renderer (query DOM mỗi lần)
+  // trong lúc queue khác đang tranh CPU. Vòng lặp này chạy suốt lúc chờ
+  // video xong (không giới hạn thời gian sau khi phát hiện đang generate) —
+  // cùng lý do đã áp dụng cho pollIntervalMs của Pollo/ChatAI (xem
+  // waitForGenerationApiStatus trong pollo.ts, sendMessage trong chatAI.ts).
+  const pollIntervalMs = 10_000;
   let trackedFeedId: string | null = null;
   let sawGeneratingOnTrackedEntry = false;
 
@@ -1908,32 +1913,91 @@ export async function getFeedErrorMessage(
   }
 }
 
-async function writeSnapshotFiles(page: Page, jobId: string): Promise<void> {
-  await fs.promises.mkdir(config.debugDir, { recursive: true });
-  await page.screenshot({
-    path: path.join(config.debugDir, `${jobId}.png`),
-    fullPage: true,
-  });
-  await fs.promises.writeFile(
-    path.join(config.debugDir, `${jobId}.html`),
-    await page.content(),
-    "utf-8",
-  );
+interface SnapshotOptions {
+  /** fullPage: true render/encode TOÀN BỘ trang (kể cả khối marketing/SEO
+   * dài ~13000px phía dưới composer, không ai cần xem) — tốn CPU/thời gian
+   * hơn hẳn so với chỉ chụp viewport hiện tại (nơi composer/nút Generate/%
+   * tiến độ luôn nằm trong đó — đủ để chẩn đoán "trang có hydrate đúng
+   * không" mà không cần cuộn xuống hết trang). Mặc định true cho lúc job
+   * THẬT SỰ lỗi (captureErrorSnapshot) — muốn nhiều chi tiết nhất có thể;
+   * false cho các lần chụp định kỳ (progress) — xem lý do ở captureSnapshot.
+   */
+  fullPage?: boolean;
+  /** page.content() dump cả DOM — cùng lý do tốn kém như fullPage, và
+   * KHÔNG phụ thuộc fullPage (viewport hay full page đều lấy full DOM như
+   * nhau). Mặc định true, tắt hẳn cho các lần chụp progress định kỳ. */
+  includeHtml?: boolean;
 }
 
-/** Chụp trạng thái trang giữa luồng để debug — KHÔNG có nghĩa là job lỗi. */
+async function writeSnapshotFiles(
+  page: Page,
+  jobId: string,
+  { fullPage = true, includeHtml = true }: SnapshotOptions = {},
+): Promise<void> {
+  await fs.promises.mkdir(config.debugDir, { recursive: true });
+  // timeout ngắn hơn mặc định (30s) — xác nhận qua log thật (2026-09-08,
+  // nhiều job liên tiếp): dưới tải đồng thời (2 context ảnh/video cùng tài
+  // khoản), page.screenshot() có thể tự nó hết 30s ("waiting for fonts to
+  // load...") NGAY TRONG lúc xử lý lỗi. captureSnapshot còn bị gọi ĐỊNH KỲ
+  // mỗi progressSnapshotIntervalMs (xem waitForGenerationApiStatus) VÀ được
+  // await NGAY TRONG vòng lặp poll trạng thái — nếu vẫn để 30s, mỗi lần
+  // chụp lỗi dưới tải cao sẽ chặn luôn việc poll trạng thái thêm gần gấp đôi
+  // thời gian, càng làm chậm phát hiện job đã xong. Rút xuống hẳn 5s: gần
+  // như luôn đủ khi tải bình thường, thất bại nhanh khi tải cao thay vì kéo
+  // dài vô ích (đây chỉ là debug best-effort, mất snapshot không ảnh hưởng
+  // job).
+
+  try {
+    await page.screenshot({
+      path: path.join(config.debugDir, `${jobId}.png`),
+      fullPage,
+      timeout: 120_000,
+    });
+  } catch {}
+  if (includeHtml) {
+    await fs.promises.writeFile(
+      path.join(config.debugDir, `${jobId}.html`),
+      await page.content(),
+      "utf-8",
+    );
+  }
+}
+
+/**
+ * Chụp trạng thái trang giữa luồng để debug — KHÔNG có nghĩa là job lỗi.
+ *
+ * opts mặc định giữ NGUYÊN hành vi cũ (fullPage/includeHtml true, xem
+ * SnapshotOptions/writeSnapshotFiles) để KHÔNG âm thầm đổi hành vi của các
+ * pipeline khác đang gọi hàm này (chatAI, aiVideoImage...). Caller nào cần
+ * chụp NHẸ (vd pollo.ts gọi định kỳ mỗi progressSnapshotIntervalMs ngay
+ * trong vòng lặp chờ generate — có thể tới 60+ lần cho 1 video dài, chỉ cần
+ * liếc viewport hiện tại là đủ trả lời "còn đang chạy không", không cần
+ * render hết ~13000px trang lẫn dump ~1MB HTML mỗi lần) tự truyền
+ * { fullPage: false, includeHtml: false } ở nơi gọi.
+ */
 export async function captureSnapshot(
   page: Page,
   jobId: string,
   label: string,
+  opts?: SnapshotOptions,
 ): Promise<void> {
   try {
-    await writeSnapshotFiles(page, jobId);
+    await writeSnapshotFiles(page, jobId, opts);
     // console.log(
     //   `[aiVideo] Snapshot "${label}" đã lưu: storage/debug/${jobId}.png`,
     // );
   } catch (debugErr) {
-    console.error("[aiVideo] Không thể lưu debug snapshot:", debugErr);
+    // console.warn (KHÔNG console.error) — hàm này tự mô tả "KHÔNG có nghĩa
+    // là job lỗi" (khác captureErrorSnapshot bên dưới, dùng khi job THẬT SỰ
+    // lỗi). Xác nhận qua log thật: gọi định kỳ trong lúc chờ generate (xem
+    // waitForGenerationApiStatus, pollo.ts) — page đang bận decode/render
+    // dưới tải cao nên page.screenshot() timeout thỉnh thoảng là BÌNH
+    // THƯỜNG, không phải dấu hiệu job đang gặp sự cố; log ở mức error dễ bị
+    // đọc nhầm thành lỗi thật trong khi job vẫn tiếp tục chạy bình thường.
+    console.warn(
+      "[aiVideo] Không thể lưu debug snapshot (best-effort, không ảnh hưởng job):",
+      debugErr,
+    );
   }
 }
 

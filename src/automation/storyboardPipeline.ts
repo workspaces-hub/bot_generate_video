@@ -134,14 +134,15 @@ async function generateWithContentViolationRetry<T>(
   try {
     return await attempt();
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    const revised = await reviseEntryPromptIfContentViolation(
-      entry,
-      errorMessage,
-      jobId,
-    );
-    if (!revised) throw err;
-    return await attempt();
+    throw err;
+    // const errorMessage = err instanceof Error ? err.message : String(err);
+    // const revised = await reviseEntryPromptIfContentViolation(
+    //   entry,
+    //   errorMessage,
+    //   jobId,
+    // );
+    // if (!revised) throw err;
+    // return await attempt();
   }
 }
 
@@ -278,19 +279,58 @@ export function generatedDirFor(inputPath: string): string {
   return path.resolve("./storage/generated", path.basename(withoutJsonExt));
 }
 
+/** Đuôi file coi là video kết quả — dùng cho archiveExistingVideos (xem ensureGeneratedFolder). */
+const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov"]);
+
+/**
+ * Copy các video ĐANG CÓ SẴN ở gốc outputDir (từ lần gen TRƯỚC, cùng tên
+ * folder) vào 1 subfolder "vXX" mới — XX tăng dần theo subfolder "vXX" lớn
+ * nhất đã có (bắt đầu "v01" nếu chưa có subfolder nào). Best-effort: lỗi đọc
+ * folder hay copy 1 file không chặn cả job, chỉ cảnh báo.
+ */
+async function archiveExistingVideos(outputDir: string): Promise<void> {
+  const entries = await fs.promises
+    .readdir(outputDir, { withFileTypes: true })
+    .catch(() => []);
+  const videoFiles = entries
+    .filter((e) => e.isFile() && VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
+    .map((e) => e.name);
+  if (videoFiles.length === 0) return;
+
+  const existingVersions = entries
+    .filter((e) => e.isDirectory() && /^v\d+$/.test(e.name))
+    .map((e) => Number.parseInt(e.name.slice(1), 10));
+  const nextVersion = (existingVersions.length > 0 ? Math.max(...existingVersions) : 0) + 1;
+  const versionDir = path.join(outputDir, `v${String(nextVersion).padStart(2, "0")}`);
+
+  await fs.promises.mkdir(versionDir, { recursive: true });
+  for (const fileName of videoFiles) {
+    await fs.promises
+      .copyFile(path.join(outputDir, fileName), path.join(versionDir, fileName))
+      .catch((err) => {
+        console.warn(`[storyboardPipeline] Không copy được video "${fileName}" vào "${versionDir}":`, err);
+      });
+  }
+}
+
 /**
  * Tạo (nếu chưa có) folder generated/<tên file input>/ và copy file
  * input JSON vào đó — gọi SỚM, NGAY sau khi ChatAI trả JSON xong (xem
  * processChatAIQueue trong queue.ts), TRƯỚC KHI user xác nhận có gen ảnh hay
  * không, để user có thể upload ảnh/JSON thay thế vào đúng folder trong lúc
- * chờ xác nhận (xem tryReplaceGeneratedFile trong handlers.ts). Các hàm
- * generate*ForFile bên dưới cũng tự làm việc này khi chạy (idempotent, ghi
- * đè an toàn) nên gọi hàm này trước không ảnh hưởng gì tới chúng.
+ * chờ xác nhận (xem tryReplaceGeneratedFile trong handlers.ts).
+ *
+ * SỬA (theo yêu cầu người dùng): KHÔNG xoá folder cũ nữa (đã thử, không phù
+ * hợp) — thay vào đó, nếu folder đã có sẵn video từ lần gen TRƯỚC (trùng tên
+ * folder), copy các video đó vào 1 subfolder "vXX" (XX tăng dần mỗi lần gen)
+ * để giữ lại lịch sử các lần gen trước, trước khi tiếp tục ghi đè bình
+ * thường ở gốc folder cho lần gen MỚI.
  */
 export async function ensureGeneratedFolder(
   inputPath: string,
 ): Promise<string> {
   const outputDir = generatedDirFor(inputPath);
+  await archiveExistingVideos(outputDir);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,

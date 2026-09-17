@@ -16,13 +16,13 @@ async function main(): Promise<void> {
     const sw = page.locator('div[data-button-name="is_unlimited"] [role="switch"]').first();
     console.log("aria-checked TRƯỚC:", await sw.getAttribute("aria-checked").catch(() => "(không tìm thấy)"));
 
-    await enableUnlimitedIfNotEnoughCredit(page);
+    await enableUnlimitedIfNotEnoughCredit(page, "test-pollo-unlimited-auto");
 
     console.log("aria-checked SAU:", await sw.getAttribute("aria-checked").catch(() => "(không tìm thấy)"));
 
     // Gọi lại lần 2 — kỳ vọng: đã bật rồi thì bỏ qua (không throw, không log "tự bật").
     console.log("\n>>> Gọi lại lần 2 (kỳ vọng: bỏ qua vì đã bật) ---");
-    await enableUnlimitedIfNotEnoughCredit(page);
+    await enableUnlimitedIfNotEnoughCredit(page, "test-pollo-unlimited-auto");
     console.log("aria-checked sau lần gọi thứ 2:", await sw.getAttribute("aria-checked").catch(() => "(?)"));
   } finally {
     await page.close();
