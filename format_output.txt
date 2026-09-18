@@ -8,11 +8,11 @@ QUY TRÌNH NHIỀU LƯỢT — ƯU TIÊN CAO NHẤT LÀ ĐỘ ĐẦY ĐỦ, KHÔ
 - Ngay khi nhận file/yêu cầu này, đọc toàn bộ kịch bản, phân tích Character Bible/Location Bible, chia shot/clip, viết prompt cho từng item và bắt đầu ghi ra file JSON.
 - Mọi phân tích nội bộ phải thực hiện ngầm. Không hiển thị Character Bible, Location Bible, shot list, camera plan, continuity analysis, negative prompt hoặc kế hoạch xử lý.
 - KHÔNG bắt buộc xong trong đúng 1 lượt trả lời. Nếu 1 lượt xử lý không đủ để bao phủ toàn bộ kịch bản (kịch bản dài, nhiều nhân vật/bối cảnh/shot), CỨ DỪNG LẠI ở đúng tiến độ thực tế của lượt đó — KHÔNG rút gọn, KHÔNG bỏ item, KHÔNG bịa ra là đã xong để hoàn tất sớm.
-- Mỗi lượt CHƯA xong: đính kèm phần JSON đã làm được tới thời điểm đó (cùng 1 file, tên chứa “_full.json”, ghi đè/nối tiếp đúng file đó ở lượt sau — KHÔNG tạo file mới), kèm CÂU CHỮ RÕ RÀNG xác nhận CHƯA hoàn thành và sẽ tiếp tục ở lượt sau (ví dụ: “Chưa hoàn thành — cần tiếp tục mở rộng các continuity run còn lại ở lượt sau.”). TUYỆT ĐỐI không dùng câu “Đã hoàn thành” hoặc bất kỳ cách diễn đạt tương đương nào (“production-ready”, “đầy đủ”...) khi thực tế chưa bao phủ hết kịch bản — người dùng sẽ tự nhắn tiếp để yêu cầu tiếp tục, không cần hỏi lại hoặc chờ xác nhận.
-- CHỈ khi đã thực sự đối chiếu và xác nhận NỘI BỘ rằng toàn bộ kịch bản từ đầu đến cuối đều đã có continuity run/clip tương ứng, lượt trả lời đó mới gồm: (1) file JSON đính kèm ĐẦY ĐỦ có tên chứa “_full.json”; (2) câu “Đã hoàn thành” kèm thống kê số lượng CHARACTER, LOCATION và VIDEO.
+- Mỗi lượt CHƯA xong: đính kèm phần JSON đã làm được tới thời điểm đó (cùng 1 file, tên chứa "_full.json", ghi đè/nối tiếp đúng file đó ở lượt sau — KHÔNG tạo file mới), kèm CÂU CHỮ RÕ RÀNG xác nhận CHƯA hoàn thành và sẽ tiếp tục ở lượt sau (ví dụ: "Chưa hoàn thành — cần tiếp tục mở rộng các continuity run còn lại ở lượt sau."). TUYỆT ĐỐI không dùng câu "Đã hoàn thành" hoặc bất kỳ cách diễn đạt tương đương nào ("production-ready", "đầy đủ"...) khi thực tế chưa bao phủ hết kịch bản — người dùng sẽ tự nhắn tiếp để yêu cầu tiếp tục, không cần hỏi lại hoặc chờ xác nhận.
+- CHỈ khi đã thực sự đối chiếu và xác nhận NỘI BỘ rằng toàn bộ kịch bản từ đầu đến cuối đều đã có continuity run/clip tương ứng, lượt trả lời đó mới gồm: (1) file JSON đính kèm ĐẦY ĐỦ có tên chứa "_full.json"; (2) câu "Đã hoàn thành" kèm thống kê số lượng CHARACTER, LOCATION, SCENE_SETTING_START, SCENE_SETTING_END và VIDEO.
 
 YÊU CẦU FILE:
-- Tạo đúng một file JSON hoàn chỉnh; tên file phải chứa “_full.json”.
+- Tạo đúng một file JSON hoàn chỉnh; tên file phải chứa "_full.json".
 - Root của file phải là một JSON array.
 - Không in nội dung JSON trong chat.
 - Không có comment, markdown fence hoặc văn bản ngoài array trong file.
@@ -33,66 +33,90 @@ CHARACTER và LOCATION phải có đúng 5 field, đúng tên và đúng cấu t
   }
 ]
 
-VIDEO phải có đúng 7 field, đúng tên và đúng cấu trúc sau:
+SCENE_SETTING_START và SCENE_SETTING_END phải có đúng 5 field, đúng tên và đúng cấu trúc sau (cùng shape với CHARACTER/LOCATION — cũng là asset ảnh tĩnh, không phải video):
+
+[
+  {
+    "id": "string",
+    "type": "SCENE_SETTING_START | SCENE_SETTING_END",
+    "ref": [
+      {
+        "id": "string",
+        "type": "CHARACTER | LOCATION | SCENE_SETTING_START"
+      }
+    ],
+    "prompt": "string",
+    "duration": 0
+  }
+]
+
+- SCENE_SETTING_START.ref chỉ gồm CHARACTER và LOCATION thực sự xuất hiện ở trạng thái khởi đầu của SHOT.
+- SCENE_SETTING_END.ref chỉ gồm CHARACTER thực sự xuất hiện, cộng đúng MỘT phần tử type "SCENE_SETTING_START" trỏ tới boundary đóng vai trò khởi đầu của chính clip đó (xem mục 3 về cơ chế tái sử dụng boundary giữa các clip cùng SHOT).
+
+VIDEO phải có đúng 9 field, đúng tên và đúng cấu trúc sau:
 
 [
   {
     "id": "string",
     "type": "VIDEO",
     "ref": [
-      {
-        "id": "string",
-        "type": "CHARACTER | LOCATION"
-      }
+      { "id": "string", "type": "SCENE_SETTING_START" },
+      { "id": "string", "type": "SCENE_SETTING_END" }
     ],
     "prompt": "string",
     "duration": 0,
     "shot": 0,
-    "clip": 0
+    "clip": 0,
+    "aspectRatio": "string",
+    "frameRate": 0
   }
 ]
 
-Không thêm field khác. "shot" và "clip" chỉ áp dụng cho VIDEO, KHÔNG thêm vào CHARACTER/LOCATION.
+- VIDEO.ref đúng 2 phần tử, đúng thứ tự: SCENE_SETTING_START (vai trò khởi đầu của chính clip này) rồi SCENE_SETTING_END (item MỚI do chính clip này tạo ra). VIDEO không còn tham chiếu trực tiếp CHARACTER/LOCATION — nhân vật/bối cảnh của clip được xác định gián tiếp qua 2 boundary này.
+- aspectRatio: tỉ lệ khung hình, chỉ nhận "9:16" (dọc) hoặc "16:9" (ngang) — lấy theo cấu hình định dạng video của toàn bộ file (mọi VIDEO trong CÙNG một file phải dùng chung một aspectRatio, trừ khi PHẦN cấu hình ở trên yêu cầu khác đi cho từng shot cụ thể).
+- frameRate: số nguyên, số khung hình/giây (fps) của video — lấy theo cấu hình ở PHẦN trên; nếu không có cấu hình cụ thể, mặc định 24.
 
-TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
-- SCENE_SETTING_START
-- SCENE_SETTING_END
-- START FRAME item
-- END FRAME item
-- Temporal boundary item dưới bất kỳ tên hoặc alias nào
+Không thêm field khác. "shot", "clip", "aspectRatio" và "frameRate" chỉ áp dụng cho VIDEO, KHÔNG thêm vào CHARACTER/LOCATION/SCENE_SETTING_START/SCENE_SETTING_END.
 
-3. NGUYÊN TẮC CHIA SHOT VÀ CLIP
+type chỉ thuộc enum: CHARACTER | LOCATION | SCENE_SETTING_START | SCENE_SETTING_END | VIDEO. TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu bất kỳ type/item nào khác ngoài 5 type này dưới bất kỳ tên hoặc alias nào (không có "START FRAME item"/"END FRAME item" tách riêng khỏi SCENE_SETTING_START/SCENE_SETTING_END, không có temporal boundary item nào khác).
+
+3. NGUYÊN TẮC CHIA SHOT, CLIP VÀ SCENE_SETTING
 
 - Chia toàn bộ timeline thành các VIDEO clip có thời lượng phù hợp với cấu hình ở PHẦN trên.
 - Mỗi VIDEO là một container thời gian hoàn chỉnh và có thể chứa một hoặc nhiều camera beat liên tiếp, miễn các beat đó cùng phục vụ một dramatic purpose và có thể thực hiện rõ ràng trong duration của VIDEO.
-- Nếu một hành động dài hơn giới hạn một clip, chia thành nhiều VIDEO liên tiếp theo thứ tự thời gian.
-- Clip sau phải tiếp nối hợp lý trạng thái kết thúc của clip trước bằng mô tả trực tiếp trong VIDEO prompt; không tạo item trung gian để biểu diễn frame đầu/cuối.
-- Với các clip cùng một SHOT (shot giống nhau, clip tăng dần), start frame của clip sau PHẢI khớp CHÍNH XÁC với end frame vừa mô tả ở clip liền trước: cùng vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera và motion phase — không được thay đổi, bỏ sót hay diễn giải lại khác đi.
-- Prompt của clip N từ 2 trở đi trong cùng continuity run bắt buộc mô tả lại đầy đủ trạng thái bàn giao liên quan từ clip trước: vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, ánh sáng, môi trường và motion phase. Không được dùng riêng câu “matches exactly”, “same as before” hoặc “unchanged” thay cho mô tả cụ thể.
-- Không yêu cầu tạo, repaint, regenerate, restage hoặc reinterpret một START/END frame riêng.
-- Mọi thông tin continuity phải nằm tự nhiên ngay trong VIDEO prompt.
+- Nếu một hành động dài hơn giới hạn một clip, chia thành nhiều VIDEO liên tiếp theo thứ tự thời gian, cùng một SHOT (shot giữ nguyên, clip tăng dần).
+
+CƠ CHẾ SCENE_SETTING_START/SCENE_SETTING_END GIỮA CÁC CLIP CÙNG SHOT:
+
+- Clip đầu tiên của một SHOT (clip 01): tạo MỘT SCENE_SETTING_START mới (trạng thái khởi đầu của cả SHOT) và MỘT SCENE_SETTING_END mới (trạng thái kết thúc riêng của clip 01). VIDEO clip 01 ref cả hai item vừa tạo.
+- Từ clip thứ 2 trở đi trong CÙNG SHOT: KHÔNG tạo SCENE_SETTING_START mới. VIDEO clip N (N ≥ 2) tái sử dụng CHÍNH id của SCENE_SETTING_END thuộc clip N-1 làm vai trò khởi đầu: phần tử ref đầu tiên của VIDEO clip N ghi {"id": <id SCENE_SETTING_END của clip N-1>, "type": "SCENE_SETTING_START"} — dùng type "SCENE_SETTING_START" trong CHÍNH PHẦN TỬ REF này để thể hiện VAI TRÒ (khởi đầu của clip N), dù item đó khi được khai báo lần đầu (ở clip N-1, với type gốc "SCENE_SETTING_END") vẫn giữ nguyên type gốc "SCENE_SETTING_END" tại đúng vị trí nó được định nghĩa trong array. Đây là NGOẠI LỆ DUY NHẤT cho quy tắc "ref.type phải trùng type khai báo gốc của item" (xem mục 6). VIDEO clip N vẫn tạo MỘT SCENE_SETTING_END hoàn toàn mới cho riêng nó, và SCENE_SETTING_END mới này lại ref về SCENE_SETTING_START (vai trò) mà chính clip N vừa dùng.
+- Khi bắt đầu một SHOT mới (shot tăng): KHÔNG kế thừa SCENE_SETTING_END của SHOT trước. Luôn tạo SCENE_SETTING_START mới cho clip 01 của SHOT mới.
+- Kết quả: một SHOT có N clip chỉ cần N+1 item SCENE_SETTING (1 START + N END) — không nhân đôi nội dung giữa 2 đầu của cùng một ranh giới.
+- VIDEO prompt mô tả diễn biến hành động của chính clip đó, đi từ trạng thái ở SCENE_SETTING_START (ref đầu, dù vật lý là item gốc SCENE_SETTING_START hay là SCENE_SETTING_END của clip trước tái sử dụng) đến trạng thái ở SCENE_SETTING_END (ref sau, item mới do chính clip tạo).
+- Trạng thái mô tả trong SCENE_SETTING_END của clip N phải là kết quả tự nhiên, hợp lý của đúng diễn biến mô tả trong VIDEO prompt clip N, xuất phát đúng từ trạng thái mà clip N tham chiếu ở vai trò start.
+- Không tạo, repaint, regenerate, restage hoặc reinterpret một SCENE_SETTING_START/END ngoài đúng cơ chế trên (không có boundary "phụ" hay "dự phòng" nào khác).
 
 3A. KHÓA TRẠNG THÁI BÀN GIAO GIỮA HAI CLIP CÙNG SHOT
 
-- Trước khi viết prompt, lập ngầm một trạng thái bàn giao duy nhất cho mỗi ranh giới clip. Trạng thái này được dùng đồng thời làm End frame của clip N và Start frame của clip N+1; không thiết kế hai đầu độc lập. Không xuất bảng trạng thái, metadata hoặc item mới.
-- Viết cùng một đoạn mô tả trạng thái cụ thể ở hai đầu; được phép lặp nguyên văn phần bàn giao này để tránh mất chi tiết. Đoạn hành động và camera phát triển sau điểm nối vẫn phải riêng cho từng clip.
+- Trước khi viết prompt, lập ngầm một trạng thái bàn giao duy nhất cho mỗi ranh giới clip. Trạng thái này được biểu diễn CHÍNH THỨC bằng đúng một item SCENE_SETTING_END (xem mục 3) — dùng đồng thời làm End frame của clip N và Start frame (vai trò) của clip N+1; không thiết kế hai đầu độc lập, không tạo thêm bảng trạng thái, metadata hay item nào khác ngoài đúng cơ chế SCENE_SETTING_START/END đã quy định.
+- Viết cùng một đoạn mô tả trạng thái cụ thể ở hai đầu (trong SCENE_SETTING_END.prompt và trong VIDEO prompt của cả clip N lẫn clip N+1); được phép lặp nguyên văn phần bàn giao này để tránh mất chi tiết. Đoạn hành động và camera phát triển sau điểm nối vẫn phải riêng cho từng clip.
 - Trạng thái bàn giao phải chứa những thông tin ảnh hưởng đến việc nối hình: nhân vật và vị trí theo mốc cố định; khoảng cách; hướng chân/hông/vai/mặt; target của ánh mắt; biểu cảm và trạng thái miệng; tay và điểm cầm; số lượng, hướng, người giữ/điểm đỡ, trạng thái đạo cụ; vị trí nhân vật phụ liên quan; bố cục, camera, vùng nét; ánh sáng và các dấu vết đã phát sinh.
-- Phải phân biệt “không nhìn thấy” với “không tồn tại”: chi tiết ngoài khung vẫn giữ trạng thái vật lý đã xác lập. Khi cắt về khung rộng, không tự đưa nhân vật hoặc đạo cụ về vị trí mặc định. Không thêm nhân vật ngoài khung vào ref chỉ để lưu continuity.
-- Với chuyển động đang diễn ra, không được chỉ ghi “mid-stride”, “moving”, “turning”, “raising” hoặc “at the apex”. Phải khóa pha quan sát được và hướng phát triển kế tiếp. Khi đang đi: chân nào chịu lực, chân nào đang vung, gót/mũi chân đang chạm hay rời sàn, trọng tâm và hướng tiến. Khi xoay/đứng lên/cúi xuống: điểm tựa, phần thân đang xoay, tư thế trung gian và chiều chuyển động. Khi thao tác đạo cụ: tay, điểm tiếp xúc, pha nắm/nhả/đỡ, hướng chuyển động và trạng thái của người nhận. Chỉ dùng các chi tiết phù hợp hành động, không ép mọi cảnh phải có bước chân hoặc chuyển giao.
+- Phải phân biệt "không nhìn thấy" với "không tồn tại": chi tiết ngoài khung vẫn giữ trạng thái vật lý đã xác lập. Khi cắt về khung rộng, không tự đưa nhân vật hoặc đạo cụ về vị trí mặc định. Không thêm nhân vật ngoài khung vào ref chỉ để lưu continuity.
+- Với chuyển động đang diễn ra, không được chỉ ghi "mid-stride", "moving", "turning", "raising" hoặc "at the apex". Phải khóa pha quan sát được và hướng phát triển kế tiếp. Khi đang đi: chân nào chịu lực, chân nào đang vung, gót/mũi chân đang chạm hay rời sàn, trọng tâm và hướng tiến. Khi xoay/đứng lên/cúi xuống: điểm tựa, phần thân đang xoay, tư thế trung gian và chiều chuyển động. Khi thao tác đạo cụ: tay, điểm tiếp xúc, pha nắm/nhả/đỡ, hướng chuyển động và trạng thái của người nhận. Chỉ dùng các chi tiết phù hợp hành động, không ép mọi cảnh phải có bước chân hoặc chuyển giao.
 - Với điểm đảo chiều hoặc đỉnh động tác, xác định đã tới đỉnh hay còn đi lên, đã bắt đầu đi xuống hay chưa, có chủ ý dừng hay không. Clip sau tiếp tục đúng pha này, không giơ lại, lấy đà lại, thực hiện lại tiếp xúc hoặc lặp sự kiện đã hoàn tất.
 - Câu hành động đầu tiên sau Start frame của clip tiếp theo phải nêu chuyển động tiếp diễn ngay: chi/bộ phận nào chuyển động tiếp, theo hướng nào và từ điểm tựa nào. Không có khoảng đứng chờ, reset pose, lùi về vị trí cũ hoặc time skip không được mô tả.
 - Nếu camera đang chuyển động qua ranh giới, khóa vị trí theo mốc cảnh, độ cao, hướng nhìn, lens/shot size, phía của trục tương tác, hướng và tốc độ chuyển động định tính, pha tăng tốc/đều tốc/hãm. Camera không tự dừng hoặc khởi động lại ở clip sau. Nếu đã locked, clip sau mở đầu cũng locked rồi mới thực hiện chuyển động mới được mô tả.
-- “End frame” có thể là khoảnh khắc đang chuyển động, không bắt buộc là ảnh đóng băng hoặc pose giữ lâu. Hai mô tả bàn giao biểu diễn cùng một ranh giới thời gian; clip sau phát triển tiếp chứ không phát lại đoạn cuối clip trước.
+- "End frame" có thể là khoảnh khắc đang chuyển động, không bắt buộc là ảnh đóng băng hoặc pose giữ lâu. Hai mô tả bàn giao biểu diễn cùng một ranh giới thời gian; clip sau phát triển tiếp chứ không phát lại đoạn cuối clip trước.
 - Ưu tiên chọn ranh giới có trạng thái dễ đọc; nếu chia giữa một động tác khó tái tạo, phải mô tả đủ pha hoặc điều chỉnh điểm chia mà vẫn giữ nhịp và sự kiện. Không bắt mọi nhân vật dừng ở cuối mỗi clip.
 
 3B. HỆ QUY CHIẾU KHÔNG GIAN CỐ ĐỊNH
 
-- Thiết lập ngầm sơ đồ không gian từ LOCATION: các mốc ổn định như cửa vào, cửa sổ, chân cầu thang, cạnh bàn, đầu ghế, lối đi. Đặt tên mô tả phân biệt được cho các mốc và dùng nhất quán trong LOCATION cùng mọi VIDEO liên quan.
+- Thiết lập ngầm sơ đồ không gian từ LOCATION: các mốc ổn định như cửa vào, cửa sổ, chân cầu thang, cạnh bàn, đầu ghế, lối đi. Đặt tên mô tả phân biệt được cho các mốc và dùng nhất quán trong LOCATION cùng mọi SCENE_SETTING/VIDEO liên quan.
 - Thứ tự xác định vị trí: mốc cố định trong bối cảnh → quan hệ actor/target và anatomical left/right → vị trí camera → camera-left/right và screen direction tại beat hiện tại. Camera-left/right chỉ mô tả hình chiếu trong khung, không thay thế địa chỉ vật lý trong bối cảnh.
-- Không dùng riêng “beside the sofa”, “camera-left end” hoặc “neck points camera-left” để khóa một vật thể qua nhiều góc máy. Phải nêu đầu/cạnh nào theo mốc cố định, vật nằm phía nào và đầu chức năng hướng về mốc nào. Có thể bổ sung vị trí trên màn hình sau đó.
-- Khi đổi góc máy, tính lại trái/phải màn hình từ sơ đồ cố định. Nhân vật và đạo cụ không tự di chuyển, quay, đổi chỗ hoặc đổi phía để giữ nguyên chữ camera-left/right. Không ghi “all screen positions unchanged” nếu chính chuyển động camera làm hình chiếu thay đổi.
+- Không dùng riêng "beside the sofa", "camera-left end" hoặc "neck points camera-left" để khóa một vật thể qua nhiều góc máy. Phải nêu đầu/cạnh nào theo mốc cố định, vật nằm phía nào và đầu chức năng hướng về mốc nào. Có thể bổ sung vị trí trên màn hình sau đó.
+- Khi đổi góc máy, tính lại trái/phải màn hình từ sơ đồ cố định. Nhân vật và đạo cụ không tự di chuyển, quay, đổi chỗ hoặc đổi phía để giữ nguyên chữ camera-left/right. Không ghi "all screen positions unchanged" nếu chính chuyển động camera làm hình chiếu thay đổi.
 - Đường đi phải nối được vị trí đầu và cuối, đi qua đúng lối trống, đúng cạnh/góc vật cản và đủ thời gian. Không cho actor đã vòng qua một góc ở clip trước quay lại vòng cùng góc như chưa đi qua; không đi xuyên bàn, ghế hoặc nhân vật khác.
-- Khóa phía camera so với trục tương tác chính. Nếu cần vượt trục, phải mô tả đường máy liên tục hoặc beat tái xác lập địa lý rõ ràng và đủ thời gian; không dùng một câu “preserve axis” để che một đường máy thực tế mâu thuẫn.
+- Khóa phía camera so với trục tương tác chính. Nếu cần vượt trục, phải mô tả đường máy liên tục hoặc beat tái xác lập địa lý rõ ràng và đủ thời gian; không dùng một câu "preserve axis" để che một đường máy thực tế mâu thuẫn.
 
 3C. CAMERA, ĐƯỜNG NHÌN VÀ CHUYỂN NÉT KHẢ THI
 
@@ -101,27 +125,24 @@ TUYỆT ĐỐI KHÔNG tạo, xuất hoặc tham chiếu các type/item sau:
 - Nếu góc đầu là POV/eyeline của nhân vật nhìn về target, không được chỉ rack focus để thấy lại chính nhân vật đó phía sau máy. Phải chọn góc khác có cả hai lớp từ đầu, mô tả một chuyển động camera khả thi để nhìn lại, hoặc ghi rõ motivated cut sang góc mới. Mỗi cách phải được tính vào duration.
 - Phân biệt lens/focal length với vị trí máy: dolly/push thay đổi vị trí và phối cảnh; zoom thay đổi focal length; cut có thể chuyển cả lens và vị trí. Không tự đổi 95mm sang 85mm trong cùng cú push mà không mô tả zoom, thay lens qua cut hoặc cơ chế chuyển đổi thích hợp.
 - Khi prompt yêu cầu khung cận mặt nhưng trạng thái bàn giao còn chứa tay/chân/đạo cụ ngoài khung, giữ chúng như trạng thái vật lý kế thừa; không nói rằng mọi chi tiết đó đều nhìn thấy trong cùng khung cận. Nếu khán giả cần xác nhận một chi tiết, bố trí insert hoặc khung đủ rộng với thời gian thực tế.
-- Với nhiều camera beat, đánh dấu rõ cut hay chuyển động liên tục. Whip-pan không cho phép máy dịch chuyển tức thời sang vị trí không thể đạt. Không dùng rack focus, whip-pan hoặc “cinematic transition” như lời giải thích thay cho đường đi vật lý còn thiếu.
-- Câu “No jump cuts” cấm nhảy tư thế, vị trí, thời gian hoặc hành động không có diễn biến nối; không cấm motivated hard cut/match cut đổi góc đã mô tả. Cut hợp lệ vẫn phải bảo toàn thời điểm, pha động tác và trạng thái của cảnh.
+- Với nhiều camera beat, đánh dấu rõ cut hay chuyển động liên tục. Whip-pan không cho phép máy dịch chuyển tức thời sang vị trí không thể đạt. Không dùng rack focus, whip-pan hoặc "cinematic transition" như lời giải thích thay cho đường đi vật lý còn thiếu.
+- Câu "No jump cuts" cấm nhảy tư thế, vị trí, thời gian hoặc hành động không có diễn biến nối; không cấm motivated hard cut/match cut đổi góc đã mô tả. Cut hợp lệ vẫn phải bảo toàn thời điểm, pha động tác và trạng thái của cảnh.
 
 3D. NGÂN SÁCH THỜI GIAN CHO THOẠI, HÀNH ĐỘNG VÀ CAMERA
 
 - Trước khi quyết định số clip, lập ngầm timeline trong khoảng 0 đến duration: hành động, thoại, phản ứng, chuyển hướng nhìn và camera. Hoạt động song song chỉ được chồng thời gian khi thực sự có thể diễn ra đồng thời; các bước có quan hệ trước–sau phải cộng đủ thời gian.
 - Ước lượng lời thoại theo ngôn ngữ và cách diễn: với tiếng Anh tự nhiên, dùng khoảng 2–3 từ/giây làm mốc lập kế hoạch, chậm hơn khi ngập ngừng, lạnh lùng, nhấn mạnh hoặc có khoảng nghỉ. Với ngôn ngữ khác, ước lượng theo âm tiết và nhịp nói thực tế; không dùng số token hoặc đếm khoảng trắng máy móc. Đây là mốc kiểm tra khả thi, không phải yêu cầu đọc đều như máy.
-- Tính cả hơi thở, dấu ngắt, nhấn từ, phản ứng và thao tác trước/sau lời thoại. Dành biên thời gian cho diễn xuất thay vì lấp kín duration bằng tốc độ nói tối đa. Không dùng “exact lip sync” để biện minh cho thoại dài hơn thời gian còn lại.
+- Tính cả hơi thở, dấu ngắt, nhấn từ, phản ứng và thao tác trước/sau lời thoại. Dành biên thời gian cho diễn xuất thay vì lấp kín duration bằng tốc độ nói tối đa. Không dùng "exact lip sync" để biện minh cho thoại dài hơn thời gian còn lại.
 - Nếu câu chỉ bắt đầu sau mốc t, toàn bộ câu và các phản ứng sau câu phải nằm trong duration trừ t. Phải đọc thử ngầm đúng nhịp đã yêu cầu; nếu phải nói dồn, bỏ chữ hoặc tăng tốc bất thường mới vừa thì clip không đạt.
 - Khi không đủ thời gian, ưu tiên tách thêm VIDEO trong cùng SHOT ở ranh giới ngữ nghĩa tự nhiên; bảo toàn toàn bộ nội dung thoại và thứ tự sự kiện. Có thể tinh giản camera beat không thiết yếu. Chỉ tăng duration nếu cấu hình đầu vào cho phép; không tự vượt giới hạn 4–5 giây hoặc giới hạn người dùng đặt.
 - Không cắt bỏ, rút gọn hoặc đổi nghĩa thoại để ép vừa clip nếu chưa được cho phép. Không thêm sự kiện để lấp đầy clip. Nếu chia một lượt nói qua hai clip, ưu tiên sau một cụm/câu hoàn chỉnh, khóa miệng/hơi thở và ghi rõ phần lời tiếp theo; không lặp lời đã nói. Tránh chia giữa một từ.
-- End frame phải là trạng thái thực sự đạt được trước khi hết duration. Không mô tả người đã nói hết câu, nhìn sang rồi nhìn lại hoặc hoàn tất thao tác nếu timeline chưa đủ thời gian thực hiện.
+- End frame (SCENE_SETTING_END) phải là trạng thái thực sự đạt được trước khi hết duration. Không mô tả người đã nói hết câu, nhìn sang rồi nhìn lại hoặc hoàn tất thao tác nếu timeline chưa đủ thời gian thực hiện.
 
-3E. MÔ TẢ BÀN GIAO VÀ FRAME CUỐI THỰC TẾ
+3E. SCENE_SETTING LÀ ASSET THIẾT KẾ TRƯỚC, KHÔNG PHẢI FRAME TRÍCH XUẤT THẬT
 
-- Phân biệt ba nguồn: asset CHARACTER/LOCATION dùng nhận diện; End frame dự kiến do prompt mô tả; frame cuối thực tế của video đã sinh. Một ảnh nhân vật hoặc câu “matches exactly” không thay thế frame cuối thực tế và không chứng minh hai video đã nối khớp.
-- Mặc định khi chỉ có kịch bản và asset CHARACTER/LOCATION: thiết kế trạng thái bàn giao bằng mô tả cụ thể, không tuyên bố đã xem video trước hoặc đã nhận frame trích xuất. Không tạo frame asset, ID, URL, field hay ref mới.
-- Chỉ khi người dùng/pipeline thực sự cung cấp và gắn frame cuối video trước làm ảnh khởi đầu cho lần gen hiện tại, mới được thêm chỉ dẫn tự nhiên trong VIDEO prompt rằng ảnh khởi đầu được cung cấp là hình học mở đầu cần giữ, rồi mô tả cụ thể trạng thái và chuyển động tiếp diễn. Không yêu cầu repaint, tái dựng hoặc tạo lại frame đó; không gọi nó là một START/END item.
-- Trong trường hợp có frame thực tế, dùng nó cho các chi tiết quan sát được; trạng thái ngoài khung kế thừa từ diễn biến đã xác lập. Một ảnh tĩnh không đủ xác nhận vận tốc hoặc pha trước đó: dùng video/chuỗi frame nếu được cung cấp, không tự nhận đã đo chuyển động từ một ảnh.
-- Nếu frame thực tế mâu thuẫn với identity, sự kiện hoặc trạng thái bắt buộc của kịch bản, không âm thầm sửa cốt truyện hoặc viết prompt khẳng định hai trạng thái mâu thuẫn đồng thời. Cần sửa/tạo lại clip trước về trạng thái yêu cầu trước khi dùng frame đó làm đầu vào; chỉ mô tả hành động nối sửa khi thật sự khả thi và được nội dung cho phép.
-- Việc trích frame và gắn ảnh đầu vào thuộc bước vận hành pipeline ngoài schema này; master chỉ mô tả khi đầu vào thực sự tồn tại, không giả định viết câu trong prompt sẽ tự thực hiện việc truyền frame. VIDEO.ref vẫn chỉ có CHARACTER/LOCATION thực sự xuất hiện.
+- Phân biệt ba nguồn: asset CHARACTER/LOCATION dùng nhận diện; SCENE_SETTING_START/END là asset ảnh tĩnh được THIẾT KẾ (viết prompt) tại thời điểm tạo JSON này, dùng làm start/end frame khi gen video; frame cuối THỰC TẾ của video đã sinh xong (chỉ tồn tại SAU khi video đã render, ở bước vận hành pipeline ngoài schema này). Viết prompt SCENE_SETTING_END là thiết kế trạng thái mục tiêu, không phải xác nhận đã xem một video thật.
+- SCENE_SETTING_END.prompt phải mô tả cụ thể trạng thái kế thừa từ SCENE_SETTING_START (vai trò) mà clip đó tham chiếu, diễn biến đúng theo VIDEO prompt của chính clip — không tuyên bố đã kiểm chứng khớp hình ảnh thật, không tự nhận đã đo chuyển động từ một video đã render.
+- Việc thực sự tạo ảnh cho SCENE_SETTING_START/END và dùng chúng làm đầu vào gen video thuộc bước vận hành pipeline ngoài schema này; ở đây chỉ cần khai báo đúng item, đúng ref, đúng prompt theo mục 2–3.
 
 4. QUY TẮC THEO TYPE
 
@@ -143,39 +164,52 @@ LOCATION
 - Không đưa nhân vật hoặc hành động riêng của một VIDEO vào LOCATION prompt.
 - duration: 0.
 
+SCENE_SETTING_START
+
+- id theo mẫu SHOT_XX_CLIP_01_START (chỉ tồn tại cho clip 01 của mỗi SHOT — xem cơ chế ở mục 3).
+- ref chỉ chứa CHARACTER và LOCATION thực sự xuất hiện ở trạng thái khởi đầu của SHOT. Thứ tự: toàn bộ CHARACTER trước, LOCATION sau — cùng quy tắc thứ tự với VIDEO.ref (mục cũ), áp dụng tương tự ở đây.
+- prompt: mô tả đầy đủ trạng thái TĨNH tại thời điểm khởi đầu — danh tính/vị trí/pose/biểu cảm/trang phục/đạo cụ của từng nhân vật, bối cảnh, bố cục khung hình, ánh sáng, thời điểm/thời tiết — đủ chi tiết để tạo một ảnh tĩnh dùng làm start frame khi gen video. Bằng tiếng Anh.
+- Không đưa diễn biến hành động, camera plan hoặc thoại vào prompt này — đây là một trạng thái đóng băng, không phải video.
+- duration: 0.
+
+SCENE_SETTING_END
+
+- id theo mẫu SHOT_XX_CLIP_YY_END (YY = số clip mà item này là trạng thái kết thúc — mỗi VIDEO tạo đúng một SCENE_SETTING_END mới, xem mục 3).
+- ref chỉ chứa CHARACTER thực sự xuất hiện ở trạng thái kết thúc, cộng đúng MỘT phần tử type "SCENE_SETTING_START" trỏ tới id của boundary đóng vai trò khởi đầu của CHÍNH clip đó (vật lý có thể là SCENE_SETTING_START thật của clip 01, hoặc SCENE_SETTING_END của clip liền trước tái sử dụng — xem mục 3 và mục 6). Không ref trực tiếp LOCATION — bối cảnh được kế thừa gián tiếp qua chuỗi SCENE_SETTING_START.
+- prompt: mô tả đầy đủ trạng thái TĨNH đạt được ở cuối clip — là kết quả tự nhiên, hợp lý của đúng diễn biến mô tả trong VIDEO prompt của chính clip đó, xuất phát đúng từ trạng thái đã tham chiếu ở vai trò start. Cùng mức chi tiết với SCENE_SETTING_START (danh tính/vị trí/pose/biểu cảm/trang phục/đạo cụ, bối cảnh, bố cục, ánh sáng, thời điểm/thời tiết). Bằng tiếng Anh.
+- Không đưa diễn biến hành động, camera plan hoặc thoại vào prompt này — đây là một trạng thái đóng băng, không phải video.
+- duration: 0.
+
 VIDEO
 
 - id theo mẫu SHOT_XX_CLIP_YY_VIDEO.
 - shot: số nguyên lấy đúng từ số XX trong id (vd id "SHOT_05_CLIP_02_VIDEO" → shot: 5).
 - clip: số nguyên lấy đúng từ số YY trong id (vd id "SHOT_05_CLIP_02_VIDEO" → clip: 2).
-- ref chỉ được chứa CHARACTER và LOCATION thực sự xuất hiện trong chính VIDEO đó.
-- Thứ tự ref bắt buộc: toàn bộ CHARACTER xuất hiện trong clip trước, sau đó LOCATION tương ứng của clip.
-- Không đưa nhân vật chỉ được nhắc đến nhưng không hiện diện vào ref.
-- Không đưa location ngoài khung hình hoặc không phải bối cảnh thực tế của clip vào ref.
-- Không tham chiếu VIDEO khác.
-- Không tham chiếu START, END, SCENE_SETTING hoặc temporal boundary dưới bất kỳ hình thức nào.
-- Nếu clip không có nhân vật, ref chỉ chứa LOCATION thực sự xuất hiện.
-- Mỗi ref.id phải trỏ tới đúng một CHARACTER hoặc LOCATION item tồn tại trong cùng file.
+- ref đúng 2 phần tử, đúng thứ tự: {"id": <boundary khởi đầu của chính clip này>, "type": "SCENE_SETTING_START"} rồi {"id": <SCENE_SETTING_END mới do chính clip này tạo>, "type": "SCENE_SETTING_END"}. Xem mục 3 về cách xác định boundary khởi đầu (item gốc SCENE_SETTING_START ở clip 01, hoặc SCENE_SETTING_END của clip liền trước tái sử dụng ở clip N ≥ 2) và mục 6 về ngoại lệ type trong ref.
+- Không tham chiếu CHARACTER/LOCATION trực tiếp, không tham chiếu VIDEO khác.
+- Mỗi ref.id (ở vai trò SCENE_SETTING_END) phải trỏ tới đúng một item SCENE_SETTING_END mới do chính clip này tạo, không trùng với SCENE_SETTING_END của clip khác.
 - prompt: chỉ chứa VIDEO PROMPT hoàn chỉnh bằng tiếng Anh, dùng trực tiếp để gen video.
 - duration: số giây hợp lệ của clip theo cấu hình ở PHẦN trên.
+- aspectRatio: "9:16" hoặc "16:9" theo cấu hình định dạng video ở PHẦN trên — khớp nhất quán giữa mọi VIDEO cùng file trừ khi cấu hình yêu cầu khác.
+- frameRate: số nguyên fps theo cấu hình ở PHẦN trên, mặc định 24 nếu không có cấu hình cụ thể.
 
 Mỗi VIDEO prompt bắt buộc phải nêu đủ:
 
-1. Start frame — khoảnh khắc mở đầu cụ thể của clip: ai đang ở đâu, pose, gaze, biểu cảm, trạng thái đạo cụ và motion phase ban đầu. Với clip nối tiếp trong cùng một SHOT, start frame này PHẢI đúng chính xác như end frame vừa mô tả ở clip liền trước cùng SHOT đó (cùng vị trí, pose, gaze, biểu cảm, đạo cụ, camera và motion phase — không được đổi khác hay bỏ sót chi tiết), diễn đạt bằng mô tả trực tiếp trong prompt, không tham chiếu tới một START/END item.
-2. Diễn biến hành động — hành động cụ thể của chính clip từ start frame cho đến hết duration: ai làm gì, tương tác với ai/đạo cụ/bối cảnh nào, diễn biến theo đúng thứ tự thời gian trong đúng duration.
-3. End frame — trạng thái kết thúc cụ thể đạt được tự nhiên vào cuối clip: vị trí, pose, gaze, biểu cảm, đạo cụ và camera motion phase sau khi hành động kết thúc, đủ chi tiết để clip tiếp theo (nếu cùng SHOT) kế thừa CHÍNH XÁC làm start frame của nó.
+1. Start frame — khoảnh khắc mở đầu cụ thể của clip: ai đang ở đâu, pose, gaze, biểu cảm, trạng thái đạo cụ và motion phase ban đầu. Phải khớp với prompt của SCENE_SETTING_START (vai trò) mà VIDEO này ref — với clip nối tiếp trong cùng một SHOT, item đó chính là SCENE_SETTING_END vừa mô tả ở clip liền trước cùng SHOT, nên start frame ở đây PHẢI đúng chính xác như prompt của item đó (cùng vị trí, pose, gaze, biểu cảm, đạo cụ, camera và motion phase — không được đổi khác hay bỏ sót chi tiết).
+2. Diễn biến hành động — hành động cụ thể của chính clip từ start frame cho đến hết duration: ai làm gì, tương tác với ai/đạo cụ/bối cảnh nào, diễn biến theo đúng thứ tự thời gian trong đúng duration, dẫn dắt hợp lý tới trạng thái sẽ mô tả trong SCENE_SETTING_END của chính clip.
+3. End frame — trạng thái kết thúc cụ thể đạt được tự nhiên vào cuối clip: vị trí, pose, gaze, biểu cảm, đạo cụ và camera motion phase sau khi hành động kết thúc. Phải khớp với prompt của SCENE_SETTING_END mới mà VIDEO này tạo ra, đủ chi tiết để clip tiếp theo (nếu cùng SHOT) kế thừa CHÍNH XÁC làm start frame của nó.
 
 QUAN HỆ ACTOR–ACTION–TARGET VÀ HƯỚNG HÀNH ĐỘNG BẮT BUỘC:
 
-- Với mọi hành động có mục tiêu cụ thể như nhìn, nói, chỉ tay, đưa đồ, tấn công, né tránh, chạy tới, quay về phía, cúi chào, quỳ trước, ôm hoặc tương tác, VIDEO prompt phải ghi rõ bằng tên/ID nhận diện: ai là người thực hiện, hành động gì và nhân vật/vật thể nào là mục tiêu. Không dùng đại từ mơ hồ như “him”, “her”, “them” khi trong cảnh có từ hai đối tượng phù hợp trở lên.
+- Với mọi hành động có mục tiêu cụ thể như nhìn, nói, chỉ tay, đưa đồ, tấn công, né tránh, chạy tới, quay về phía, cúi chào, quỳ trước, ôm hoặc tương tác, VIDEO prompt phải ghi rõ bằng tên/ID nhận diện: ai là người thực hiện, hành động gì và nhân vật/vật thể nào là mục tiêu. Không dùng đại từ mơ hồ như "him", "her", "them" khi trong cảnh có từ hai đối tượng phù hợp trở lên.
 - Phải mô tả rõ quan hệ actor → action → target bằng tên nhân vật, không được chỉ mô tả hành động chung chung.
 - Nếu hướng hành động ảnh hưởng đến ý nghĩa câu chuyện, prompt phải khóa hướng bằng các dấu hiệu cơ thể quan sát được: hướng bàn chân, hông, vai, thân trên, khuôn mặt, ánh mắt và trục chuyển động của người thực hiện so với vị trí chính xác của mục tiêu.
 - Phải mô tả trình tự chuyển hướng trước khi thực hiện hành động: người thực hiện rời hướng/mục tiêu cũ, xoay các bộ phận cơ thể cần thiết để đối diện mục tiêu mới, xác lập ánh mắt hoặc trục cơ thể với mục tiêu mới, sau đó mới thực hiện hành động.
-- Với hành động hướng tới một nhân vật cụ thể, phải nêu rõ nhân vật nào không phải mục tiêu nếu bố cục dễ gây nhầm lẫn. Ví dụ: “She bows directly toward Gu Cheng, not toward Su Man.”
+- Với hành động hướng tới một nhân vật cụ thể, phải nêu rõ nhân vật nào không phải mục tiêu nếu bố cục dễ gây nhầm lẫn. Ví dụ: "She bows directly toward Gu Cheng, not toward Su Man."
 - Khi mục tiêu không đứng chính diện trước người thực hiện, prompt phải nêu vị trí của mục tiêu theo mốc cố định trong bối cảnh và quan hệ với actor; sau đó có thể bổ sung camera-left/camera-right tại beat hiện tại. Mô tả rõ actor xoay những bộ phận nào và theo hướng nào để nhìn/tương tác đúng target; không bắt thân người phải xoay nếu hành động chỉ cần đổi mắt hoặc đầu.
 - Trạng thái cuối clip phải tiếp tục xác nhận đúng quan hệ không gian: actor đang hướng tới ai, nhìn ai, cách mục tiêu bao xa và trục cơ thể kết thúc ở đâu.
-- Không coi một hành động là đã mô tả đầy đủ nếu prompt chỉ nói “turns”, “bows”, “looks”, “speaks” hoặc “gestures” mà không nêu rõ target và hướng cơ thể quan sát được.
-- Trước khi lưu JSON, kiểm tra từng VIDEO prompt bằng câu hỏi: “Người thực hiện là ai? Mục tiêu là ai? Hướng cơ thể và hướng hành động có chỉ đúng vào mục tiêu đó không? Có đối tượng nào gần đó khiến mô hình hiểu nhầm không?” Nếu còn mơ hồ, phải viết lại prompt trước khi lưu.
+- Không coi một hành động là đã mô tả đầy đủ nếu prompt chỉ nói "turns", "bows", "looks", "speaks" hoặc "gestures" mà không nêu rõ target và hướng cơ thể quan sát được.
+- Trước khi lưu JSON, kiểm tra từng VIDEO prompt bằng câu hỏi: "Người thực hiện là ai? Mục tiêu là ai? Hướng cơ thể và hướng hành động có chỉ đúng vào mục tiêu đó không? Có đối tượng nào gần đó khiến mô hình hiểu nhầm không?" Nếu còn mơ hồ, phải viết lại prompt trước khi lưu.
 
 TRÁI–PHẢI CƠ THỂ VÀ HƯỚNG CHỨC NĂNG CỦA ĐẠO CỤ:
 
@@ -198,7 +232,7 @@ TRÁI–PHẢI CƠ THỂ VÀ HƯỚNG CHỨC NĂNG CỦA ĐẠO CỤ:
   + có xoay, lật hoặc đổi tay hay không;
   + hướng, vị trí, người giữ và trạng thái cuối cùng của đạo cụ.
 
-- Khi một đạo cụ được chuyển cho người khác, prompt phải kiểm tra “recipient-ready orientation”: đạo cụ phải đến tay hoặc vị trí của người nhận theo hướng cho phép người nhận thực hiện hành động dự kiến một cách tự nhiên. Nếu hướng ban đầu chưa phù hợp, phải mô tả ai xoay hoặc lật đạo cụ, theo hướng nào và ở giai đoạn nào trước khi sử dụng. Không mặc định mọi chuyển giao đều cần xoay 180 degrees; mức xoay phải xuất phát từ hướng ban đầu và hướng cần đạt.
+- Khi một đạo cụ được chuyển cho người khác, prompt phải kiểm tra "recipient-ready orientation": đạo cụ phải đến tay hoặc vị trí của người nhận theo hướng cho phép người nhận thực hiện hành động dự kiến một cách tự nhiên. Nếu hướng ban đầu chưa phù hợp, phải mô tả ai xoay hoặc lật đạo cụ, theo hướng nào và ở giai đoạn nào trước khi sử dụng. Không mặc định mọi chuyển giao đều cần xoay 180 degrees; mức xoay phải xuất phát từ hướng ban đầu và hướng cần đạt.
 
 - Phải phân biệt mục đích chuyển giao với bản thân việc chuyển giao. Cùng một đạo cụ có thể cần hướng khác nhau khi được đưa để đọc, sử dụng, xem mặt trước, kiểm tra mặt sau, cất giữ hoặc che giấu. Không tự thêm thao tác xoay/lật nếu mục đích không yêu cầu; nếu người nhận chủ động chỉnh hướng sau khi nhận, trình tự đó phải được mô tả rõ.
 
@@ -206,36 +240,33 @@ TRÁI–PHẢI CƠ THỂ VÀ HƯỚNG CHỨC NĂNG CỦA ĐẠO CỤ:
 
 - Không được để đạo cụ tự xoay, tự lật, đổi mặt, đổi đầu, đổi tay sở hữu hoặc thay đổi chiều chức năng giữa các camera beat hay clip liên tiếp. Mọi thay đổi hướng hoặc điểm cầm phải bắt nguồn từ một hành động vật lý rõ ràng. Đổi góc camera chỉ thay đổi góc nhìn của người xem, không tự thay đổi hướng thực tế của đạo cụ.
 
-- Với nội dung có chiều như chữ, số, biểu tượng hoặc giao diện, phải giữ chiều đúng trên bề mặt đạo cụ; không tự lật gương, đảo bố cục hoặc quay ngược nội dung. “Đúng chiều” được xác định theo người sử dụng hoặc người nhận cần xem nội dung, không bắt buộc theo camera. Nội dung có thể nhìn nghiêng hoặc ngược từ góc camera đối diện nếu đó là hệ quả vật lý đúng của bố cục; phản chiếu thật chỉ được thể hiện theo đúng bề mặt phản chiếu.
+- Với nội dung có chiều như chữ, số, biểu tượng hoặc giao diện, phải giữ chiều đúng trên bề mặt đạo cụ; không tự lật gương, đảo bố cục hoặc quay ngược nội dung. "Đúng chiều" được xác định theo người sử dụng hoặc người nhận cần xem nội dung, không bắt buộc theo camera. Nội dung có thể nhìn nghiêng hoặc ngược từ góc camera đối diện nếu đó là hệ quả vật lý đúng của bố cục; phản chiếu thật chỉ được thể hiện theo đúng bề mặt phản chiếu.
 
-- Không được áp dụng một hướng cố định cho mọi đạo cụ. “Đúng hướng” là hướng phù hợp với chức năng và ý định cụ thể trong cảnh. Nếu cố ý đưa sai hướng, giấu mặt trước, chĩa phần nguy hiểm hoặc gây khó cho người nhận, prompt phải xác định đó là hành động có chủ ý được kịch bản cho phép, không tự thêm ý đồ hay sự kiện mới.
+- Không được áp dụng một hướng cố định cho mọi đạo cụ. "Đúng hướng" là hướng phù hợp với chức năng và ý định cụ thể trong cảnh. Nếu cố ý đưa sai hướng, giấu mặt trước, chĩa phần nguy hiểm hoặc gây khó cho người nhận, prompt phải xác định đó là hành động có chủ ý được kịch bản cho phép, không tự thêm ý đồ hay sự kiện mới.
 
 - Start frame phải xác định hướng, vị trí, điểm cầm và người giữ ban đầu của đạo cụ khi liên quan đến hành động. End frame phải xác định hướng, vị trí, tay giữ, người giữ hoặc điểm đỡ và trạng thái sử dụng cuối cùng để clip tiếp theo kế thừa chính xác. Những thông tin này bổ sung cho mọi yêu cầu start–end continuity trong PHẦN này và phải được giữ nhất quán xuyên suốt các camera beat.
 
 - Trước khi lưu JSON, phải kiểm tra từng tương tác với đạo cụ bằng các câu hỏi:
-  “Ai đang cầm hoặc sử dụng đạo cụ, và ai/vật gì là target?”
-  “Đang dùng tay nào hoặc bộ phận nào, và cầm/tiếp xúc ở đâu?”
-  “Mặt, đầu hoặc bộ phận chức năng đang hướng về đâu?”
-  “Hướng đó có phù hợp với mục tiêu và hành động tiếp theo không?”
-  “Nếu được chuyển giao, người nhận có thể thực hiện hành động dự kiến một cách tự nhiên không, hoặc đã có thao tác chỉnh hướng rõ ràng chưa?”
-  “Việc chuyển điểm cầm, điểm đỡ và quyền giữ vật thể có liên tục về mặt vật lý không?”
-  “Đạo cụ có bị lật, xoay, đổi tay hoặc đổi chủ sở hữu ngoài diễn biến được mô tả giữa các camera beat hay clip không?”
+  "Ai đang cầm hoặc sử dụng đạo cụ, và ai/vật gì là target?"
+  "Đang dùng tay nào hoặc bộ phận nào, và cầm/tiếp xúc ở đâu?"
+  "Mặt, đầu hoặc bộ phận chức năng đang hướng về đâu?"
+  "Hướng đó có phù hợp với mục tiêu và hành động tiếp theo không?"
+  "Nếu được chuyển giao, người nhận có thể thực hiện hành động dự kiến một cách tự nhiên không, hoặc đã có thao tác chỉnh hướng rõ ràng chưa?"
+  "Việc chuyển điểm cầm, điểm đỡ và quyền giữ vật thể có liên tục về mặt vật lý không?"
+  "Đạo cụ có bị lật, xoay, đổi tay hoặc đổi chủ sở hữu ngoài diễn biến được mô tả giữa các camera beat hay clip không?"
   Nếu còn mơ hồ hoặc mâu thuẫn, phải viết lại prompt trước khi lưu.
 
-4. Camera plan cụ thể: một VIDEO có thể chứa một hoặc nhiều shot/camera beat. Nếu có nhiều beat, phải mô tả rõ thứ tự, thời lượng tương đối, điểm cut/transition, focal length/lens, shot size, angle, framing và camera movement của từng beat. Không dùng “cinematic camera movement” như mô tả thay thế chung chung.
+4. Camera plan cụ thể: một VIDEO có thể chứa một hoặc nhiều shot/camera beat. Nếu có nhiều beat, phải mô tả rõ thứ tự, thời lượng tương đối, điểm cut/transition, focal length/lens, shot size, angle, framing và camera movement của từng beat. Không dùng "cinematic camera movement" như mô tả thay thế chung chung.
 5. Ánh sáng, thời điểm trong ngày và thời tiết cụ thể, phù hợp LOCATION và continuity.
 6. Continuity bắt buộc giữ ổn định xuyên suốt: character identity, costume, location layout, prop count/ownership/state, time, weather, lighting direction và natural physics. Camera continuity, screen direction và vị trí trên màn hình phải phát triển đúng đường máy và hệ quy chiếu cố định ở mục 3B–3C; không ép giữ cùng bên màn hình khi góc nhìn đã thay đổi hợp lý.
-7. Câu cấm chính xác: “No jump cuts, no hidden scene change, no extra events, no modern elements.”
+7. Câu cấm chính xác: "No jump cuts, no hidden scene change, no extra events, no modern elements."
 
 Không bắt buộc dùng câu mở đầu chung giống nhau cho mọi VIDEO. Hãy bắt đầu bằng mô tả trực tiếp, riêng biệt và phù hợp với hành động của clip.
 
 CẤM TUYỆT ĐỐI:
-- Dùng cụm “bounded by the referenced START FRAME and END FRAME”.
-- Dùng câu “The opening frame must match START exactly and the final stable frame must match END exactly.”
-- Bịa đặt supplied/referenced/current/previous START FRAME hoặc END FRAME item/asset. Chỉ được mô tả ảnh khởi đầu thực sự đã được cung cấp ngoài schema theo đúng mục 3E; không thêm nó vào ref hoặc tạo type/ID mới.
-- Yêu cầu dùng extracted last stable frame khi không có ảnh thực tế được cung cấp/gắn làm đầu vào. Không dùng frame ổn định ở thời điểm sớm hơn thay frame cuối của một chuyển động vẫn đang tiếp diễn rồi gọi đó là nối tiếp chính xác.
+- Bịa đặt SCENE_SETTING_START/SCENE_SETTING_END không thực sự được khai báo làm item riêng trong chính file JSON — không ref tới id không tồn tại, không mô tả một "ảnh khởi đầu/kết thúc" nào ngoài đúng 2 item đã ref theo mục 2–3.
 - Nhét Character Bible, Location Bible, metadata phân tích, tiêu đề, negative prompt riêng hoặc lời giải thích ngoài VIDEO prompt.
-- Dùng lại nguyên văn hoặc gần giống nguyên văn phần diễn biến hành động/camera cho nhiều VIDEO chỉ bằng cách đổi ID. Mỗi prompt phải phản ánh đúng nhịp hành động riêng của clip. Ngoại lệ bắt buộc: đoạn trạng thái bàn giao End frame N → Start frame N+1 được phép lặp nguyên văn theo mục 3A; đây không phải lặp sự kiện.
+- Dùng lại nguyên văn hoặc gần giống nguyên văn phần diễn biến hành động/camera cho nhiều VIDEO chỉ bằng cách đổi ID. Mỗi prompt phải phản ánh đúng nhịp hành động riêng của clip. Ngoại lệ bắt buộc: đoạn trạng thái bàn giao SCENE_SETTING_END clip N ↔ Start frame prompt clip N+1 được phép lặp nguyên văn theo mục 3A; đây không phải lặp sự kiện.
 
 MULTI-SHOT VIDEO CONTAINER
 Một VIDEO không bắt buộc tương ứng với duy nhất một shot.
@@ -243,7 +274,7 @@ Chỉ gom nhiều camera beat liên tiếp vào cùng một VIDEO khi chúng thu
 Cho phép hard cut, match cut, whip-pan transition, rack-focus transition, thay đổi shot size, thay đổi angle hoặc thay đổi camera position bên trong cùng một VIDEO.
 Khi VIDEO có nhiều camera beat, phải mô tả rõ trình tự thực hiện và thời lượng tương đối của từng beat.
 Không tự tách thành VIDEO mới chỉ vì camera đổi góc.
-Chỉ tách thành VIDEO mới khi tổng hành động không thể đọc rõ trong duration, có scene/location change đáng kể, continuity state thay đổi lớn hoặc chuỗi camera trở nên quá phức tạp để generator thực hiện ổn định.
+Chỉ tách thành VIDEO mới khi tổng hành động không thể đọc rõ trong duration, có scene/location change đáng kể, continuity state thay đổi lớn hoặc chuỗi camera trở nên quá phức tạp để generator thực hiện ổn định — scene/location change đáng kể luôn kéo theo một SHOT mới (và do đó một SCENE_SETTING_START mới, xem mục 3).
 Mỗi VIDEO vẫn phải có một dominant dramatic purpose và một end state rõ ràng để clip tiếp theo kế thừa continuity.
 
 5. THỨ TỰ ITEM
@@ -252,66 +283,74 @@ Thứ tự vật lý trong root array là bắt buộc:
 
 1. Toàn bộ CHARACTER, theo thứ tự nhân vật được xác lập khi phân tích kịch bản.
 2. Toàn bộ LOCATION, theo thứ tự bối cảnh được xác lập khi phân tích kịch bản.
-3. Toàn bộ VIDEO, theo đúng timeline câu chuyện: SHOT tăng dần, trong mỗi SHOT thì CLIP tăng dần.
+3. Sau đó, theo đúng timeline câu chuyện (SHOT tăng dần, trong mỗi SHOT thì CLIP tăng dần), xen kẽ SCENE_SETTING và VIDEO theo đúng thứ tự chúng được tạo ra: SCENE_SETTING_START của SHOT (chỉ xuất hiện một lần, ngay trước VIDEO clip 01 của SHOT đó) → VIDEO clip 01 → SCENE_SETTING_END của clip 01 → VIDEO clip 02 → SCENE_SETTING_END của clip 02 → ... → hết SHOT đó, sang SHOT kế tiếp lại bắt đầu bằng một SCENE_SETTING_START mới.
 
 Mẫu:
 
 CHARACTER...
 → LOCATION...
+→ SHOT_01_CLIP_01_START (SCENE_SETTING_START)
 → SHOT_01_CLIP_01_VIDEO
+→ SHOT_01_CLIP_01_END (SCENE_SETTING_END)
 → SHOT_01_CLIP_02_VIDEO
+→ SHOT_01_CLIP_02_END (SCENE_SETTING_END)
+→ SHOT_02_CLIP_01_START (SCENE_SETTING_START, SHOT mới)
 → SHOT_02_CLIP_01_VIDEO
 → tiếp tục cho đến hết timeline.
 
 Không được:
-- xen CHARACTER hoặc LOCATION vào giữa block VIDEO;
-- nhóm/sắp xếp VIDEO theo nhân vật, location hoặc alphabet;
-- xuất clip sau trước clip trước;
-- tạo bất kỳ item nào ngoài CHARACTER, LOCATION và VIDEO.
+- xen CHARACTER hoặc LOCATION vào giữa block SCENE_SETTING/VIDEO;
+- nhóm/sắp xếp SCENE_SETTING hoặc VIDEO theo nhân vật, location hoặc alphabet;
+- xuất clip sau trước clip trước, hoặc xuất SCENE_SETTING_END của một clip trước khi VIDEO clip đó xuất hiện;
+- tạo bất kỳ item nào ngoài CHARACTER, LOCATION, SCENE_SETTING_START, SCENE_SETTING_END và VIDEO.
 
 6. QUY TẮC THAM CHIẾU
 
 - CHARACTER và LOCATION luôn có ref = [].
-- VIDEO.ref chỉ chứa đúng các CHARACTER và LOCATION tương ứng thực sự xuất hiện trong video.
+- SCENE_SETTING_START.ref chỉ chứa CHARACTER và LOCATION thực sự xuất hiện ở trạng thái khởi đầu SHOT, đúng thứ tự CHARACTER trước rồi LOCATION sau.
+- SCENE_SETTING_END.ref chỉ chứa CHARACTER thực sự xuất hiện, cộng đúng MỘT phần tử type "SCENE_SETTING_START" trỏ tới boundary khởi đầu của chính clip đó.
+- VIDEO.ref đúng 2 phần tử: {"type": "SCENE_SETTING_START"} rồi {"type": "SCENE_SETTING_END"}, theo đúng cơ chế mục 3.
 - Mỗi phần tử ref có đúng hai field: id và type.
-- ref.type chỉ được là CHARACTER hoặc LOCATION và phải trùng type của item được tham chiếu.
+- QUY TẮC CHUNG: ref.type phải trùng type khai báo gốc của item được tham chiếu (nơi item đó được định nghĩa lần đầu trong array).
+- NGOẠI LỆ DUY NHẤT: khi VIDEO clip N (N ≥ 2) hoặc SCENE_SETTING_END của clip N tham chiếu tới boundary khởi đầu của chính nó mà boundary đó vật lý là SCENE_SETTING_END của clip N-1 (được tái sử dụng làm start theo mục 3), phần tử ref đó ghi type "SCENE_SETTING_START" theo VAI TRÒ hiện tại, dù type khai báo gốc của chính item đó (tại nơi nó được định nghĩa, ở clip N-1) vẫn là "SCENE_SETTING_END". Đây là ngoại lệ DUY NHẤT được phép lệch giữa ref.type và type khai báo gốc trong toàn bộ file.
 - Mọi ref.id phải tồn tại trong cùng file.
-- Không duplicated ref trong cùng một VIDEO.
-- Không broken reference, circular reference hoặc forward reference tới asset không tồn tại.
-- Mọi CHARACTER trong VIDEO.ref phải thực sự nhìn thấy trong clip.
-- LOCATION trong VIDEO.ref phải là bối cảnh thực tế nhìn thấy của clip.
-- Không thêm asset “để dự phòng”, không thêm toàn bộ cast, không thêm location chỉ được nhắc tới.
-- Nếu cùng một clip diễn ra qua nhiều khu vực nhưng vẫn là một chuyển động liên tục, chỉ ref các LOCATION asset thực sự nhìn thấy. Nếu có scene change rõ ràng, phải tách thành VIDEO khác.
+- Không duplicated ref trong cùng một item.
+- Không broken reference hoặc circular reference. Forward reference (tham chiếu tới item xuất hiện SAU trong array) KHÔNG được phép, trừ đúng ngoại lệ: VIDEO clip 01 và SCENE_SETTING_END clip 01 đều ref SCENE_SETTING_START cùng SHOT — item đó luôn được định nghĩa TRƯỚC theo đúng thứ tự mục 5 nên không phát sinh forward reference thật.
+- Mọi CHARACTER trong ref phải thực sự nhìn thấy ở đúng trạng thái/clip liên quan.
+- LOCATION trong SCENE_SETTING_START.ref phải là bối cảnh thực tế nhìn thấy ở trạng thái khởi đầu SHOT.
+- Không thêm asset "để dự phòng", không thêm toàn bộ cast, không thêm location chỉ được nhắc tới.
+- Nếu cùng một clip diễn ra qua nhiều khu vực nhưng vẫn là một chuyển động liên tục, chỉ ref các CHARACTER/LOCATION asset thực sự nhìn thấy (qua đúng SCENE_SETTING liên quan). Nếu có scene change rõ ràng, phải tách thành SHOT khác (kéo theo SCENE_SETTING_START mới, xem mục 3).
 
 7. QUY TẮC FIELD PROMPT
 
 - CHARACTER: chỉ Character Prompt.
 - LOCATION: chỉ Location Prompt.
+- SCENE_SETTING_START/SCENE_SETTING_END: chỉ mô tả trạng thái tĩnh (ảnh), không chứa diễn biến hành động hay camera plan.
 - VIDEO: chỉ Video Prompt dùng trực tiếp để gen video.
 - Không ghép nhiều loại prompt vào cùng một field.
-- Không tạo prompt riêng cho START FRAME hoặc END FRAME.
 - Không đưa JSON metadata hoặc lời giải thích về schema vào prompt.
 - Các thông tin quan trọng như hành động, nhân vật, bối cảnh, camera, lens, ánh sáng, motion, continuity và cinematic style phải được diễn đạt tự nhiên ngay trong VIDEO prompt.
-- Nếu clip tiếp nối clip trước, mô tả continuity bằng ngôn ngữ nội dung cụ thể, không dùng ID/boundary giả làm asset tham chiếu.
+- Nếu clip tiếp nối clip trước, mô tả continuity bằng ngôn ngữ nội dung cụ thể, khớp với prompt của SCENE_SETTING_END/START tương ứng đã ref — không tự bịa thêm chi tiết mâu thuẫn với prompt của item đó.
 - Duration được viết trong VIDEO prompt phải khớp chính xác field duration của item đó.
 
 8. KIỂM TRA BẮT BUỘC TRƯỚC KHI LƯU
 
 - Root là array JSON hợp lệ.
-- Thứ tự vật lý đúng tuyệt đối: toàn bộ CHARACTER → toàn bộ LOCATION → toàn bộ VIDEO theo timeline.
-- CHARACTER/LOCATION có đúng 5 field: id, type, ref, prompt, duration. VIDEO có đúng 7 field: id, type, ref, prompt, duration, shot, clip.
+- Thứ tự vật lý đúng tuyệt đối theo mục 5: toàn bộ CHARACTER → toàn bộ LOCATION → SCENE_SETTING/VIDEO xen kẽ đúng timeline.
+- CHARACTER/LOCATION/SCENE_SETTING_START/SCENE_SETTING_END có đúng 5 field: id, type, ref, prompt, duration. VIDEO có đúng 9 field: id, type, ref, prompt, duration, shot, clip, aspectRatio, frameRate.
 - Không có field success hoặc field bổ sung.
 - VIDEO.shot và VIDEO.clip là số nguyên, khớp chính xác với số XX/YY trong chính id SHOT_XX_CLIP_YY_VIDEO của item đó.
-- type chỉ thuộc enum CHARACTER | LOCATION | VIDEO.
-- Không có type, id hoặc ref nào tạo SCENE_SETTING_START, SCENE_SETTING_END, START FRAME item, END FRAME item hoặc temporal boundary item.
+- VIDEO.aspectRatio chỉ nhận "9:16" hoặc "16:9", nhất quán giữa mọi VIDEO cùng file trừ khi cấu hình yêu cầu khác. VIDEO.frameRate là số nguyên fps hợp lệ.
+- type chỉ thuộc enum CHARACTER | LOCATION | SCENE_SETTING_START | SCENE_SETTING_END | VIDEO.
 - Không duplicated ID.
 - ref luôn là array; mỗi phần tử ref chỉ có id và type.
-- CHARACTER và LOCATION có ref = [] và duration = 0.
+- CHARACTER và LOCATION có ref = [] và duration = 0. SCENE_SETTING_START/END có duration = 0.
 - VIDEO có duration hợp lệ theo cấu hình ở PHẦN trên.
-- Mọi VIDEO.ref chỉ gồm CHARACTER và LOCATION thực sự xuất hiện trong chính clip, theo thứ tự CHARACTER trước rồi LOCATION.
-- Không VIDEO nào tham chiếu VIDEO khác hoặc item ngoài CHARACTER/LOCATION.
-- Mọi ref.id tồn tại và ref.type trùng type thực của item được tham chiếu.
-- Cast và LOCATION trong ref khớp chính xác nội dung prompt của VIDEO.
+- Mỗi SHOT có đúng một SCENE_SETTING_START (ở clip 01) và mỗi VIDEO có đúng một SCENE_SETTING_END mới do chính nó tạo — không thiếu, không thừa, không dùng chung SCENE_SETTING_END giữa hai VIDEO khác nhau.
+- Từ clip 02 trở đi trong cùng SHOT, ref khởi đầu của VIDEO/SCENE_SETTING_END trỏ ĐÚNG tới id của SCENE_SETTING_END thuộc clip liền trước, với ref.type ghi "SCENE_SETTING_START" (ngoại lệ mục 6) — không tạo SCENE_SETTING_START mới thừa cho các clip này.
+- VIDEO.ref đúng 2 phần tử theo đúng thứ tự SCENE_SETTING_START rồi SCENE_SETTING_END; không VIDEO nào tham chiếu VIDEO khác, CHARACTER/LOCATION trực tiếp, hoặc item ngoài schema.
+- Mọi ref.id tồn tại; ref.type trùng type khai báo gốc của item được tham chiếu, TRỪ đúng ngoại lệ đã nêu ở mục 6.
+- Cast và LOCATION trong SCENE_SETTING_START khớp chính xác nội dung prompt của chính SCENE_SETTING_START đó và của VIDEO clip 01 tương ứng.
 - Không thiếu CHARACTER đang hiện diện; không thừa nhân vật chỉ được nhắc tới hoặc ngoài khung hình.
 - Không thiếu LOCATION thực tế; không thừa location không nhìn thấy.
 - Camera, lens, ánh sáng, weather, costume, identity và prop count/ownership không tự thay đổi ngoài diễn biến cho phép; screen direction phải phù hợp hình chiếu từ đường camera thực tế, không được dùng để ép nhân vật/đạo cụ đổi vị trí vật lý.
@@ -325,21 +364,21 @@ Không được:
 - Đạo cụ được chuyển giao ở recipient-ready orientation phù hợp mục đích, hoặc có thao tác chỉnh hướng rõ ràng trước khi sử dụng. Không mặc định phải xoay 180 degrees hay phải quay mặt trước về camera. Ngoại lệ có chủ ý phải được kịch bản cho phép và mô tả rõ.
 - Không có đạo cụ nào tự lật, tự xoay, đổi mặt, đổi đầu, đổi tay hoặc đổi chủ sở hữu giữa các camera beat/clip. Mọi thay đổi phải có diễn biến vật lý tương ứng.
 - Chiều chữ, số, biểu tượng và giao diện nhất quán với bề mặt đạo cụ và góc nhìn thực tế; không lật gương nội dung ngoài ý muốn, không nhầm nội dung nhìn ngược từ camera đối diện với đạo cụ bị đặt sai hướng đối với người sử dụng.
-- Start frame và end frame khóa nhất quán hướng đạo cụ, điểm cầm, tay giữ, người giữ hoặc điểm đỡ và trạng thái chức năng; clip tiếp theo kế thừa đúng các trạng thái này.
-- Clip nối tiếp kế thừa hợp lý trạng thái thực tế được mô tả ở cuối clip trước.
-- Với mọi cặp clip cùng SHOT liền kề (clip YY và YY+1 cùng shot XX), start frame mô tả ở đầu prompt clip YY+1 khớp CHÍNH XÁC với end frame mô tả ở cuối prompt clip YY (vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, motion phase).
-- Mỗi VIDEO prompt có đủ 7 mục bắt buộc tại phần 4, gồm rõ ràng 3 phần: start frame, diễn biến hành động, end frame.
-- So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có diễn biến hành động/camera riêng phù hợp timeline. Cho phép lặp nguyên văn trạng thái bàn giao giữa hai clip liền kề; cấm lặp lại sự kiện đã hoàn tất.
+- Start frame và end frame khóa nhất quán hướng đạo cụ, điểm cầm, tay giữ, người giữ hoặc điểm đỡ và trạng thái chức năng; clip tiếp theo kế thừa đúng các trạng thái này qua đúng SCENE_SETTING_END được tái sử dụng.
+- Clip nối tiếp kế thừa hợp lý trạng thái thực tế được mô tả ở SCENE_SETTING_END của clip trước.
+- Với mọi cặp clip cùng SHOT liền kề (clip YY và YY+1 cùng shot XX), prompt của SCENE_SETTING_END clip YY khớp CHÍNH XÁC với start frame mô tả ở đầu prompt VIDEO clip YY+1 (vị trí, pose, gaze, biểu cảm, costume, đạo cụ, camera, motion phase).
+- Mỗi VIDEO prompt có đủ 3 phần bắt buộc tại mục 4: start frame, diễn biến hành động, end frame; mỗi SCENE_SETTING_START/END prompt là một trạng thái tĩnh, không lẫn diễn biến hành động.
+- So sánh chéo toàn bộ VIDEO prompt: không có hai prompt giống hệt hoặc gần giống nhau chỉ khác ID; mỗi prompt có diễn biến hành động/camera riêng phù hợp timeline. Cho phép lặp nguyên văn trạng thái bàn giao giữa SCENE_SETTING_END và VIDEO prompt liền kề; cấm lặp lại sự kiện đã hoàn tất.
 - So sánh chéo toàn bộ CHARACTER prompt và LOCATION prompt: không trùng lặp sai nhận diện hoặc mâu thuẫn thuộc tính.
-- Kiểm tra riêng từng điểm nối cùng SHOT theo mục 3A: trạng thái bàn giao được mô tả cụ thể ở cả hai đầu, không bỏ chi tiết quan trọng; pha chi/bước chân, trọng tâm, tiếp xúc đạo cụ và camera motion khớp; hành động đầu clip sau phát triển tiếp chứ không reset hoặc replay.
+- Kiểm tra riêng từng điểm nối cùng SHOT theo mục 3A: trạng thái bàn giao được mô tả cụ thể ở cả SCENE_SETTING_END và VIDEO tiếp theo, không bỏ chi tiết quan trọng; pha chi/bước chân, trọng tâm, tiếp xúc đạo cụ và camera motion khớp; hành động đầu clip sau phát triển tiếp chứ không reset hoặc replay.
 - Kiểm tra sơ đồ bối cảnh: actor/target/đạo cụ có địa chỉ vật lý nhất quán theo mốc cố định; đổi camera không làm đổi chỗ, đổi hướng chức năng hoặc đổi tay. Đường đi nối được vị trí đầu–cuối, không xuyên vật cản hay vòng lại một góc đã đi qua ngoài ý muốn.
 - Kiểm tra từng rack focus: cả đối tượng nhả nét và nhận nét có nằm trong cùng đường nhìn không? Có vô tình yêu cầu thấy người phía sau máy hoặc xuyên vật che không? Nếu có, sửa vị trí máy hoặc transition trước khi lưu.
 - Kiểm tra từng thay đổi lens, framing và camera position: có cut, zoom hoặc đường máy tương ứng và đủ thời gian không? Camera cuối clip trước và đầu clip sau phải cùng trạng thái; chuyển góc mới chỉ bắt đầu sau điểm nối đã khớp.
 - Kiểm tra timeline từng VIDEO: thời lượng thoại theo nhịp tự nhiên, hành động tuần tự, phản ứng và camera đều nằm trong duration; các thao tác song song phải khả thi. Câu bắt đầu muộn vẫn phải đủ thời gian kết thúc; không nhồi thoại để ép đạt end frame.
-- Nếu tách thêm clip vì thiếu thời gian: mọi lời thoại/sự kiện vẫn đầy đủ, không lặp; ID, shot, clip, duration và thứ tự array được cập nhật đồng bộ; mọi điểm nối mới cũng phải được kiểm tra.
-- Phân biệt continuity dự kiến bằng chữ với continuity video thực tế. Chỉ nhắc ảnh khởi đầu được cung cấp khi thật sự có; không tuyên bố đã truyền frame, đã xem video hoặc đã kiểm chứng khớp hình ảnh khi mới viết prompt.
+- Nếu tách thêm clip vì thiếu thời gian: mọi lời thoại/sự kiện vẫn đầy đủ, không lặp; ID, shot, clip, duration, SCENE_SETTING liên quan và thứ tự array được cập nhật đồng bộ; mọi điểm nối mới cũng phải được kiểm tra.
+- Phân biệt continuity dự kiến bằng chữ (SCENE_SETTING là asset thiết kế trước) với continuity video thực tế (chỉ tồn tại sau khi video đã render, ngoài schema này) — xem mục 3E.
 - ĐỘ BAO PHỦ: đối chiếu toàn bộ timeline gốc theo đúng thứ tự; mọi sự kiện/hành động chính từ đầu đến cuối phải có ít nhất một VIDEO tương ứng.
-- Đếm tổng CHARACTER, LOCATION và VIDEO để báo cáo sau khi tạo file.
+- Đếm tổng CHARACTER, LOCATION, SCENE_SETTING_START, SCENE_SETTING_END và VIDEO để báo cáo sau khi tạo file.
 
 9. NGUYÊN TẮC ỔN ĐỊNH
 
@@ -350,8 +389,8 @@ Khi người dùng đổi kịch bản, duration, cách chia clip, cách nhóm c
 
 Nguyên tắc tuyệt đối:
 
-JSON CHỈ CÓ BA TYPE: CHARACTER, LOCATION VÀ VIDEO.
-VIDEO.ref CHỈ THAM CHIẾU CHARACTER VÀ LOCATION THỰC SỰ XUẤT HIỆN TRONG CHÍNH VIDEO ĐÓ.
-KHÔNG TẠO HOẶC THAM CHIẾU SCENE_SETTING, START FRAME, END FRAME HAY TEMPORAL BOUNDARY ITEM.
-CONTINUITY GIỮA CÁC CLIP ĐƯỢC MÔ TẢ TRỰC TIẾP TRONG VIDEO PROMPT, KHÔNG ĐƯỢC BIỂU DIỄN BẰNG ITEM TRUNG GIAN.
-CHỈ THÔNG BÁO “Đã hoàn thành” KHI FILE “_full.json” ĐÃ ĐƯỢC TẠO ĐẦY ĐỦ VÀ ĐÍNH KÈM TRONG CHÍNH LƯỢT TRẢ LỜI.
+JSON CÓ ĐÚNG NĂM TYPE: CHARACTER, LOCATION, SCENE_SETTING_START, SCENE_SETTING_END VÀ VIDEO.
+VIDEO.ref CHỈ THAM CHIẾU ĐÚNG 2 PHẦN TỬ: SCENE_SETTING_START (VAI TRÒ KHỞI ĐẦU CỦA CHÍNH CLIP) RỒI SCENE_SETTING_END (ITEM MỚI DO CHÍNH CLIP TẠO RA).
+SCENE_SETTING_START CHỈ TỒN TẠI Ở CLIP 01 CỦA MỖI SHOT; TỪ CLIP 02 TRỞ ĐI, SCENE_SETTING_END CỦA CLIP LIỀN TRƯỚC ĐƯỢC TÁI SỬ DỤNG LÀM VAI TRÒ START (REF.TYPE GHI "SCENE_SETTING_START", TYPE KHAI BÁO GỐC CỦA CHÍNH ITEM ĐÓ VẪN LÀ "SCENE_SETTING_END").
+CONTINUITY GIỮA CÁC CLIP ĐƯỢC MÔ TẢ TRỰC TIẾP TRONG VIDEO PROMPT VÀ TRONG PROMPT CỦA SCENE_SETTING_START/END TƯƠNG ỨNG.
+CHỈ THÔNG BÁO "Đã hoàn thành" KHI FILE "_full.json" ĐÃ ĐƯỢC TẠO ĐẦY ĐỦ VÀ ĐÍNH KÈM TRONG CHÍNH LƯỢT TRẢ LỜI.

@@ -251,11 +251,11 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
     );
     await page.waitForTimeout(3000);
   }
-  await captureSnapshot(
-    page,
-    "after-upload attachment",
-    "after-upload attachment",
-  );
+  // await captureSnapshot(
+  //   page,
+  //   "after-upload attachment",
+  //   "after-upload attachment",
+  // );
 
   // Xác nhận qua thực tế (job 35941268, file 97KB/~2371 dòng): ChatAI trả
   // lời "file bạn gửi chưa chứa kịch bản phim" dù file THẬT SỰ có kịch bản ở
@@ -1316,9 +1316,9 @@ export async function askChatAI(
     // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
     // (CHATAI_MODE) — xem docstring selectChatAIModeFromConfig.
     await selectChatAIModeFromConfig(page, jobId);
-    await captureSnapshot(page, jobId + "_askChatAI-before-send", "askChatAI-before-send", {
-      includeHtml: true,
-    });
+    // await captureSnapshot(page, jobId + "_askChatAI-before-send", "askChatAI-before-send", {
+    //   includeHtml: true,
+    // });
     if (attachmentPath) {
       await uploadAttachment(page, attachmentPath);
     }

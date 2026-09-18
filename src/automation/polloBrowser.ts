@@ -53,3 +53,55 @@ export const getPolloImageBrowserContext = createBrowserContextManager(
   "pollo-browser-image",
   'Chạy "npm run login-pollo" trước khi dùng tính năng pollo.ai.',
 );
+
+/**
+ * Giới hạn CỨNG tổng số task pollo.ai (ẢNH + VIDEO cộng lại) đang thực sự
+ * chạy ĐỒNG THỜI trong CHÍNH process này — tài khoản pollo.ai cho phép tối
+ * đa 8 task song song (theo xác nhận người dùng).
+ *
+ * KHÁC với config.polloImageConcurrency/polloVideoConcurrency (số worker của
+ * RIÊNG từng hàm gọi trong storyboardPipeline.ts, xem generateVideosForFilePollo/
+ * generateReferenceImagesForFileViaPollo/generateSceneImagesForFileViaPollo)
+ * — 2 config đó không biết về nhau, hàng đợi ẢNH và hàng đợi VIDEO chạy song
+ * song ĐỘC LẬP (2 browser context riêng ở trên) nên cộng lại vẫn có thể vượt
+ * 8 nếu chỉ dựa vào config tĩnh. Gate CHUNG này đếm SỐ TASK THẬT đang chạy
+ * (biến trong bộ nhớ, CHIA SẺ giữa mọi lời gọi withPolloTaskSlot bất kể ảnh
+ * hay video) và CHẶN LẠI (chờ có slot trống) trước khi cho phép 1 task mới
+ * bắt đầu — bảo đảm KHÔNG BAO GIỜ vượt quá giới hạn thật dù worker-pool nào
+ * cấu hình bao nhiêu.
+ *
+ * CHỈ đúng trong 1 process (biến trong bộ nhớ) — 2 process/2 máy khác nhau
+ * dùng chung 1 tài khoản (xem POLLO_VIDEO_CONCURRENCY/POLLO_IMAGE_CONCURRENCY
+ * trong .env.example) vẫn phải tự chia tĩnh cho từng máy, gate này không biết
+ * gì về process khác.
+ */
+const MAX_POLLO_ACCOUNT_PARALLEL_TASKS = 8;
+let activePolloTaskCount = 0;
+
+export function getActivePolloTaskCount(): number {
+  return activePolloTaskCount;
+}
+
+/**
+ * Chờ tới khi có slot trống (activePolloTaskCount < MAX_POLLO_ACCOUNT_PARALLEL_TASKS)
+ * rồi mới chạy fn() — giữ slot suốt lúc fn() đang chạy, tự trả lại slot ngay
+ * khi fn() xong (thành công hay lỗi đều trả, xem finally). Bọc NGAY quanh
+ * lệnh gen thật (generateImagePollo/generateVideoPollo) — không cần bọc các
+ * bước chuẩn bị khác vì 2 hàm đó tự quản lý toàn bộ vòng đời 1 task (mở tab
+ * riêng, upload, generate, chờ, đóng tab) bên trong lệnh gọi.
+ *
+ * Điều kiện while + activePolloTaskCount++ không có "await" ở giữa nên AN
+ * TOÀN dù nhiều worker gọi đồng thời (JS đơn luồng, không thể xen kẽ 2
+ * statement liền nhau) — không cần lock/mutex riêng.
+ */
+export async function withPolloTaskSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (activePolloTaskCount >= MAX_POLLO_ACCOUNT_PARALLEL_TASKS) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  activePolloTaskCount++;
+  try {
+    return await fn();
+  } finally {
+    activePolloTaskCount--;
+  }
+}

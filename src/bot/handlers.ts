@@ -20,7 +20,9 @@ import {
   confirmImageGeneration,
   confirmImageGenerationPollo,
   confirmSceneGeneration,
+  confirmSceneGenerationPollo,
   confirmVideoGeneration,
+  confirmVideoGenerationComfy,
   confirmVideoGenerationPollo,
   continueFailedStoryboardImages,
   enqueueJob,
@@ -1592,6 +1594,26 @@ export function registerHandlers(bot: Telegraf): void {
       .catch(() => {});
   });
 
+  // GIỐNG confirmScene HỆT nhưng đẩy job dùng pollo.ai (xem
+  // confirmSceneGenerationPollo/StoryboardSceneImagesPolloJob trong queue.ts)
+  // — nút "Tạo ảnh scene" được gửi ngay sau khi ảnh CHARACTER/LOCATION (Pollo)
+  // xong (xem processPolloImageQueue).
+  bot.action(/^confirmScenePollo:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmSceneGenerationPollo(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo ảnh scene.");
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo ảnh scene.")
+      .catch(() => {});
+  });
+
   // Nút "Tạo video" trong tin nhắn xác nhận sau khi ảnh SCENE_SETTING đã tạo
   // xong (xem notifyStoryboardImagesAIVideoResult/createVideoConfirmation
   // trong queue.ts) — callback_data dạng "confirmVideo:<id>", tra lại
@@ -1621,6 +1643,27 @@ export function registerHandlers(bot: Telegraf): void {
     if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     const confirmId = ctx.match[1];
     const ok = confirmVideoGenerationPollo(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo video.");
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo video.")
+      .catch(() => {});
+  });
+
+  // GIỐNG confirmVideoPollo HỆT nhưng đẩy job dùng ComfyUI (xem
+  // confirmVideoGenerationComfy/StoryboardVideoComfyJob trong queue.ts) — nút
+  // "Tạo video (Comfy)" gửi CÙNG LÚC với "Tạo video (Pollo)" ngay sau khi ảnh
+  // CHARACTER/LOCATION xong (processPolloImageQueue) — ComfyUI KHÔNG có bước
+  // "Tạo ảnh" riêng, dùng LẠI CHÍNH ảnh đó.
+  bot.action(/^confirmVideoComfy:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmVideoGenerationComfy(confirmId);
     if (!ok) {
       await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
         show_alert: true,

@@ -151,6 +151,43 @@ export const config = {
   polloStorageStatePath: path.resolve(
     process.env.POLLO_STORAGE_STATE_PATH ?? "./storage/pollo-session.json",
   ),
+  // Số video Pollo gen SONG SONG tối đa (worker-pool, xem
+  // generateVideosForFilePollo trong storyboardPipeline.ts) — tài khoản
+  // pollo.ai cho phép tối đa 8 task song song (theo xác nhận người dùng),
+  // mặc định 2 (chừa biên an toàn cho job ảnh Pollo chạy chung tài khoản —
+  // xem thêm withPolloTaskSlot trong polloBrowser.ts, gate CHUNG chặn cứng
+  // tổng số task ảnh+video không vượt quá giới hạn thật dù config này đặt
+  // bao nhiêu).
+  // QUAN TRỌNG khi 2 MÁY KHÁC NHAU cùng dùng CHUNG 1 tài khoản pollo.ai (2
+  // process độc lập, không chia sẻ được biến đếm trong bộ nhớ với nhau): mỗi
+  // máy phải tự đặt biến này thành 1 phần CỐ ĐỊNH của tổng số task muốn dùng
+  // (vd 1 + 1, hoặc tỷ lệ khác tuỳ máy) — KHÔNG để cả 2 máy cùng giữ mặc
+  // định, sẽ cộng dồn vượt quá giới hạn thật của tài khoản.
+  polloVideoConcurrency: Number(process.env.POLLO_VIDEO_CONCURRENCY ?? 2),
+  // Số ảnh Pollo gen SONG SONG tối đa (worker-pool) — dùng CHUNG cho cả
+  // generateReferenceImagesForFileViaPollo (CHARACTER/LOCATION) và
+  // generateSceneImagesForFileViaPollo (SCENE_SETTING_START/END, xem
+  // storyboardPipeline.ts) vì 2 bước này không bao giờ chạy CÙNG LÚC với
+  // nhau (chạy 2 job/2 lượt xác nhận nối tiếp, xem processPolloImageQueue
+  // trong queue.ts) — nhưng CÓ THỂ chạy CÙNG LÚC với hàng đợi VIDEO Pollo
+  // (2 hàng đợi độc lập). Khi tính tổng task đồng thời tối đa trên tài
+  // khoản pollo.ai, cộng polloImageConcurrency + polloVideoConcurrency
+  // (không phải chỉ 1 trong 2) — và cùng lưu ý chia tĩnh cho 2 máy khác
+  // nhau như polloVideoConcurrency ở trên.
+  polloImageConcurrency: Number(process.env.POLLO_IMAGE_CONCURRENCY ?? 2),
+
+  // Tính năng gen video qua ComfyUI (workflow LTX-2 frame-to-video, self-host
+  // — xem src/automation/comfyui.ts) — PROVIDER KHÁC HẲN 2 provider trên
+  // (AIVideo/pollo.ai): gọi THẲNG REST API của chính ComfyUI (server chạy
+  // local/mạng nội bộ, KHÔNG cần Playwright/trình duyệt, không cần session
+  // đăng nhập gì cả — ComfyUI mặc định không có auth).
+  comfyUIBaseUrl: process.env.COMFYUI_BASE_URL ?? "http://127.0.0.1:8188",
+  // Thời gian tối đa chờ 1 video ComfyUI generate xong (ms). Mặc định 20
+  // phút — cùng bậc với generationTimeoutMs của AIVideo/pollo, workflow
+  // LTX-2 chạy trên GPU cục bộ có thể nhanh/chậm rất khác tuỳ phần cứng.
+  comfyUIGenerationTimeoutMs: Number(
+    process.env.COMFYUI_GENERATION_TIMEOUT_MS ?? 20 * 60 * 1000,
+  ),
 };
 
 // if (config.admins.length === 0) {
