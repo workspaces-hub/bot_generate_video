@@ -2525,8 +2525,7 @@ async function attemptGenerateVideo(
     } else if (referenceImagePaths.length > 0 && !deepLink) {
       await switchModeIfNeeded(page, "Reference to Video");
     }
-
-    if (model && !deepLink?.includesModel) {
+    if (model ) {
       await dismissBlockingOverlays(page);
       await selectModel(page, model);
     }
@@ -2928,6 +2927,18 @@ async function attemptGenerateVideo(
     }
 
     await enableUnlimitedIfNotEnoughCredit(page, jobId);
+    const unlimitedSwitchLocator = page
+      .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+      .first();
+    const unlimitedCheckedBeforeGenerate = await unlimitedSwitchLocator
+        .getAttribute("aria-checked")
+        .catch(() => null);
+console.log(
+      `[pollo-video] Unlimited switch NGAY TRƯỚC khi bấm Generate: aria-checked="${unlimitedCheckedBeforeGenerate}"`,
+    );
+    await captureSnapshot(page, `${jobId}_before-generate`, "before-generate", {
+      includeHtml: true,
+    });
 
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();
