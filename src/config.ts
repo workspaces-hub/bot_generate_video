@@ -131,6 +131,19 @@ export const config = {
   chatAIMaxEffort:
     (process.env.CHATAI_MAX_EFFORT ?? "false").toLowerCase() === "true",
 
+  // Theo yêu cầu người dùng: chọn mode "Công việc"/Work hay "Trò chuyện"/Chat
+  // cho askChatAI/askChatAIWithInlineContent (chatAI.ts) — CHATAI_MODE=work
+  // thì chọn mode Work + model "GPT-6 Astra" (mức effort Medium, xem
+  // selectModelGPT6AstraMediumEffort); bất kỳ giá trị nào khác (mặc định,
+  // kể cả để trống) thì dùng Chat thường, KHÔNG chọn model riêng gì cả.
+  // Mặc định "chat" — mode Work có quota RIÊNG ("5-hour limit") dễ hết đột
+  // ngột, tách biệt khỏi quota Chat (xác nhận qua test thật), nên chỉ nên
+  // bật "work" khi biết chắc quota đó còn.
+  chatAIMode:
+    (process.env.CHATAI_MODE ?? "chat").toLowerCase() === "work"
+      ? "work"
+      : ("chat" as "work" | "chat"),
+
   // Tính năng gen ảnh/video qua pollo.ai — PROVIDER MỚI chạy SONG SONG với
   // AIVideo (hailuoai.video), không thay thế. Session/domain hoàn toàn riêng
   // — xem scripts/login-pollo.ts và src/automation/polloBrowser.ts.

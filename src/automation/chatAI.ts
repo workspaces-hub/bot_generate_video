@@ -9,6 +9,7 @@ import {
 } from "./chatAIBrowser";
 import {
   assistantMessageLocator,
+  chatModeToggleLocator,
   downloadButtonCandidates,
   downloadFileLinkLocator,
   effortLabelLocator,
@@ -304,6 +305,24 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       "[chatAI] Clipboard API bị chặn (Permissions-Policy), chuyển sang textarea.fill():",
       err instanceof Error ? err.message : err,
     );
+  }
+
+  // Xác nhận qua lỗi thật (job a22dba4a-da81-48a4-89c3-8603f849a8a9): panel
+  // xem trước "Library" (data-testid="screen-threadFlyOut", xem
+  // downloadAttachedFiles) vẫn còn MỞ từ lượt trước — panel này đóng KHÔNG
+  // đầy đủ nếu previewText đọc thất bại (downloadAttachedFiles chỉ bấm nút
+  // Close ở nhánh previewText THÀNH CÔNG). Khi panel còn mở, layout composer
+  // bị bóp hẹp lại khiến CẢ 4 candidate của promptTextareaCandidates (kể cả
+  // #prompt-textarea và textarea[name="prompt-textarea"]) đều resolve nhưng
+  // ở trạng thái ẨN (hidden) suốt 20s, throw "Không tìm thấy phần tử nào
+  // khớp". Đóng panel này TRƯỚC KHI tìm ô nhập, không tin lượt trước đã đóng
+  // đúng — an toàn, không tốn gì nếu panel không mở (click bị catch, bỏ qua).
+  const flyOutCloseButton = page.locator(
+    '[data-testid="screen-threadFlyOut"] [data-testid="close-button"]',
+  );
+  if (await flyOutCloseButton.first().isVisible({ timeout: 500 }).catch(() => false)) {
+    await flyOutCloseButton.first().click({ timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(300);
   }
 
   const textarea = await firstVisible(promptTextareaCandidates(page), 20_000);
@@ -738,8 +757,19 @@ async function downloadAttachedFiles(
           const filePath = path.join(config.chatAIResultsDir, fileName);
           await fs.promises.writeFile(filePath, previewText, "utf-8");
           savedPaths.push(filePath);
-          // Đóng panel xem trước lại cho gọn trước khi xử lý file tiếp theo
-          // (nếu có) — best-effort, không throw nếu không tìm thấy nút Close.
+        }
+
+        // SỬA (xác nhận qua lỗi thật, job a22dba4a-da81-48a4-89c3-8603f849a8a9):
+        // bước đóng panel TRƯỚC ĐÂY nằm TRONG nhánh `if (previewText)` — nếu
+        // đọc previewText thất bại (clipboard lỗi + innerText cũng lỗi/rỗng,
+        // xem log cảnh báo ở trên), panel "Library" bị bỏ mở LUÔN, làm bóp
+        // hẹp layout composer ở MỌI lượt sau, khiến sendMessage không tìm
+        // thấy ô nhập nào còn hiển thị (đã thêm lưới an toàn thứ 2 ngay đầu
+        // sendMessage, nhưng đóng sớm NGAY TẠI ĐÂY vẫn đúng hơn — không để
+        // trạng thái hỏng kéo dài qua các bước khác không liên quan). Đóng
+        // UNCONDITIONALLY mỗi khi panel đã thực sự mở (panelAppeared), không
+        // phụ thuộc việc đọc nội dung có thành công hay không.
+        if (panelAppeared) {
           await page
             .locator(
               '[data-testid="screen-threadFlyOut"] [data-testid="close-button"]',
@@ -973,6 +1003,58 @@ export async function selectWorkMode(page: Page, jobId: string): Promise<void> {
       err instanceof Error ? err.message : err,
     );
     await captureSnapshot(page, jobId, `selectWorkMode-fail-${Date.now()}`);
+  }
+}
+
+/**
+ * Chọn mode "Trò chuyện"/"Chat" (cùng radio group với selectWorkMode ở
+ * trên, xem chatModeToggleLocator) — theo yêu cầu người dùng: askChatAI/
+ * askChatAIWithInlineContent chuyển từ "Work" sang "Chat". Lý do đổi: mode
+ * "Work" có quota RIÊNG, tách biệt khỏi quota Chat thường ("5-hour limit" —
+ * xác nhận qua test thật lúc kiểm tra selectModelGPT6AstraMediumEffort, tài
+ * khoản báo "You're out of Work usage for now" dù chat thường vẫn dùng
+ * được) — dùng Chat tránh phụ thuộc vào quota riêng này. GPT-6 Astra (model
+ * đã thêm cho Work mode) KHÔNG tồn tại ở mode Chat nên KHÔNG còn gọi
+ * selectModelGPT6AstraMediumEffort ở đây nữa (xem 2 nơi gọi hàm này).
+ */
+export async function selectChatMode(page: Page, jobId: string): Promise<void> {
+  try {
+    const chatToggle = chatModeToggleLocator(page).first();
+    const alreadyOn =
+      (await chatToggle.getAttribute("aria-checked").catch(() => null)) ===
+      "true";
+    if (alreadyOn) return;
+
+    // Cùng lý do đã áp dụng ở selectWorkMode (modal-beacon có thể che toggle).
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(300);
+
+    await chatToggle.click({ timeout: 15_000 });
+  } catch (err) {
+    console.warn(
+      "[chatAI] Không chọn được mode 'Chat' (best-effort, bỏ qua):",
+      err instanceof Error ? err.message : err,
+    );
+    await captureSnapshot(page, jobId, `selectChatMode-fail-${Date.now()}`);
+  }
+}
+
+/**
+ * Chọn mode Chat/Work + model theo config.chatAIMode (CHATAI_MODE) — theo
+ * yêu cầu người dùng: dùng chung cho askChatAI/askChatAIWithInlineContent
+ * thay vì lặp lại if/else ở cả 2 nơi.
+ *
+ * - "work": selectWorkMode rồi selectModelGPT6AstraMediumEffort (model
+ *   "GPT-6 Astra" chỉ tồn tại ở mode Work — xem docstring hàm đó).
+ * - "chat" (mặc định): selectChatMode, không chọn model riêng gì (dùng model
+ *   mặc định của Chat) — né quota RIÊNG của Work ("5-hour limit").
+ */
+async function selectChatAIModeFromConfig(page: Page, jobId: string): Promise<void> {
+  if (config.chatAIMode === "work") {
+    await selectWorkMode(page, jobId);
+    await selectModelGPT6AstraMediumEffort(page, jobId);
+  } else {
+    await selectChatMode(page, jobId);
   }
 }
 
@@ -1231,32 +1313,25 @@ export async function askChatAI(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await selectWorkMode(page, jobId);
-    // Theo yêu cầu người dùng: askChatAI luôn chọn model "GPT-6 Astra" + mức
-    // effort "Medium" — thay cho selectMaxReasoningEffort cũ (chỉ chạy khi
-    // config.chatAIMaxEffort=true). PHẢI gọi SAU selectWorkMode — model này
-    // chỉ xuất hiện trong danh sách ở mode "Work" (xem docstring hàm).
-    await selectModelGPT6AstraMediumEffort(page, jobId);
+    // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
+    // (CHATAI_MODE) — xem docstring selectChatAIModeFromConfig.
+    await selectChatAIModeFromConfig(page, jobId);
+    await captureSnapshot(page, jobId + "_askChatAI-before-send", "askChatAI-before-send", {
+      includeHtml: true,
+    });
     if (attachmentPath) {
       await uploadAttachment(page, attachmentPath);
     }
 
-    // Xác nhận qua thực tế (job 38b68c7a): ChatAI có thể tự tin báo "Đã hoàn
-    // thành"/đính kèm đúng file "_full.json" NGAY CẢ KHI storyboard mới bao
-    // phủ một phần nhỏ kịch bản (vd 3/~14 sự kiện chính) — isComplete chỉ
-    // phát hiện đúng trường hợp ChatAI TỰ NHẬN chưa xong, không phát hiện
-    // được trường hợp ChatAI nhận NHẦM là đã xong. Vì vậy, lần đầu tiên
-    // isComplete = true, KHÔNG dừng ngay — bắt buộc thêm 1 lượt audit yêu
-    // cầu ChatAI tự đối chiếu lại toàn bộ file với kịch bản gốc trước khi
-    // thực sự chấp nhận là xong.
-    const AUDIT_MESSAGE =
-      "Trước khi coi là xong: hãy tự đối chiếu lại TOÀN BỘ file JSON storyboard vừa tạo với đúng kịch bản trong file nguồn đã gửi — liệt kê nội bộ từng sự kiện/hành động chính trong kịch bản theo đúng thứ tự và xác nhận MỖI sự kiện đó đã có ít nhất một continuity run/clip tương ứng trong file chưa. Nếu phát hiện BẤT KỲ đoạn nào của kịch bản (kể cả đoạn ở giữa hoặc cuối truyện) CHƯA được chuyển thành clip, hãy tiếp tục bổ sung ngay các continuity run còn thiếu và gửi lại TOÀN BỘ file JSON đầy đủ (không chỉ phần thêm), vẫn đặt tên chứa _full.json. Nếu đã xác nhận bao phủ đầy đủ toàn bộ kịch bản từ đầu đến cuối, trả lời ngắn gọn xác nhận lại, không cần gửi lại file.";
+    // Theo yêu cầu người dùng: BỎ bước audit riêng (trước đây bắt buộc thêm
+    // 1 lượt yêu cầu ChatAI tự đối chiếu lại toàn bộ file trước khi chấp
+    // nhận isComplete=true) — chỉ còn dựa thẳng vào isComplete (xem
+    // isCompletionText/isIncompleteText) để quyết định dừng hay tiếp tục.
     const CONTINUE_MESSAGE =
       "yes. chỉ gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json";
 
     let messageToSend = prompt;
     let downloadedFiles: string[] = [];
-    let auditRequested = false;
     let lastMessageCount = 0;
     // Theo yêu cầu người dùng (processChatAIQueue: fallback sang
     // askChatAIWithInlineContent khi askChatAI dính fileAccessError) — track
@@ -1349,34 +1424,27 @@ export async function askChatAI(
         continue;
       }
 
-      // Xác nhận qua log lỗi thật (ChatAI tự báo: "do giới hạn xử lý trong
-      // lượt này tôi mới serialize phần đầu storyboard. Cần tiếp tục mở rộng
-      // các continuity run còn lại"): gate isComplete này TRƯỚC ĐÂY bị comment
-      // out kèm break vô điều kiện ngay lượt đầu tiên — khiến vòng lặp gửi
-      // tiếp "yes"/continue bên dưới (vốn đã viết đúng) KHÔNG BAO GIỜ chạy,
-      // nhận storyboard DỞ DANG làm kết quả cuối bất cứ khi nào ChatAI cần
-      // hơn 1 lượt mới xong (thường xảy ra với kịch bản dài) — đây chính là
-      // nguyên nhân thật của toàn bộ chênh lệch "output ngắn hơn" đã thấy
-      // trước giờ, không phải do model/locale/prompt. Bật lại gate này.
-      downloadedFiles = result.downloadedFiles;
-      break;
+      // SỬA (xác nhận qua log lỗi thật, ChatAI tự báo: "do giới hạn xử lý
+      // trong lượt này tôi mới serialize phần đầu storyboard. Cần tiếp tục
+      // mở rộng các continuity run còn lại"): gate isComplete này TRƯỚC ĐÂY
+      // có 1 `break;` VÔ ĐIỀU KIỆN đặt ngay TRƯỚC dòng if (result.isComplete)
+      // — khiến khối if này (và toàn bộ nhánh "Chưa hoàn thiện" bên dưới,
+      // vốn đã viết đúng) là DEAD CODE, không bao giờ chạy tới. Vòng lặp
+      // LUÔN dừng và nhận storyboard DỞ DANG làm kết quả cuối ngay ở LƯỢT
+      // ĐẦU TIÊN, bất kể ChatAI có tự báo "chưa xong" hay không — đây chính
+      // là nguyên nhân thật của toàn bộ chênh lệch "output ngắn hơn" đã thấy
+      // trước giờ với kịch bản dài, không phải do model/locale/prompt. Xoá
+      // hẳn `break;` thừa đó (và dòng gán downloadedFiles thừa đi kèm — đã
+      // có đúng bên trong khối if dưới đây) để gate này THỰC SỰ chạy.
       if (result.isComplete) {
         // Ưu tiên file MỚI của lượt này (nếu có) làm kết quả hiện tại; nếu
-        // lượt này không đính kèm gì (vd chỉ xác nhận lại bằng lời sau lượt
-        // audit, không gửi lại file không đổi), GIỮ NGUYÊN file tốt nhất đã
-        // có từ lượt trước — không xoá oan.
+        // lượt này không đính kèm gì (vd chỉ xác nhận lại bằng lời), GIỮ
+        // NGUYÊN file tốt nhất đã có từ lượt trước — không xoá oan.
         if (result.downloadedFiles.length > 0) {
           for (const oldPath of downloadedFiles) {
             await fs.promises.unlink(oldPath).catch(() => {});
           }
           downloadedFiles = result.downloadedFiles;
-        }
-
-        if (!auditRequested) {
-          auditRequested = true;
-          await captureSnapshot(page, `${jobId}-before-audit`, "before-audit");
-          messageToSend = AUDIT_MESSAGE;
-          continue;
         }
         break;
       }
@@ -1583,11 +1651,9 @@ async function attemptAskChatAIWithInlineContent(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await selectWorkMode(page, jobId);
-    // Theo yêu cầu người dùng: askChatAIWithInlineContent luôn chọn model
-    // "GPT-6 Astra" + mức effort "Medium" — xem chú thích ở askChatAI/
-    // selectModelGPT6AstraMediumEffort.
-    await selectModelGPT6AstraMediumEffort(page, jobId);
+    // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
+    // — xem docstring selectChatAIModeFromConfig.
+    await selectChatAIModeFromConfig(page, jobId);
 
     const fileContent = attachmentPath
       ? await fs.promises.readFile(attachmentPath, "utf-8").catch(() => null)
@@ -1788,10 +1854,10 @@ export async function verifyVideo(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
-    await selectWorkMode(page, id);
-    if (config.chatAIMaxEffort) {
-      await selectMaxReasoningEffort(page);
-    }
+    // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
+    // — cùng helper dùng chung với askChatAI/askChatAIWithInlineContent, xem
+    // docstring selectChatAIModeFromConfig.
+    await selectChatAIModeFromConfig(page, id);
 
     // Upload video trước (liền trước, nếu có) → video hiện tại → rồi từng
     // ảnh tham chiếu ĐÚNG THỨ TỰ trong refs — theo yêu cầu người dùng.

@@ -4,11 +4,12 @@ PHẦN HỢP ĐỒNG XUẤT JSON CỐ ĐỊNH
 
 1. OUTPUT FILE
 
-BẮT BUỘC XỬ LÝ VÀ HOÀN TẤT NGAY TRONG LƯỢT TRẢ LỜI ĐẦU TIÊN — ƯU TIÊN CAO NHẤT:
-- Ngay khi nhận file/yêu cầu này, phải đọc toàn bộ kịch bản, phân tích Character Bible/Location Bible, chia shot/clip, viết prompt cho từng item và ghi ra file JSON hoàn chỉnh trong cùng một lượt trả lời.
-- Mọi phân tích nội bộ phải thực hiện ngầm. Không hiển thị Character Bible, Location Bible, shot list, camera plan, continuity analysis, negative prompt, kế hoạch xử lý hoặc thông báo tiến độ trước khi tạo file.
-- Lượt trả lời chỉ gồm: (1) một file JSON đính kèm có tên chứa “_full.json”; (2) câu “Đã hoàn thành” kèm thống kê số lượng CHARACTER, LOCATION và VIDEO.
-- Nếu JSON dài, vẫn phải tiếp tục ghi vào đúng cùng một file cho tới khi toàn bộ kịch bản được chuyển đổi đầy đủ. Không rút gọn, chia thành nhiều file, bỏ item, dừng chờ xác nhận hoặc tuyên bố hoàn thành khi chưa có file đầy đủ.
+QUY TRÌNH NHIỀU LƯỢT — ƯU TIÊN CAO NHẤT LÀ ĐỘ ĐẦY ĐỦ, KHÔNG PHẢI XONG TRONG 1 LƯỢT:
+- Ngay khi nhận file/yêu cầu này, đọc toàn bộ kịch bản, phân tích Character Bible/Location Bible, chia shot/clip, viết prompt cho từng item và bắt đầu ghi ra file JSON.
+- Mọi phân tích nội bộ phải thực hiện ngầm. Không hiển thị Character Bible, Location Bible, shot list, camera plan, continuity analysis, negative prompt hoặc kế hoạch xử lý.
+- KHÔNG bắt buộc xong trong đúng 1 lượt trả lời. Nếu 1 lượt xử lý không đủ để bao phủ toàn bộ kịch bản (kịch bản dài, nhiều nhân vật/bối cảnh/shot), CỨ DỪNG LẠI ở đúng tiến độ thực tế của lượt đó — KHÔNG rút gọn, KHÔNG bỏ item, KHÔNG bịa ra là đã xong để hoàn tất sớm.
+- Mỗi lượt CHƯA xong: đính kèm phần JSON đã làm được tới thời điểm đó (cùng 1 file, tên chứa “_full.json”, ghi đè/nối tiếp đúng file đó ở lượt sau — KHÔNG tạo file mới), kèm CÂU CHỮ RÕ RÀNG xác nhận CHƯA hoàn thành và sẽ tiếp tục ở lượt sau (ví dụ: “Chưa hoàn thành — cần tiếp tục mở rộng các continuity run còn lại ở lượt sau.”). TUYỆT ĐỐI không dùng câu “Đã hoàn thành” hoặc bất kỳ cách diễn đạt tương đương nào (“production-ready”, “đầy đủ”...) khi thực tế chưa bao phủ hết kịch bản — người dùng sẽ tự nhắn tiếp để yêu cầu tiếp tục, không cần hỏi lại hoặc chờ xác nhận.
+- CHỈ khi đã thực sự đối chiếu và xác nhận NỘI BỘ rằng toàn bộ kịch bản từ đầu đến cuối đều đã có continuity run/clip tương ứng, lượt trả lời đó mới gồm: (1) file JSON đính kèm ĐẦY ĐỦ có tên chứa “_full.json”; (2) câu “Đã hoàn thành” kèm thống kê số lượng CHARACTER, LOCATION và VIDEO.
 
 YÊU CẦU FILE:
 - Tạo đúng một file JSON hoàn chỉnh; tên file phải chứa “_full.json”.

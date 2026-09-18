@@ -37,6 +37,10 @@ export const promptTextareaCandidates = (page: Page): Array<() => Locator> => [
 export const workModeToggleLocator = (page: Page): Locator =>
   page.locator('button[role="radio"][data-tpp-toggle-value="work"]');
 
+/** Cùng radio group với workModeToggleLocator ở trên, giá trị còn lại ("Trò chuyện"/"Chat") — data-tpp-toggle-value="chatgpt". */
+export const chatModeToggleLocator = (page: Page): Locator =>
+  page.locator('button[role="radio"][data-tpp-toggle-value="chatgpt"]');
+
 /**
  * CHƯA có DOM thật xác nhận (tính năng upload ảnh tham chiếu mới, chưa chạy
  * qua debug snapshot thực tế) — <input type="file"> phục vụ nút "+"/"Add
