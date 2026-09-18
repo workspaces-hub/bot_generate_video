@@ -1103,6 +1103,7 @@ export function registerHandlers(bot: Telegraf): void {
   });
 
   bot.hears(CONTINUE_SCENE_FRAME_BUTTON_LABEL, async (ctx) => {
+    return
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "continueSceneFrame");

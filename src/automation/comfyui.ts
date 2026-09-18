@@ -25,9 +25,14 @@ import { GenerationError } from "./aiVideo";
  * - "299" (SaveVideo)                = node xuất video cuối cùng
  */
 
+// SỬA (theo yêu cầu người dùng): đọc từ comfyuiWorkflows/ ở GỐC PROJECT
+// (path.resolve CWD-relative, cùng quy ước với các path "./storage/..." khác
+// trong config.ts) THAY VÌ src/automation/comfyuiWorkflows/ — sửa file JSON
+// trực tiếp trên VPS không cần build lại (__dirname-relative trước đây trỏ
+// vào dist/src/automation/, bắt buộc phải copy qua bước build mới thấy thay
+// đổi).
 const WORKFLOW_TEMPLATE_PATH = path.resolve(
-  __dirname,
-  "comfyuiWorkflows/ltx2-frame-to-video.json",
+  "./comfyuiWorkflows/ltx2-frame-to-video.json",
 );
 
 const FIRST_FRAME_NODE_ID = "300";
@@ -38,6 +43,66 @@ const WIDTH_NODE_ID = "298:291";
 const HEIGHT_NODE_ID = "298:292";
 const FRAME_RATE_NODE_ID = "298:296";
 const NOISE_SEED_NODE_ID = "298:274";
+
+/**
+ * Workflow THỨ 2: MiniMax H3 "Reference to Video" (node MiniMaxH3ReferenceToVideo)
+ * — KHÁC HẲN workflow LTX-2 ở trên (không có firstFrame/lastFrame, thay vào
+ * đó nhận TỐI ĐA 9 ẢNH THAM CHIẾU, cùng khái niệm "Reference to Video" đã
+ * dùng cho pollo.ai, xem MAX_REFERENCE_IMAGES trong pollo.ts). File JSON gốc
+ * người dùng cung cấp lưu ở comfyuiWorkflows/minimax-h3-reference-to-video.json.
+ *
+ * Các node id cố định trong template (đã xác nhận qua đọc JSON gốc):
+ * - "137","139","147"-"153" (LoadImage, ĐÚNG THỨ TỰ)  = 9 ảnh tham chiếu
+ *   (ref_image_0..ref_image_8, xem MINIMAX_H3_REF_IMAGE_NODE_IDS)
+ * - "138" (PrimitiveStringMultiline)  = prompt
+ * - "132" (PrimitiveFloat)            = duration (giây — node "131" tự quy
+ *   đổi sang số frame theo fps 24 cố định trong chính công thức, xem
+ *   comment ở node đó trong file JSON)
+ * - "129" (RandomNoise.noise_seed)    = seed — random mỗi lần gọi
+ * - "115" (ResolutionSelector.aspect_ratio) = tỉ lệ khung hình (CHƯA xác
+ *   nhận đầy đủ enum ngoài "16:9 (Widescreen)" đã thấy trong template gốc —
+ *   xem MINIMAX_H3_ASPECT_RATIO_LABELS, cần người dùng xác nhận nhãn đúng
+ *   cho "9:16" trên ComfyUI thật của họ)
+ * - "92" (SaveVideo)                  = node xuất video cuối cùng
+ */
+const MINIMAX_H3_WORKFLOW_TEMPLATE_PATH = path.resolve(
+  "./comfyuiWorkflows/minimax-h3-reference-to-video.json",
+);
+
+/** ĐÚNG THỨ TỰ ref_image_0..ref_image_8 trong node MiniMaxH3ReferenceToVideo (node "136") của template. */
+const MINIMAX_H3_REF_IMAGE_NODE_IDS = [
+  "137",
+  "139",
+  "147",
+  "148",
+  "149",
+  "150",
+  "151",
+  "152",
+  "153",
+];
+const MINIMAX_H3_REF_TO_VIDEO_NODE_ID = "136";
+const MINIMAX_H3_PROMPT_NODE_ID = "138";
+const MINIMAX_H3_DURATION_NODE_ID = "132";
+const MINIMAX_H3_NOISE_SEED_NODE_ID = "129";
+const MINIMAX_H3_ASPECT_RATIO_NODE_ID = "115";
+/** Node "Int (Full)" — số sampling steps khi Lightning LoRA tắt (node "146" = false, xem generateVideoComfyMiniMaxH3). */
+const MINIMAX_H3_STEPS_NODE_ID = "143";
+
+/** Số ảnh tham chiếu tối đa mà workflow MiniMax H3 hỗ trợ (đúng số slot ref_image_0..8 có sẵn trong template). */
+export const MAX_MINIMAX_H3_REFERENCE_IMAGES = MINIMAX_H3_REF_IMAGE_NODE_IDS.length;
+
+/**
+ * Nhãn "aspect_ratio" thật trên node ResolutionSelector — đã xác nhận qua
+ * ảnh chụp dropdown thật trên ComfyUI của người dùng: "1:1 (Square)", "2:3
+ * (Portrait Photo)", "3:2 (Photo)", "3:4 (Portrait Standard)", "4:3
+ * (Standard)", "9:16 (Portrait Widescreen)", "16:9 (Widescreen)" — chỉ dùng
+ * đúng 2 nhãn cần cho aspectRatio "9:16"/"16:9" của bot.
+ */
+const MINIMAX_H3_ASPECT_RATIO_LABELS: Record<ComfyAspectRatio, string> = {
+  "16:9": "16:9 (Widescreen)",
+  "9:16": "9:16 (Portrait Widescreen)",
+};
 
 export type ComfyAspectRatio = "9:16" | "16:9";
 
@@ -63,16 +128,21 @@ function resolveWidthHeight(aspectRatio: ComfyAspectRatio): {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ComfyWorkflow = Record<string, any>;
 
-let cachedTemplate: ComfyWorkflow | null = null;
+// SỬA: cache theo TỪNG path (Map) — giờ có 2 workflow khác nhau
+// (LTX-2/MiniMax H3, xem WORKFLOW_TEMPLATE_PATH/MINIMAX_H3_WORKFLOW_TEMPLATE_PATH)
+// cùng dùng chung hàm này, không còn 1 biến cache duy nhất như trước.
+const cachedTemplates = new Map<string, ComfyWorkflow>();
 
-function loadWorkflowTemplate(): ComfyWorkflow {
-  if (!cachedTemplate) {
-    const raw = fs.readFileSync(WORKFLOW_TEMPLATE_PATH, "utf-8");
-    cachedTemplate = JSON.parse(raw);
+function loadWorkflowTemplate(templatePath: string): ComfyWorkflow {
+  let cached = cachedTemplates.get(templatePath);
+  if (!cached) {
+    const raw = fs.readFileSync(templatePath, "utf-8");
+    cached = JSON.parse(raw);
+    cachedTemplates.set(templatePath, cached!);
   }
   // Deep clone — mỗi lần gọi generate cần 1 bản độc lập để chỉnh
-  // firstFrame/lastFrame/prompt/duration/seed mà không ảnh hưởng template gốc.
-  return JSON.parse(JSON.stringify(cachedTemplate));
+  // ảnh/prompt/duration/seed mà không ảnh hưởng template gốc.
+  return JSON.parse(JSON.stringify(cached));
 }
 
 interface ComfyUploadImageResponse {
@@ -278,7 +348,7 @@ export async function generateVideoComfyUI(
   aspectRatio: ComfyAspectRatio = DEFAULT_ASPECT_RATIO,
   frameRate: number = DEFAULT_FRAME_RATE,
 ): Promise<ComfyUIGenerateVideoResult> {
-  const workflow = loadWorkflowTemplate();
+  const workflow = loadWorkflowTemplate(WORKFLOW_TEMPLATE_PATH);
 
   const [firstFrameName, lastFrameName] = await Promise.all([
     uploadImage(firstFramePath),
@@ -300,6 +370,96 @@ export async function generateVideoComfyUI(
   // Number.MAX_SAFE_INTEGER (2^53-1) vượt giới hạn này nên gây
   // ERR_OUT_OF_RANGE (xác nhận qua lỗi thật).
   workflow[NOISE_SEED_NODE_ID].inputs.noise_seed = crypto.randomInt(
+    0,
+    281_474_976_710_655,
+  );
+
+  const clientId = crypto.randomUUID();
+  const promptId = await submitPrompt(workflow, clientId);
+  const outputFile = await pollHistoryUntilDone(
+    promptId,
+    config.comfyUIGenerationTimeoutMs,
+  );
+  const filePath = await downloadOutputFile(outputFile, jobId);
+
+  return { filePath, promptId };
+}
+
+/**
+ * Gen video qua ComfyUI dùng workflow MiniMax H3 "Reference to Video" —
+ * KHÁC HẲN generateVideoComfyUI (LTX-2, ghép start/end frame): nhận TỐI ĐA
+ * MAX_MINIMAX_H3_REFERENCE_IMAGES (9) ẢNH THAM CHIẾU (referenceImagePaths,
+ * cùng khái niệm "Reference to Video" đã dùng cho pollo.ai), theo prompt mô
+ * tả diễn biến, độ dài duration giây, tỉ lệ khung hình aspectRatio
+ * ("9:16"/"16:9", mặc định "16:9"). Số ảnh thực tế truyền vào có thể ÍT HƠN
+ * 9 — các node LoadImage/khoá "ref_images.ref_image_N" dư ra trong node
+ * MiniMaxH3ReferenceToVideo (node "136") bị XOÁ HẲN khỏi workflow trước khi
+ * submit (không upload/gán ảnh giả cho slot không dùng tới).
+ *
+ * Nhãn "aspect_ratio" ("9:16 (Portrait Widescreen)"/"16:9 (Widescreen)", xem
+ * MINIMAX_H3_ASPECT_RATIO_LABELS) đã xác nhận qua ảnh chụp dropdown thật.
+ *
+ * CHƯA test thật với server ComfyUI thật (không có server nào reachable từ
+ * môi trường phát triển) — cần người dùng tự chạy thử để xác nhận: node
+ * MiniMaxH3ReferenceToVideo có chấp nhận thiếu hẳn 1 số khoá
+ * "ref_images.ref_image_N" (thay vì luôn đủ 9) hay không — nếu ComfyUI từ
+ * chối vì thiếu input bắt buộc, cần đổi cách xử lý (vd giữ đủ 9 khoá nhưng
+ * lặp lại ảnh cuối cùng cho các slot dư, thay vì
+ * xoá khoá).
+ */
+export async function generateVideoComfyMiniMaxH3(
+  referenceImagePaths: string[],
+  prompt: string,
+  duration: number,
+  jobId: string,
+  aspectRatio: ComfyAspectRatio = DEFAULT_ASPECT_RATIO,
+  steps: number = config.comfyUIMiniMaxH3Steps,
+): Promise<ComfyUIGenerateVideoResult> {
+  if (referenceImagePaths.length === 0) {
+    throw new GenerationError(
+      "generateVideoComfyMiniMaxH3 cần ít nhất 1 ảnh tham chiếu (referenceImagePaths rỗng).",
+    );
+  }
+  if (referenceImagePaths.length > MAX_MINIMAX_H3_REFERENCE_IMAGES) {
+    throw new GenerationError(
+      `Quá nhiều ảnh tham chiếu (${referenceImagePaths.length}/${MAX_MINIMAX_H3_REFERENCE_IMAGES}) — workflow MiniMax H3 chỉ hỗ trợ tối đa ${MAX_MINIMAX_H3_REFERENCE_IMAGES} ảnh tham chiếu.`,
+    );
+  }
+
+  const workflow = loadWorkflowTemplate(MINIMAX_H3_WORKFLOW_TEMPLATE_PATH);
+
+  const uploadedNames = await Promise.all(
+    referenceImagePaths.map((p) => uploadImage(p)),
+  );
+
+  const refToVideoInputs = workflow[MINIMAX_H3_REF_TO_VIDEO_NODE_ID].inputs;
+  MINIMAX_H3_REF_IMAGE_NODE_IDS.forEach((loadImageNodeId, index) => {
+    const refKey = `ref_images.ref_image_${index}`;
+    if (index < uploadedNames.length) {
+      workflow[loadImageNodeId].inputs.image = uploadedNames[index];
+    } else {
+      // Slot dư (không có ảnh tương ứng) — xoá HẲN cả node LoadImage lẫn khoá
+      // ref_images.ref_image_N trỏ tới nó, không để lại tham chiếu treo/ảnh
+      // giả (xem docstring hàm này).
+      delete workflow[loadImageNodeId];
+      delete refToVideoInputs[refKey];
+    }
+  });
+
+  workflow[MINIMAX_H3_PROMPT_NODE_ID].inputs.value = prompt;
+  workflow[MINIMAX_H3_DURATION_NODE_ID].inputs.value = duration;
+  workflow[MINIMAX_H3_ASPECT_RATIO_NODE_ID].inputs.aspect_ratio =
+    MINIMAX_H3_ASPECT_RATIO_LABELS[aspectRatio];
+  // Số sampling steps — trước đây hardcode trong chính file JSON template
+  // (node "143" "Int (Full)"), giờ đọc qua config.comfyUIMiniMaxH3Steps (env
+  // COMFYUI_MINIMAX_H3_STEPS) để đổi được không cần sửa file JSON. Chỉ áp
+  // dụng cho nhánh "Full" (node "146" Enable Lightning LoRA = false, xem
+  // template) — nhánh Lightning LoRA (node "144") không đổi qua config này.
+  workflow[MINIMAX_H3_STEPS_NODE_ID].inputs.value = steps;
+  // Random seed mỗi lần gọi — cùng lý do đã giải thích ở generateVideoComfyUI
+  // (tránh ComfyUI trả cache kết quả cũ, và cùng giới hạn range của
+  // crypto.randomInt).
+  workflow[MINIMAX_H3_NOISE_SEED_NODE_ID].inputs.noise_seed = crypto.randomInt(
     0,
     281_474_976_710_655,
   );

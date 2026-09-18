@@ -2204,24 +2204,55 @@ async function processPolloImageQueue(): Promise<void> {
             sendImageNow,
             notifyImageError,
           );
-          const readyForScene =
+          // const readyForScene =
+          //   refResult.failed === 0 && refResult.succeeded > 0;
+
+          // if (readyForScene) {
+          //   const confirmId = createSceneConfirmationPollo(
+          //     job.chatId,
+          //     job.userId,
+          //     job.promptMessageId,
+          //     job.jsonPath,
+          //   );
+          //   await telegram!.sendMessage(job.chatId, "Xác nhận tạo ảnh scene", {
+          //     reply_parameters: { message_id: job.promptMessageId },
+          //     reply_markup: {
+          //       inline_keyboard: [
+          //         [
+          //           {
+          //             text: "Tạo ảnh scene",
+          //             callback_data: `confirmScenePollo:${confirmId}`,
+          //           },
+          //         ],
+          //       ],
+          //     },
+          //   });
+          // }
+          const readyForVideo =
             refResult.failed === 0 && refResult.succeeded > 0;
 
-          if (readyForScene) {
-            const confirmId = createSceneConfirmationPollo(
+          if (readyForVideo) {
+            // SỬA (theo yêu cầu người dùng): nút xác nhận "cả file" sau bước
+            // scene giờ đẩy job "storyboardVideoComfy" (KHÔNG phải
+            // "storyboardVideoPollo" như trước) — khớp với chính provider
+            // đang được auto-push per-clip ở trên (onVideoEntriesReady),
+            // tránh lẫn 2 provider khác nhau ở cùng 1 bước xác nhận. Entry đã
+            // auto-push xong ("success": true) sẽ tự bị generateVideosForFileComfyUI
+            // bỏ qua, không sinh trùng.
+            const confirmId = createVideoConfirmationComfy(
               job.chatId,
               job.userId,
               job.promptMessageId,
               job.jsonPath,
             );
-            await telegram!.sendMessage(job.chatId, "Xác nhận tạo ảnh scene", {
+            await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
               reply_parameters: { message_id: job.promptMessageId },
               reply_markup: {
                 inline_keyboard: [
                   [
                     {
-                      text: "Tạo ảnh scene",
-                      callback_data: `confirmScenePollo:${confirmId}`,
+                      text: "Tạo video",
+                      callback_data: `confirmVideoComfy:${confirmId}`,
                     },
                   ],
                 ],
@@ -2234,7 +2265,7 @@ async function processPolloImageQueue(): Promise<void> {
           }
           await notifyStoryboardImagesResultPollo(job, {
             failedEntries: refResult.failedEntries,
-            readyForNext: readyForScene,
+            readyForNext: readyForVideo,
           });
         } else if (job.type === "storyboardScenePollo") {
           // Tự đẩy NGAY job "storyboardVideoComfy" PER-CLIP cho (các) entry

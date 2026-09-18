@@ -13,7 +13,10 @@ import {
 import { generateVideo as generateVideoPollo } from "./pollo";
 import { generateImage as generateImagePollo } from "./polloImage";
 import { withPolloTaskSlot } from "./polloBrowser";
-import { generateVideoComfyUI } from "./comfyui";
+import {
+  generateVideoComfyMiniMaxH3,
+  MAX_MINIMAX_H3_REFERENCE_IMAGES,
+} from "./comfyui";
 
 /**
  * Logic dùng CHUNG cho cả 2 nơi gọi: script CLI (scripts/generate-reference-images.ts,
@@ -1409,31 +1412,32 @@ export async function generateVideosForFilePollo(
   return { outputDir, succeeded, failed, failedEntries };
 }
 
-/** Duration mặc định (giây) cho ComfyUI khi entry.duration thiếu/không hợp lệ — khớp giá trị mặc định trong template workflow (xem node "298:294" trong comfyuiWorkflows/ltx2-frame-to-video.json). */
-const COMFYUI_DEFAULT_DURATION_SECONDS = 6;
+/** Duration mặc định (giây) cho ComfyUI khi entry.duration thiếu/không hợp lệ — khớp giá trị mặc định trong template workflow (xem node "132" "Float (Duration)" trong comfyuiWorkflows/minimax-h3-reference-to-video.json). */
+const COMFYUI_DEFAULT_DURATION_SECONDS = 5;
 
 /**
  * GIỐNG generateVideosForFile (cùng đọc file, lọc entry "VIDEO", cùng quy ước
- * success/onEntryDone/onEntryError/resume/onlyEntryIds, cùng resolveRefImagePath/
- * assignStartEndFrames để xác định ảnh nào vào start/end frame) nhưng tạo
- * video qua ComfyUI (generateVideoComfyUI trong comfyui.ts) THAY VÌ AIVideo —
- * provider SONG SONG, KHÔNG thay thế 2 hàm generateVideosForFile/
+ * success/onEntryDone/onEntryError/resume/onlyEntryIds) nhưng tạo video qua
+ * ComfyUI dùng workflow MiniMax H3 "Reference to Video"
+ * (generateVideoComfyMiniMaxH3 trong comfyui.ts) THAY VÌ AIVideo — provider
+ * SONG SONG, KHÔNG thay thế 2 hàm generateVideosForFile/
  * generateVideosForFilePollo ở trên.
  *
+ * SỬA (theo yêu cầu người dùng, khớp lại đúng schema hiện tại của
+ * format_output.txt — VIDEO.ref chỉ chứa CHARACTER/LOCATION trực tiếp, KHÔNG
+ * còn SCENE_SETTING_START/END): đổi từ workflow LTX-2 (frame-interpolation,
+ * cần ĐÚNG 2 ảnh start/end frame) sang MiniMax H3 (Reference to Video, nhận
+ * 1-9 ẢNH THAM CHIẾU tự do — đúng khái niệm CHARACTER/LOCATION ref hiện tại,
+ * giống hệt cách generateVideosForFilePollo dùng referenceImagePaths cho
+ * pollo.ai).
+ *
  * KHÁC BIỆT so với generateVideosForFile:
- * 1. Workflow LTX-2 của ComfyUI là mô hình frame-interpolation (nội suy giữa
- *    2 khung hình) — LUÔN cần ĐỦ CẢ startFramePath lẫn endFramePath, không có
- *    khái niệm "Omni Reference" (3+ ảnh) hay video thuần không ảnh như
- *    AIVideo. refPaths phải resolve đúng 1-2 ảnh (assignStartEndFrames) và cả
- *    2 field phải có giá trị — thiếu 1 trong 2, hoặc có 3+ ref, coi là lỗi rõ
- *    ràng cho ĐÚNG entry đó (không chặn cả file, xử lý entry khác bình
- *    thường) thay vì gọi ComfyUI với thiếu tham số.
- * 2. entry.duration (giây) truyền THẲNG dạng số cho generateVideoComfyUI
- *    (KHÔNG chuẩn hoá thành chuỗi "Ns" như AIVideo/Pollo — 2 provider đó chọn
- *    qua chip UI trên site, còn ComfyUI nhận số giây thẳng vào node
- *    PrimitiveInt "Duration" của workflow) — thiếu/không hợp lệ thì dùng
- *    COMFYUI_DEFAULT_DURATION_SECONDS (khớp giá trị mặc định có sẵn trong
- *    template workflow).
+ * 1. refPaths phải resolve được 1-MAX_MINIMAX_H3_REFERENCE_IMAGES (9) ảnh —
+ *    0 ảnh hoặc quá 9 ảnh coi là lỗi rõ ràng cho ĐÚNG entry đó (không chặn cả
+ *    file, xử lý entry khác bình thường) thay vì gọi ComfyUI với tham số sai.
+ * 2. entry.duration (giây) truyền THẲNG dạng số cho generateVideoComfyMiniMaxH3
+ *    (KHÔNG chuẩn hoá thành chuỗi "Ns" như AIVideo/Pollo) — thiếu/không hợp
+ *    lệ thì dùng COMFYUI_DEFAULT_DURATION_SECONDS.
  * 3. Lưu lại "comfyPromptId" (prompt_id ComfyUI) vào entry — cùng lý do với
  *    "polloResultId" ở generateVideosForFilePollo.
  */
@@ -1482,16 +1486,17 @@ export async function generateVideosForFileComfyUI(
     try {
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
-          Boolean(r.id) &&
-          (r.type === "CHARACTER" ||
-            r.type === "LOCATION" ||
-            r.type === "SCENE_SETTING_START" ||
-            r.type === "SCENE_SETTING_END"),
+          Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
       );
 
-      if (refs.length > 2) {
+      if (refs.length === 0) {
         throw new Error(
-          `ComfyUI (LTX-2 frame-to-video) chỉ nhận tối đa 2 ảnh start/end frame — entry này có ${refs.length} ref.`,
+          "ComfyUI (MiniMax H3 Reference to Video) cần ít nhất 1 ảnh tham chiếu — entry này không resolve được ref nào.",
+        );
+      }
+      if (refs.length > MAX_MINIMAX_H3_REFERENCE_IMAGES) {
+        throw new Error(
+          `ComfyUI (MiniMax H3 Reference to Video) chỉ nhận tối đa ${MAX_MINIMAX_H3_REFERENCE_IMAGES} ảnh tham chiếu — entry này có ${refs.length} ref.`,
         );
       }
 
@@ -1500,30 +1505,18 @@ export async function generateVideosForFileComfyUI(
         refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
       }
 
-      const { startFramePath, endFramePath } = assignStartEndFrames(
-        refs.map((r, i) => ({ type: r.type, path: refPaths[i] })),
-      );
-      if (!startFramePath || !endFramePath) {
-        throw new Error(
-          `ComfyUI (LTX-2 frame-to-video) cần đủ 2 ảnh start/end frame — entry này chỉ resolve được ${refPaths.length} ảnh.`,
-        );
-      }
-
       const duration =
         typeof entry.duration === "number" && entry.duration > 0
           ? entry.duration
           : COMFYUI_DEFAULT_DURATION_SECONDS;
 
-      // aspectRatio/frameRate — 2 field mới trong VIDEO entry (xem
-      // format_output.txt) — chỉ nhận đúng giá trị hợp lệ, sai/thiếu thì để
-      // generateVideoComfyUI tự dùng default (16:9/24fps, xem comfyui.ts).
+      // aspectRatio — field mới trong VIDEO entry (xem format_output.txt) —
+      // chỉ nhận đúng giá trị hợp lệ, sai/thiếu thì để generateVideoComfyMiniMaxH3
+      // tự dùng default (16:9, xem comfyui.ts). frameRate KHÔNG áp dụng cho
+      // workflow MiniMax H3 (fps cố định 24 trong chính template).
       const aspectRatio =
         entry.aspectRatio === "9:16" || entry.aspectRatio === "16:9"
           ? entry.aspectRatio
-          : undefined;
-      const frameRate =
-        typeof entry.frameRate === "number" && entry.frameRate > 0
-          ? entry.frameRate
           : undefined;
 
       if (isStopStoryboardRequested(inputPath)) break;
@@ -1533,14 +1526,12 @@ export async function generateVideosForFileComfyUI(
       );
       const { filePath: tempFilePath, promptId } =
         await generateWithContentViolationRetry(entry, jobId, () =>
-          generateVideoComfyUI(
-            startFramePath,
-            endFramePath,
+          generateVideoComfyMiniMaxH3(
+            refPaths,
             entry.prompt!,
             duration,
             jobId,
             aspectRatio,
-            frameRate,
           ),
         );
       entry.comfyPromptId = promptId;

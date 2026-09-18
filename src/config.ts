@@ -188,6 +188,13 @@ export const config = {
   comfyUIGenerationTimeoutMs: Number(
     process.env.COMFYUI_GENERATION_TIMEOUT_MS ?? 20 * 60 * 1000,
   ),
+  // Số sampling steps cho workflow MiniMax H3 "Reference to Video" (nhánh
+  // "Full" khi Lightning LoRA tắt — node "143" trong
+  // comfyuiWorkflows/minimax-h3-reference-to-video.json, xem
+  // generateVideoComfyMiniMaxH3 trong comfyui.ts) — trước đây hardcode trong
+  // chính file JSON template, giờ đọc qua config để đổi được không cần sửa
+  // file JSON. Mặc định 8 (khớp giá trị đang có trong template).
+  comfyUIMiniMaxH3Steps: Number(process.env.COMFYUI_MINIMAX_H3_STEPS ?? 8),
 };
 
 // if (config.admins.length === 0) {
