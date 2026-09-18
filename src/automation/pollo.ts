@@ -2948,9 +2948,6 @@ async function attemptGenerateVideo(
 console.log(
       `[pollo-image] Unlimited switch NGAY TRƯỚC khi bấm Generate: aria-checked="${unlimitedCheckedBeforeGenerate}"`,
     );
-    await captureSnapshot(page, `${jobId}_before-generate`, "before-generate", {
-      includeHtml: true,
-    });
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
