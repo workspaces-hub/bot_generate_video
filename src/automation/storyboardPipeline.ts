@@ -287,10 +287,13 @@ export function generatedDirFor(inputPath: string): string {
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov"]);
 
 /**
- * Copy các video ĐANG CÓ SẴN ở gốc outputDir (từ lần gen TRƯỚC, cùng tên
- * folder) vào 1 subfolder "vXX" mới — XX tăng dần theo subfolder "vXX" lớn
- * nhất đã có (bắt đầu "v01" nếu chưa có subfolder nào). Best-effort: lỗi đọc
- * folder hay copy 1 file không chặn cả job, chỉ cảnh báo.
+ * MOVE (không phải copy — tránh để lại bản trùng ở gốc outputDir) các video
+ * ĐANG CÓ SẴN ở gốc outputDir (từ lần gen TRƯỚC, cùng tên folder) vào 1
+ * subfolder "vXX" mới — XX tăng dần theo subfolder "vXX" lớn nhất đã có (bắt
+ * đầu "v01" nếu chưa có subfolder nào). Best-effort: lỗi đọc folder hay move
+ * 1 file không chặn cả job, chỉ cảnh báo. Dùng rename trước (nhanh, đúng
+ * nghĩa move), fallback copy+xoá bản gốc nếu rename lỗi (vd khác
+ * partition/device — không thể rename xuyên device).
  */
 async function archiveExistingVideos(outputDir: string): Promise<void> {
   const entries = await fs.promises
@@ -316,14 +319,21 @@ async function archiveExistingVideos(outputDir: string): Promise<void> {
 
   await fs.promises.mkdir(versionDir, { recursive: true });
   for (const fileName of videoFiles) {
-    await fs.promises
-      .copyFile(path.join(outputDir, fileName), path.join(versionDir, fileName))
-      .catch((err) => {
+    const srcPath = path.join(outputDir, fileName);
+    const destPath = path.join(versionDir, fileName);
+    try {
+      await fs.promises.rename(srcPath, destPath);
+    } catch (err) {
+      try {
+        await fs.promises.copyFile(srcPath, destPath);
+        await fs.promises.unlink(srcPath);
+      } catch (copyErr) {
         console.warn(
-          `[storyboardPipeline] Không copy được video "${fileName}" vào "${versionDir}":`,
-          err,
+          `[storyboardPipeline] Không move được video "${fileName}" vào "${versionDir}":`,
+          copyErr,
         );
-      });
+      }
+    }
   }
 }
 
