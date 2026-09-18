@@ -575,10 +575,12 @@ export async function captureGenerationRecordId(
  * bản đầu coi "khác waiting là xong" nên dừng poll NGAY khi thấy
  * "processing", trả về status sai (chưa xong thật) và caller hiểu nhầm là
  * terminal. Danh sách CHƯA XONG giờ là {waiting, processing} — status nào
- * khác 2 giá trị này mới coi là terminal. CHƯA có bằng chứng thật cho trạng
- * thái lỗi (status khi thất bại) — trả nguyên văn status terminal đó ra cho
- * caller tự log/xử lý, KHÔNG đoán bừa ý nghĩa; có thể còn trạng thái trung
- * gian khác chưa gặp, sửa tiếp khi có bằng chứng mới.
+ * khác 2 giá trị này mới coi là terminal. Trạng thái lỗi khi thất bại là
+ * "failed" (theo yêu cầu người dùng, caller — attemptGenerateVideo/
+ * attemptGenerateImage — throw ngay khi thấy giá trị này, không chờ dò DOM
+ * vô ích) — vẫn trả nguyên văn MỌI status terminal khác ra cho caller tự
+ * log/xử lý, KHÔNG đoán bừa ý nghĩa; có thể còn trạng thái trung gian khác
+ * chưa gặp, sửa tiếp khi có bằng chứng mới.
  *
  * PHẢI gọi fetch qua page.evaluate (chạy như JS thật của chính trang), KHÔNG
  * dùng page.context().request/page.request — xác nhận qua lỗi thật: gọi
@@ -2968,6 +2970,18 @@ console.log(
     if (recordId !== null) {
       console.log(
         `[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`,
+      );
+    }
+
+    // SỬA (theo yêu cầu người dùng): API xác nhận rõ status "failed" thì
+    // throw NGAY, không rơi xuống chờ dò DOM (waitForNewResult) nữa — dò DOM
+    // chắc chắn không bao giờ thấy video mới xuất hiện khi generation đã
+    // failed thật, nên trước đây vẫn phải đợi hết cả config.generationTimeoutMs
+    // (có thể tới hàng chục phút) rồi mới throw timeout, tốn thời gian vô ích
+    // dù đã biết trước là thất bại ngay từ lúc này.
+    if (apiStatus === "failed") {
+      throw new GenerationError(
+        `pollo.ai báo generate thất bại (status: "failed", record ${recordId}) — không tạo được video.`,
       );
     }
 

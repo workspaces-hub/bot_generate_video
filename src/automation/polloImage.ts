@@ -393,6 +393,17 @@ async function attemptGenerateImage(
       console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
     }
 
+    // SỬA (theo yêu cầu người dùng, cùng lý do đã sửa cho attemptGenerateVideo
+    // trong pollo.ts): API xác nhận rõ status "failed" thì throw NGAY, không
+    // rơi xuống chờ dò DOM nữa — dò DOM chắc chắn không bao giờ thấy ảnh mới
+    // khi generation đã failed thật, tránh tốn thời gian chờ hết
+    // config.generationTimeoutMs vô ích.
+    if (apiStatus === "failed") {
+      throw new GenerationError(
+        `pollo.ai báo generate thất bại (status: "failed", record ${recordId}) — không tạo được ảnh.`,
+      );
+    }
+
     const downloadViaMediaUrl = async (mediaUrl: string): Promise<string> => {
       await fs.promises.mkdir(config.downloadDir, { recursive: true });
       const response = await fetchWithRetry(page, mediaUrl);
