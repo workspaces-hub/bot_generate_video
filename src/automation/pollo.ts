@@ -2526,7 +2526,18 @@ async function attemptGenerateVideo(
       await switchModeIfNeeded(page, "Reference to Video");
     }
 
-    if (model && !deepLink?.includesModel) {
+    // SỬA (xác nhận qua kiểm tra thật của người dùng, truy cập trực tiếp URL
+    // deep-link modelName=minimax-hailuo-03): pollo.ai đã đổi hành vi — deep
+    // link giờ KHÔNG còn tự set đúng model nữa (chip hiện "Pollo" thay vì
+    // "MiniMax H3" dù URL có modelName), khác với lúc buildDeepLinkUrl được
+    // xác nhận hoạt động đúng trước đây (xem docstring hàm đó). Trước đây
+    // dựa vào deepLink.includesModel để BỎ QUA selectModel (tối ưu, né bug
+    // click popup) — giờ không còn an toàn để tin deep link đã set đúng
+    // model, LUÔN gọi selectModel() để tự xác nhận/chọn lại, bất kể deep link
+    // có "includesModel" hay không. selectModel() tự kiểm tra chip hiện tại
+    // trước, no-op nếu đã đúng — không tốn thêm gì khi deep link vẫn hoạt
+    // động đúng cho các mode/model khác.
+    if (model) {
       await dismissBlockingOverlays(page);
       await selectModel(page, model);
     }
@@ -2928,7 +2939,18 @@ async function attemptGenerateVideo(
     }
 
     await enableUnlimitedIfNotEnoughCredit(page, jobId);
-
+    const unlimitedSwitchLocator = page
+      .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+      .first();
+    const unlimitedCheckedBeforeGenerate = await unlimitedSwitchLocator
+        .getAttribute("aria-checked")
+        .catch(() => null);
+console.log(
+      `[pollo-image] Unlimited switch NGAY TRƯỚC khi bấm Generate: aria-checked="${unlimitedCheckedBeforeGenerate}"`,
+    );
+    await captureSnapshot(page, `${jobId}_before-generate`, "before-generate", {
+      includeHtml: true,
+    });
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
