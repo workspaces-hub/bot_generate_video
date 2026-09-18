@@ -24,7 +24,6 @@ import {
   confirmVideoGeneration,
   confirmVideoGenerationComfy,
   confirmVideoGenerationPollo,
-  continueFailedStoryboardImages,
   enqueueJob,
   isStoryboardJobQueued,
   stopAll,
@@ -303,6 +302,21 @@ function storyboardJobTypeForEntryType(
  * (xem storyboardPipeline.ts), nên job đang có sẵn sẽ tự nhặt luôn entry vừa
  * đánh dấu lại ở đây khi tới lượt — thêm job thứ 2 chỉ tổ chạy trùng lặp.
  */
+
+/**
+ * Chuẩn hoá tên file json user gõ tay: trim, gộp khoảng trắng → "_" (cùng
+ * quy ước với tên thư mục thật trong generated/, xem originalFileName/
+ * tryHandleReferenceJsonUpload), và bỏ đuôi ".json" nếu user lỡ gõ kèm (vd
+ * gõ cả "abc.json" thay vì chỉ "abc") — generatedDirFor/đường dẫn file thật
+ * đều tự thêm lại ".json" nên gõ kèm đuôi sẽ tạo sai path.
+ */
+function normalizeTypedJsonFileName(text: string): string {
+  return text
+    .trim()
+    .replace(/ +/g, "_")
+    .replace(/\.json$/i, "");
+}
+
 async function regenerateStoryboardItemLine(
   ctx: Context,
   line: string,
@@ -311,7 +325,7 @@ async function regenerateStoryboardItemLine(
   const match = line.match(REPLACEMENT_CAPTION_PATTERN);
   if (!match) return null;
 
-  const fileBaseName = match[1].trim().replace(/ +/g, "_");
+  const fileBaseName = normalizeTypedJsonFileName(match[1]);
   const targetId = match[2].trim();
 
   const jsonPath = path.join(
@@ -1183,7 +1197,7 @@ export function registerHandlers(bot: Telegraf): void {
       // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
       // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
-      const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
+      const jsonFileName = normalizeTypedJsonFileName(ctx.message.text);
       // SỬA theo yêu cầu user: KHÔNG còn tra failedStoryboardJobs/
       // failedStoryboardJobsPollo (bắt buộc phải TỪNG lỗi mới cho tiếp tục —
       // chặn cả trường hợp file chưa từng gen video lần nào, hoặc job cũ đã
@@ -1220,19 +1234,41 @@ export function registerHandlers(bot: Telegraf): void {
         );
       }
     } else if (mode === "continueSceneFrame") {
+      // SỬA (theo yêu cầu người dùng): đẩy job "storyboardScenePollo"
+      // (pollo.ai) THAY VÌ "storyboardImagesAIVideo" — cùng cách đơn giản
+      // hoá đã áp dụng cho "continueVideo" (xem comment ở đó): KHÔNG cần tra
+      // failedStoryboardJobsPollo (bắt buộc phải TỪNG lỗi mới cho tiếp tục),
+      // chỉ cần file JSON khớp tên tồn tại trong generated/ là đẩy thẳng 1
+      // job "storyboardScenePollo" MỚI vào hàng đợi ảnh Pollo.
+      //
       // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
       // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
-      const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
-      const ok = continueFailedStoryboardImages(jsonFileName);
-      if (ok) {
+      const jsonFileName = normalizeTypedJsonFileName(ctx.message.text);
+      const jsonPath = path.join(
+        generatedDirFor(jsonFileName),
+        `${jsonFileName}.json`,
+      );
+      const fileExists = await fs
+        .access(jsonPath)
+        .then(() => true)
+        .catch(() => false);
+      if (fileExists) {
+        enqueueJob({
+          type: "storyboardScenePollo",
+          chatId: ctx.chat.id,
+          userId,
+          prompt: "",
+          promptMessageId: ctx.message.message_id,
+          jsonPath,
+        });
         await ctx.reply(
           `✅ Đã đưa "${jsonFileName}" vào hàng đợi gen scene frame, đợi xử lý.`,
           { reply_parameters: { message_id: ctx.message.message_id } },
         );
       } else {
         await ctx.reply(
-          `❌ File "${jsonFileName}" chưa được xử lý (chưa có trong generated/ hoặc không có job nào lỗi khớp tên). Không thể tiếp tục.`,
+          `❌ Không tìm thấy file "${jsonFileName}" trong generated. Không thể tiếp tục.`,
           { reply_parameters: { message_id: ctx.message.message_id } },
         );
       }

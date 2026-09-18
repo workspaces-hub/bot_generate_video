@@ -12,7 +12,12 @@ export const CHATAI_CHECK_BUTTON_LABEL = "Check prompt kịch bản";
 export const STOP_ALL_BUTTON_LABEL = "🛑 Stop All";
 /** Retry job "storyboardVideo" đã lỗi trước đó (xem failedStoryboardJobs/continueFailedStoryboardVideo trong queue.ts) — user nhập tên file json, bot tự tra lại. */
 export const CONTINUE_VIDEO_BUTTON_LABEL = "Tiếp tục tạo video";
-/** Giống CONTINUE_VIDEO_BUTTON_LABEL nhưng cho job "storyboardImagesAIVideo" (gen ảnh CHARACTER/LOCATION/SCENE_SETTING) — xem continueFailedStoryboardImages trong queue.ts. */
+/**
+ * SỬA (theo yêu cầu người dùng): nút này giờ đẩy job "storyboardScenePollo"
+ * (pollo.ai) THAY VÌ "storyboardImagesAIVideo" — xem nhánh "continueSceneFrame"
+ * trong handlers.ts, cùng cách đã đổi cho CONTINUE_VIDEO_BUTTON_LABEL (Pollo
+ * thay AIVideo).
+ */
 export const CONTINUE_SCENE_FRAME_BUTTON_LABEL = "Tiếp tục tạo frame";
 
 export const promptMenu = Markup.keyboard([
