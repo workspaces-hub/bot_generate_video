@@ -1200,13 +1200,15 @@ export function registerHandlers(bot: Telegraf): void {
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
       const jsonFileName = normalizeTypedJsonFileName(ctx.message.text);
       // SỬA theo yêu cầu user: KHÔNG còn tra failedStoryboardJobs/
-      // failedStoryboardJobsPollo (bắt buộc phải TỪNG lỗi mới cho tiếp tục —
-      // chặn cả trường hợp file chưa từng gen video lần nào, hoặc job cũ đã
-      // bị dọn khỏi danh sách lỗi vì lý do khác). Giờ chỉ cần file JSON khớp
-      // tên tồn tại trong generated/ là đẩy thẳng 1 job "storyboardVideoPollo"
-      // MỚI vào hàng đợi — không kèm entryIds nghĩa là generateVideosForFilePollo
-      // tự xử lý hết entry VIDEO chưa "success", giống hệt luồng xác nhận
-      // bình thường (xem confirmVideoGenerationPollo).
+      // failedStoryboardJobsPollo/failedStoryboardJobsComfy (bắt buộc phải
+      // TỪNG lỗi mới cho tiếp tục — chặn cả trường hợp file chưa từng gen
+      // video lần nào, hoặc job cũ đã bị dọn khỏi danh sách lỗi vì lý do
+      // khác). Giờ chỉ cần file JSON khớp tên tồn tại trong generated/ là đẩy
+      // thẳng 1 job "storyboardVideoComfy" MỚI vào hàng đợi — không kèm
+      // entryIds nghĩa là generateVideosForFileComfyUI tự xử lý hết entry
+      // VIDEO chưa "success", giống hệt luồng xác nhận bình thường (xem
+      // confirmVideoGenerationComfy). Đổi từ "storyboardVideoPollo" sang
+      // "storyboardVideoComfy" theo yêu cầu người dùng.
       const jsonPath = path.join(
         generatedDirFor(jsonFileName),
         `${jsonFileName}.json`,
@@ -1217,7 +1219,7 @@ export function registerHandlers(bot: Telegraf): void {
         .catch(() => false);
       if (fileExists) {
         enqueueJob({
-          type: "storyboardVideoPollo",
+          type: "storyboardVideoComfy",
           chatId: ctx.chat.id,
           userId,
           prompt: "",
