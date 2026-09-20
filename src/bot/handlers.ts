@@ -273,6 +273,7 @@ function storyboardJobTypeForEntryType(
   | "storyboardImagesPollo"
   | "storyboardSceneImagesAIVideo"
   | "storyboardVideoPollo"
+  | "storyboardVideoComfy"
   | null {
   if (entryType === "CHARACTER" || entryType === "LOCATION") {
     return "storyboardImagesPollo";
@@ -284,7 +285,8 @@ function storyboardJobTypeForEntryType(
     return "storyboardSceneImagesAIVideo";
   }
   if (entryType === "VIDEO") {
-    return "storyboardVideoPollo";
+    // return "storyboardVideoPollo";
+    return "storyboardVideoComfy";
   }
   return null;
 }

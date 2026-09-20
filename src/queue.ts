@@ -916,6 +916,7 @@ export function isStoryboardJobQueued(
     | "storyboardSceneImagesAIVideo"
     | "storyboardImagesPollo"
     | "storyboardVideoPollo"
+    | "storyboardVideoComfy"
     | "storyboardVideo",
   jsonPath: string,
   entryId?: string,
