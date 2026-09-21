@@ -307,29 +307,40 @@ export function generatedDirFor(inputPath: string): string {
   return path.resolve("./storage/generated", path.basename(withoutJsonExt));
 }
 
-/** Đuôi file coi là video kết quả — dùng cho archiveExistingVideos (xem ensureGeneratedFolder). */
+/** Đuôi file coi là video kết quả — dùng cho archiveExistingGeneratedFiles (xem ensureGeneratedFolder). */
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov"]);
 
 /**
  * MOVE (không phải copy — tránh để lại bản trùng ở gốc outputDir) các video
  * ĐANG CÓ SẴN ở gốc outputDir (từ lần gen TRƯỚC, cùng tên folder) vào 1
  * subfolder "vXX" mới — XX tăng dần theo subfolder "vXX" lớn nhất đã có (bắt
- * đầu "v01" nếu chưa có subfolder nào). Best-effort: lỗi đọc folder hay move
- * 1 file không chặn cả job, chỉ cảnh báo. Dùng rename trước (nhanh, đúng
- * nghĩa move), fallback copy+xoá bản gốc nếu rename lỗi (vd khác
- * partition/device — không thể rename xuyên device).
+ * đầu "v01" nếu chưa có subfolder nào).
+ *
+ * SỬA (theo yêu cầu người dùng): MOVE THÊM CẢ file JSON storyboard CŨ (nếu có
+ * sẵn ở gốc outputDir từ lần gen trước) vào CÙNG subfolder "vXX" đó — trước
+ * đây chỉ move video, để lại JSON cũ ở gốc rồi bị chính copyFile ở
+ * ensureGeneratedFolder ghi đè mất, khiến folder "vXX" chỉ có video mà không
+ * có JSON gốc đã sinh ra chúng (không tra lại được prompt/ref của lần gen
+ * đó). Giờ mỗi "vXX" là 1 bản snapshot đầy đủ (JSON + video) của đúng lần gen
+ * trước.
+ *
+ * Best-effort: lỗi đọc folder hay move 1 file không chặn cả job, chỉ cảnh
+ * báo. Dùng rename trước (nhanh, đúng nghĩa move), fallback copy+xoá bản gốc
+ * nếu rename lỗi (vd khác partition/device — không thể rename xuyên device).
  */
-async function archiveExistingVideos(outputDir: string): Promise<void> {
+async function archiveExistingGeneratedFiles(outputDir: string): Promise<void> {
   const entries = await fs.promises
     .readdir(outputDir, { withFileTypes: true })
     .catch(() => []);
-  const videoFiles = entries
+  const filesToArchive = entries
     .filter(
       (e) =>
-        e.isFile() && VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()),
+        e.isFile() &&
+        (VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()) ||
+          path.extname(e.name).toLowerCase() === ".json"),
     )
     .map((e) => e.name);
-  if (videoFiles.length === 0) return;
+  if (filesToArchive.length === 0) return;
 
   const existingVersions = entries
     .filter((e) => e.isDirectory() && /^v\d+$/.test(e.name))
@@ -342,7 +353,7 @@ async function archiveExistingVideos(outputDir: string): Promise<void> {
   );
 
   await fs.promises.mkdir(versionDir, { recursive: true });
-  for (const fileName of videoFiles) {
+  for (const fileName of filesToArchive) {
     const srcPath = path.join(outputDir, fileName);
     const destPath = path.join(versionDir, fileName);
     try {
@@ -353,7 +364,7 @@ async function archiveExistingVideos(outputDir: string): Promise<void> {
         await fs.promises.unlink(srcPath);
       } catch (copyErr) {
         console.warn(
-          `[storyboardPipeline] Không move được video "${fileName}" vào "${versionDir}":`,
+          `[storyboardPipeline] Không move được file "${fileName}" vào "${versionDir}":`,
           copyErr,
         );
       }
@@ -369,16 +380,17 @@ async function archiveExistingVideos(outputDir: string): Promise<void> {
  * chờ xác nhận (xem tryReplaceGeneratedFile trong handlers.ts).
  *
  * SỬA (theo yêu cầu người dùng): KHÔNG xoá folder cũ nữa (đã thử, không phù
- * hợp) — thay vào đó, nếu folder đã có sẵn video từ lần gen TRƯỚC (trùng tên
- * folder), copy các video đó vào 1 subfolder "vXX" (XX tăng dần mỗi lần gen)
- * để giữ lại lịch sử các lần gen trước, trước khi tiếp tục ghi đè bình
- * thường ở gốc folder cho lần gen MỚI.
+ * hợp) — thay vào đó, nếu folder đã có sẵn video/JSON từ lần gen TRƯỚC (trùng
+ * tên folder), move CẢ video LẪN file JSON storyboard cũ đó vào 1 subfolder
+ * "vXX" (XX tăng dần mỗi lần gen, xem archiveExistingGeneratedFiles) để giữ
+ * lại lịch sử ĐẦY ĐỦ (JSON + video) các lần gen trước, trước khi tiếp tục ghi
+ * đè bình thường ở gốc folder cho lần gen MỚI.
  */
 export async function ensureGeneratedFolder(
   inputPath: string,
 ): Promise<string> {
   const outputDir = generatedDirFor(inputPath);
-  await archiveExistingVideos(outputDir);
+  await archiveExistingGeneratedFiles(outputDir);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,

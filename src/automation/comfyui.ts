@@ -85,7 +85,8 @@ const MINIMAX_H3_REF_TO_VIDEO_NODE_ID = "136";
 const MINIMAX_H3_PROMPT_NODE_ID = "138";
 const MINIMAX_H3_DURATION_NODE_ID = "132";
 const MINIMAX_H3_NOISE_SEED_NODE_ID = "129";
-const MINIMAX_H3_ASPECT_RATIO_NODE_ID = "115";
+/** Node "115" ResolutionSelector — giữ CẢ aspect_ratio lẫn megapixels (xem generateVideoComfyMiniMaxH3). */
+const MINIMAX_H3_RESOLUTION_SELECTOR_NODE_ID = "115";
 /** Node "Int (Full)" — số sampling steps khi Lightning LoRA tắt (node "146" = false, xem generateVideoComfyMiniMaxH3). */
 const MINIMAX_H3_STEPS_NODE_ID = "143";
 
@@ -414,6 +415,7 @@ export async function generateVideoComfyMiniMaxH3(
   jobId: string,
   aspectRatio: ComfyAspectRatio = DEFAULT_ASPECT_RATIO,
   steps: number = config.comfyUIMiniMaxH3Steps,
+  megapixels: number = config.comfyUIMiniMaxH3Megapixels,
 ): Promise<ComfyUIGenerateVideoResult> {
   if (referenceImagePaths.length === 0) {
     throw new GenerationError(
@@ -448,8 +450,14 @@ export async function generateVideoComfyMiniMaxH3(
 
   workflow[MINIMAX_H3_PROMPT_NODE_ID].inputs.value = prompt;
   workflow[MINIMAX_H3_DURATION_NODE_ID].inputs.value = duration;
-  workflow[MINIMAX_H3_ASPECT_RATIO_NODE_ID].inputs.aspect_ratio =
+  workflow[MINIMAX_H3_RESOLUTION_SELECTOR_NODE_ID].inputs.aspect_ratio =
     MINIMAX_H3_ASPECT_RATIO_LABELS[aspectRatio];
+  // Độ phân giải đích (megapixel) — CÙNG node "115" ResolutionSelector với
+  // aspect_ratio ở trên. Trước đây hardcode 0.4 trong chính file JSON
+  // template (xác nhận qua lỗi thật: video 9:16 ra đúng 480x864, không đủ
+  // nét cho nội dung premium) — giờ đọc qua config.comfyUIMiniMaxH3Megapixels
+  // (env COMFYUI_MINIMAX_H3_MEGAPIXELS) để đổi được không cần sửa file JSON.
+  workflow[MINIMAX_H3_RESOLUTION_SELECTOR_NODE_ID].inputs.megapixels = megapixels;
   // Số sampling steps — trước đây hardcode trong chính file JSON template
   // (node "143" "Int (Full)"), giờ đọc qua config.comfyUIMiniMaxH3Steps (env
   // COMFYUI_MINIMAX_H3_STEPS) để đổi được không cần sửa file JSON. Chỉ áp

@@ -195,6 +195,16 @@ export const config = {
   // chính file JSON template, giờ đọc qua config để đổi được không cần sửa
   // file JSON. Mặc định 8 (khớp giá trị đang có trong template).
   comfyUIMiniMaxH3Steps: Number(process.env.COMFYUI_MINIMAX_H3_STEPS ?? 8),
+  // Độ phân giải đích (megapixel) cho workflow MiniMax H3 — node "115"
+  // ResolutionSelector trong comfyuiWorkflows/minimax-h3-reference-to-video.json,
+  // xem generateVideoComfyMiniMaxH3 trong comfyui.ts. Trước đây hardcode
+  // trong chính file JSON template (0.4 — xác nhận qua lỗi thật: video 9:16
+  // xuất ra ĐÚNG 480x864, hình không đủ nét cho nội dung premium). Mặc định
+  // 0.4 (giữ nguyên hành vi cũ) — tăng lên (vd 1.0, gần 720p) cho hình nét
+  // hơn, đổi lại generate chậm hơn/tốn VRAM hơn trên ComfyUI.
+  comfyUIMiniMaxH3Megapixels: Number(
+    process.env.COMFYUI_MINIMAX_H3_MEGAPIXELS ?? 0.4,
+  ),
 };
 
 // if (config.admins.length === 0) {
