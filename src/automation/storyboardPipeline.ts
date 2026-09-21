@@ -15,6 +15,7 @@ import { generateImage as generateImagePollo } from "./polloImage";
 import { withPolloTaskSlot } from "./polloBrowser";
 import {
   generateVideoComfyMiniMaxH3,
+  generateVideoComfyMiniMaxH3TextToVideo,
   MAX_MINIMAX_H3_REFERENCE_IMAGES,
 } from "./comfyui";
 
@@ -1501,11 +1502,6 @@ export async function generateVideosForFileComfyUI(
           Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
       );
 
-      if (refs.length === 0) {
-        throw new Error(
-          "ComfyUI (MiniMax H3 Reference to Video) cần ít nhất 1 ảnh tham chiếu — entry này không resolve được ref nào.",
-        );
-      }
       if (refs.length > MAX_MINIMAX_H3_REFERENCE_IMAGES) {
         throw new Error(
           `ComfyUI (MiniMax H3 Reference to Video) chỉ nhận tối đa ${MAX_MINIMAX_H3_REFERENCE_IMAGES} ảnh tham chiếu — entry này có ${refs.length} ref.`,
@@ -1522,13 +1518,17 @@ export async function generateVideosForFileComfyUI(
           ? entry.duration
           : COMFYUI_DEFAULT_DURATION_SECONDS;
 
-      // aspectRatio — field mới trong VIDEO entry (xem format_output.txt) —
-      // chỉ nhận đúng giá trị hợp lệ, sai/thiếu thì để generateVideoComfyMiniMaxH3
-      // tự dùng default (16:9, xem comfyui.ts). frameRate KHÔNG áp dụng cho
-      // workflow MiniMax H3 (fps cố định 24 trong chính template).
+      // aspectRatio/frameRate — 2 field mới trong VIDEO entry (xem
+      // format_output.txt) — chỉ nhận đúng giá trị hợp lệ, sai/thiếu thì để
+      // generateVideoComfyMiniMaxH3/generateVideoComfyMiniMaxH3TextToVideo tự
+      // dùng default (16:9/24fps, xem comfyui.ts).
       const aspectRatio =
         entry.aspectRatio === "9:16" || entry.aspectRatio === "16:9"
           ? entry.aspectRatio
+          : undefined;
+      const frameRate =
+        typeof entry.frameRate === "number" && entry.frameRate > 0
+          ? entry.frameRate
           : undefined;
 
       if (isStopStoryboardRequested(inputPath)) break;
@@ -1536,15 +1536,34 @@ export async function generateVideosForFileComfyUI(
       console.log(
         `[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video (ComfyUI)...`,
       );
+      // SỬA (theo yêu cầu người dùng): entry KHÔNG resolve được ref nào
+      // (refPaths rỗng) thì chuyển sang workflow "Text to Video" (không cần
+      // ảnh đầu vào) THAY VÌ throw lỗi như trước — chỉ khi CÓ ref mới dùng
+      // "Reference to Video" (cần ít nhất 1 ảnh). Truyền undefined cho
+      // steps/megapixels (2 tham số giữa) để 2 hàm tự lấy default từ config —
+      // chỉ frameRate cần truyền tường minh ở vị trí cuối.
       const { filePath: tempFilePath, promptId } =
         await generateWithContentViolationRetry(entry, jobId, () =>
-          generateVideoComfyMiniMaxH3(
-            refPaths,
-            entry.prompt!,
-            duration,
-            jobId,
-            aspectRatio,
-          ),
+          refPaths.length > 0
+            ? generateVideoComfyMiniMaxH3(
+                refPaths,
+                entry.prompt!,
+                duration,
+                jobId,
+                aspectRatio,
+                undefined,
+                undefined,
+                frameRate,
+              )
+            : generateVideoComfyMiniMaxH3TextToVideo(
+                entry.prompt!,
+                duration,
+                jobId,
+                aspectRatio,
+                undefined,
+                undefined,
+                frameRate,
+              ),
         );
       entry.comfyPromptId = promptId;
 

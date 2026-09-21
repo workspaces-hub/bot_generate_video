@@ -89,6 +89,15 @@ const MINIMAX_H3_NOISE_SEED_NODE_ID = "129";
 const MINIMAX_H3_RESOLUTION_SELECTOR_NODE_ID = "115";
 /** Node "Int (Full)" — số sampling steps khi Lightning LoRA tắt (node "146" = false, xem generateVideoComfyMiniMaxH3). */
 const MINIMAX_H3_STEPS_NODE_ID = "143";
+/** Node "CreateVideo" — giữ fps xuất video cuối cùng (xem generateVideoComfyMiniMaxH3). */
+const MINIMAX_H3_CREATE_VIDEO_NODE_ID = "130";
+/**
+ * Node "ComfyMathExpression" tính "length" (số frame) từ duration — hardcode
+ * "24" (fps) NGAY TRONG CHÍNH chuỗi expression (không phải input riêng), xem
+ * buildMiniMaxH3LengthExpression — phải re-build lại cả chuỗi expression mỗi
+ * khi fps khác 24, không chỉ set 1 field số như các input khác.
+ */
+const MINIMAX_H3_DURATION_FORMULA_NODE_ID = "131";
 
 /** Số ảnh tham chiếu tối đa mà workflow MiniMax H3 hỗ trợ (đúng số slot ref_image_0..8 có sẵn trong template). */
 export const MAX_MINIMAX_H3_REFERENCE_IMAGES = MINIMAX_H3_REF_IMAGE_NODE_IDS.length;
@@ -109,6 +118,58 @@ export type ComfyAspectRatio = "9:16" | "16:9";
 
 const DEFAULT_ASPECT_RATIO: ComfyAspectRatio = "16:9";
 const DEFAULT_FRAME_RATE = 24;
+
+/**
+ * Workflow THỨ 3: MiniMax H3 "Text to Video" (node MiniMaxH3ImageToVideo —
+ * tên class_type dễ gây nhầm, nhưng workflow KHÔNG hề wire LoadImage/ảnh đầu
+ * vào nào cả) — dùng khi entry KHÔNG có ảnh tham chiếu nào (referenceImagePaths
+ * rỗng), thay vì generateVideoComfyMiniMaxH3 (Reference to Video, luôn cần
+ * ít nhất 1 ảnh). File JSON gốc lưu ở
+ * comfyuiWorkflows/minimax-h3-text-to-video.json.
+ *
+ * SỬA (theo yêu cầu người dùng, cập nhật lại đúng workflow gốc mới nhất —
+ * BẢN ĐẦU dùng width/height/length TĨNH đã LỖI THỜI, workflow thật của người
+ * dùng dùng cấu trúc GIỐNG HỆT workflow Reference to Video):
+ * - width/height: qua CHUNG node "115" ResolutionSelector với workflow
+ *   Reference to Video (CÙNG node id, cùng ý nghĩa aspect_ratio/megapixels) —
+ *   dùng lại nguyên MINIMAX_H3_RESOLUTION_SELECTOR_NODE_ID/
+ *   MINIMAX_H3_ASPECT_RATIO_LABELS, KHÔNG cần logic width/height riêng nữa.
+ * - length (số frame): qua node ComfyMathExpression THẬT ("140:132", cùng
+ *   công thức "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) %
+ *   17" như workflow Reference to Video) — chỉ cần set duration (giây) vào
+ *   node PrimitiveFloat "140:133", KHÔNG cần tự tính lại công thức bằng JS
+ *   nữa (đã bỏ hẳn computeMiniMaxH3FrameLength/properMod).
+ * - steps: qua switch Full/Lightning LoRA THẬT ("140:135" model, "140:136"
+ *   steps, "140:139" Enable Lightning LoRA boolean) — GIỐNG HỆT cấu trúc
+ *   workflow Reference to Video, chỉ khác giá trị mặc định (Full=20,
+ *   Lightning=8, thay vì 8/4) — vẫn tiêm qua CHUNG config.comfyUIMiniMaxH3Steps
+ *   vào nhánh "Full" (node "140:137"), nhánh Lightning LoRA đang tắt
+ *   (switch "140:139" = false) nên không đổi qua config này.
+ * - prompt: input trực tiếp trên node "140:131" (MiniMaxH3ImageToVideo).
+ * - seed: node "140:129" (RandomNoise.noise_seed).
+ */
+const MINIMAX_H3_T2V_WORKFLOW_TEMPLATE_PATH = path.resolve(
+  "./comfyuiWorkflows/minimax-h3-text-to-video.json",
+);
+const MINIMAX_H3_T2V_NODE_ID = "140:131";
+const MINIMAX_H3_T2V_DURATION_NODE_ID = "140:133";
+const MINIMAX_H3_T2V_NOISE_SEED_NODE_ID = "140:129";
+/** Node "Int" nhánh "Full" (khi Lightning LoRA tắt) — xem "140:139" Enable Lightning LoRA. */
+const MINIMAX_H3_T2V_STEPS_NODE_ID = "140:137";
+const MINIMAX_H3_T2V_CREATE_VIDEO_NODE_ID = "140:130";
+const MINIMAX_H3_T2V_DURATION_FORMULA_NODE_ID = "140:132";
+
+/**
+ * Build lại chuỗi "expression" cho node ComfyMathExpression tính "length"
+ * (số frame) từ duration — CÙNG công thức đã xác nhận trong cả 2 workflow
+ * MiniMax H3 ("max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) %
+ * 17"), chỉ thay "24" (fps) bằng giá trị fps thật truyền vào. "5" và "17"
+ * KHÔNG đổi theo fps — đây là ràng buộc nội bộ của model (số frame tối
+ * thiểu/hệ số nén thời gian), không liên quan tới fps.
+ */
+function buildMiniMaxH3LengthExpression(fps: number): string {
+  return `max(5, round(a * ${fps})) + (5 - (max(5, round(a * ${fps})) % 17)) % 17`;
+}
 
 /**
  * Quy đổi aspectRatio ("9:16"/"16:9", xem format_output.txt) sang width/height
@@ -416,6 +477,7 @@ export async function generateVideoComfyMiniMaxH3(
   aspectRatio: ComfyAspectRatio = DEFAULT_ASPECT_RATIO,
   steps: number = config.comfyUIMiniMaxH3Steps,
   megapixels: number = config.comfyUIMiniMaxH3Megapixels,
+  fps: number = DEFAULT_FRAME_RATE,
 ): Promise<ComfyUIGenerateVideoResult> {
   if (referenceImagePaths.length === 0) {
     throw new GenerationError(
@@ -464,6 +526,14 @@ export async function generateVideoComfyMiniMaxH3(
   // dụng cho nhánh "Full" (node "146" Enable Lightning LoRA = false, xem
   // template) — nhánh Lightning LoRA (node "144") không đổi qua config này.
   workflow[MINIMAX_H3_STEPS_NODE_ID].inputs.value = steps;
+  // fps — trước đây hardcode 24 (node "130" CreateVideo, và cả trong CHÍNH
+  // chuỗi "expression" của node "131" ComfyMathExpression tính length — 2
+  // chỗ, không chỉ 1). Giờ truyền được: set thẳng node "130", và REBUILD lại
+  // cả chuỗi expression của node "131" qua buildMiniMaxH3LengthExpression
+  // (không chỉ set 1 field số vì fps nằm ngay trong text công thức).
+  workflow[MINIMAX_H3_CREATE_VIDEO_NODE_ID].inputs.fps = fps;
+  workflow[MINIMAX_H3_DURATION_FORMULA_NODE_ID].inputs.expression =
+    buildMiniMaxH3LengthExpression(fps);
   // Random seed mỗi lần gọi — cùng lý do đã giải thích ở generateVideoComfyUI
   // (tránh ComfyUI trả cache kết quả cũ, và cùng giới hạn range của
   // crypto.randomInt).
@@ -471,6 +541,60 @@ export async function generateVideoComfyMiniMaxH3(
     0,
     281_474_976_710_655,
   );
+
+  const clientId = crypto.randomUUID();
+  const promptId = await submitPrompt(workflow, clientId);
+  const outputFile = await pollHistoryUntilDone(
+    promptId,
+    config.comfyUIGenerationTimeoutMs,
+  );
+  const filePath = await downloadOutputFile(outputFile, jobId);
+
+  return { filePath, promptId };
+}
+
+/**
+ * Gen video qua ComfyUI dùng workflow MiniMax H3 "Text to Video" — dùng khi
+ * KHÔNG có ảnh tham chiếu nào (xem generateVideosForFileComfyUI trong
+ * storyboardPipeline.ts: entry VIDEO không resolve được ref CHARACTER/
+ * LOCATION nào thì gọi hàm này thay vì generateVideoComfyMiniMaxH3).
+ *
+ * width/height/length của node MiniMaxH3ImageToVideo ("140:131") đã được
+ * WIRE SẴN tới ResolutionSelector ("115")/ComfyMathExpression ("140:132")
+ * ngay trong template — hàm này CHỈ set giá trị đầu vào của 2 node đó
+ * (aspect_ratio/megapixels, duration) chứ không tự set width/height/length
+ * trực tiếp (khác bản đầu, đã lỗi thời — xem docstring khối const phía trên).
+ *
+ * CHƯA test thật với server ComfyUI thật — cần người dùng tự chạy thử để
+ * xác nhận workflow chạy đúng khi không có ảnh tham chiếu nào.
+ */
+export async function generateVideoComfyMiniMaxH3TextToVideo(
+  prompt: string,
+  duration: number,
+  jobId: string,
+  aspectRatio: ComfyAspectRatio = DEFAULT_ASPECT_RATIO,
+  steps: number = config.comfyUIMiniMaxH3Steps,
+  megapixels: number = config.comfyUIMiniMaxH3Megapixels,
+  fps: number = DEFAULT_FRAME_RATE,
+): Promise<ComfyUIGenerateVideoResult> {
+  const workflow = loadWorkflowTemplate(MINIMAX_H3_T2V_WORKFLOW_TEMPLATE_PATH);
+
+  workflow[MINIMAX_H3_T2V_NODE_ID].inputs.prompt = prompt;
+  workflow[MINIMAX_H3_T2V_DURATION_NODE_ID].inputs.value = duration;
+  workflow[MINIMAX_H3_RESOLUTION_SELECTOR_NODE_ID].inputs.aspect_ratio =
+    MINIMAX_H3_ASPECT_RATIO_LABELS[aspectRatio];
+  workflow[MINIMAX_H3_RESOLUTION_SELECTOR_NODE_ID].inputs.megapixels =
+    megapixels;
+  workflow[MINIMAX_H3_T2V_STEPS_NODE_ID].inputs.value = steps;
+  // fps — cùng lý do đã giải thích ở generateVideoComfyUI: phải set CẢ node
+  // CreateVideo lẫn rebuild chuỗi expression của node ComfyMathExpression
+  // (fps nằm ngay trong text công thức, không phải input riêng).
+  workflow[MINIMAX_H3_T2V_CREATE_VIDEO_NODE_ID].inputs.fps = fps;
+  workflow[MINIMAX_H3_T2V_DURATION_FORMULA_NODE_ID].inputs.expression =
+    buildMiniMaxH3LengthExpression(fps);
+  // Random seed mỗi lần gọi — cùng lý do đã giải thích ở generateVideoComfyUI.
+  workflow[MINIMAX_H3_T2V_NOISE_SEED_NODE_ID].inputs.noise_seed =
+    crypto.randomInt(0, 281_474_976_710_655);
 
   const clientId = crypto.randomUUID();
   const promptId = await submitPrompt(workflow, clientId);
