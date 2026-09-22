@@ -207,7 +207,21 @@ const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file 
  * ĐƠN, không có "__", nên phần còn lại sau "__" đầu tiên chắc chắn là tên
  * file gốc (kèm đuôi). Dùng cho fileName (tên file THẬT — luôn có đuôi).
  */
-const REPLACEMENT_FILENAME_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
+// SỬA (xác nhận qua lỗi thật: caption
+// "2.0-tập_2-_nghĩa_trang_only_test_-___CHAR_PROP_ADRIAN_LUXURY_SEDAN" — tên
+// file gốc "2.0-tập_2-_nghĩa_trang_only_test_-_" (đúng ra phải giữ nguyên
+// dấu "_" cuối) TỰ NHIÊN kết thúc bằng "_" ngay sát dấu phân cách "__", tạo
+// thành 1 dải 3 dấu "_" liên tiếp ("_" cuối tên file + "__" phân cách). Nhóm
+// 1 dùng "(.+?)" (LAZY — khớp ÍT ký tự nhất có thể) nên bắt luôn "__" ĐẦU
+// TIÊN tìm thấy trong dải 3 dấu "_" đó — cắt tên file THIẾU mất đúng 1 dấu
+// "_" cuối (nhóm 1 ra "...test_-" thay vì "...test_-_"), phần dư 1 dấu "_"
+// bị dính NHẦM vào đầu nhóm 2 (id). Đổi "(.+?)" (lazy) thành "(.+)" (GREEDY)
+// — greedy bắt "__" CUỐI CÙNG tìm được trong chuỗi (khớp nhiều ký tự nhất có
+// thể trước khi phải lùi lại) — đúng ý muốn vì id (CHAR_XXX/LOC_XXX...) theo
+// quy ước KHÔNG BAO GIỜ chứa "__" (chỉ có "_" đơn), nên "__" cuối cùng trong
+// toàn chuỗi luôn chính là dấu phân cách thật, dù tên file có tận cùng bằng
+// bao nhiêu dấu "_" đi nữa.
+const REPLACEMENT_FILENAME_PATTERN = /^(.+)__([^/\\]+\.[A-Za-z0-9]+)$/;
 
 /**
  * GIỐNG REPLACEMENT_FILENAME_PATTERN nhưng KHÔNG bắt buộc đuôi file — dùng
@@ -215,7 +229,7 @@ const REPLACEMENT_FILENAME_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
  * gõ) vẫn nằm nguyên trong nhóm 2; tryReplaceGeneratedFile tự kiểm tra bằng
  * path.extname() và mặc định ".png" khi nhóm 2 không có đuôi nào.
  */
-const REPLACEMENT_CAPTION_PATTERN = /^(.+?)__([^/\\]+)$/;
+const REPLACEMENT_CAPTION_PATTERN = /^(.+)__([^/\\]+)$/;
 
 /**
  * Tìm số version kế tiếp cho backup "<name>_vXX<ext>" trong dir — quét các
