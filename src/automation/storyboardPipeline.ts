@@ -457,7 +457,7 @@ export async function generateReferenceImagesForFile(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP") return false;
       // Chỉ gen khi "prompt" là string thật — entry thiếu id, hoặc prompt bị
       // sai kiểu (số/object/null từ JSON input lỗi) đều bỏ qua thay vì gọi
       // generateReferenceImage với giá trị không phải string.
@@ -565,7 +565,7 @@ export async function generateReferenceImagesForFileViaAIVideo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP") return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -704,7 +704,7 @@ export async function generateReferenceImagesForFileViaPollo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP") return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -1499,7 +1499,8 @@ export async function generateVideosForFileComfyUI(
     try {
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
-          Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
+          Boolean(r.id) &&
+          (r.type === "CHARACTER" || r.type === "LOCATION" || r.type === "PROP"),
       );
 
       if (refs.length > MAX_MINIMAX_H3_REFERENCE_IMAGES) {
