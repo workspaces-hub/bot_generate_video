@@ -2926,7 +2926,10 @@ async function processScriptReferenceVideoQueue(): Promise<void> {
             await telegram.sendMessage(
               job.chatId,
               "✅ ChatAI đã trả lời xong (không có file JSON đính kèm nào).",
-              { reply_parameters: { message_id: job.promptMessageId } },
+              { 
+                reply_parameters: { message_id: job.promptMessageId },
+                ...promptMenu,
+              },
             );
           }
           await deleteStatusMessage(job);
@@ -3186,6 +3189,7 @@ async function notifyVideoSuccess(
     console.error("[queue] Gửi video thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
     await notifyAdmins(err);
   }
@@ -3221,6 +3225,7 @@ async function notifyStoryboardVideoResult(
     console.error("[queue] Gửi kết quả tạo video (xác nhận) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
     await notifyAdmins(err);
   }
@@ -3256,6 +3261,7 @@ async function notifyStoryboardVideoResultPollo(
     console.error("[queue] Gửi kết quả tạo video (Pollo) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
     await notifyAdmins(err);
   }
@@ -3292,6 +3298,7 @@ async function notifyStoryboardVideoResultComfy(
     console.error("[queue] Gửi kết quả tạo video (Comfy) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
     await notifyAdmins(err);
   }
@@ -3332,6 +3339,7 @@ async function notifyStoryboardImagesAIVideoResult(
     console.error("[queue] Gửi kết quả tạo ảnh (aiVideo) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
     await notifyAdmins(err);
   }
@@ -3362,6 +3370,7 @@ async function notifyStoryboardImagesResultPollo(
     console.error("[queue] Gửi kết quả tạo ảnh (Pollo) thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
     await notifyAdmins(err);
   }
@@ -3379,6 +3388,7 @@ async function notifyImageSuccess(
     console.error("[queue] Gửi ảnh thất bại:", err);
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
     await notifyAdmins(err);
   }
@@ -3540,6 +3550,7 @@ async function sendDocumentMaybeSplit(
       {
         caption,
         reply_parameters: { message_id: replyToMessageId },
+        ...promptMenu,
       },
     );
     return;
@@ -3593,6 +3604,7 @@ async function notifyChatAISuccess(
           `✅ ChatAI đã trả lời xong" (không có file đính kèm).`,
           {
             reply_parameters: { message_id: job.promptMessageId },
+            ...promptMenu
           },
         );
       } catch (e) {}
@@ -3604,6 +3616,7 @@ async function notifyChatAISuccess(
     try {
       await telegram.sendMessage(job.chatId, "404", {
         reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
       });
     } catch (e) {}
     await notifyAdmins(err);
@@ -3638,6 +3651,7 @@ async function notifyError(job: GenerationJob, err: unknown): Promise<void> {
   try {
     await telegram.sendMessage(job.chatId, "404", {
       reply_parameters: { message_id: job.promptMessageId },
+      ...promptMenu,
     });
   } catch (e) {}
   await deleteStatusMessage(job);

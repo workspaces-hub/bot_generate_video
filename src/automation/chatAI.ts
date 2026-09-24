@@ -126,6 +126,69 @@ async function insertPromptText(
   await page.keyboard.insertText(text);
 }
 
+/**
+ * Chờ nút Send hết trạng thái "aria-disabled=true" — xác nhận qua lỗi thật
+ * (job b72824b5-7545-4750-9dd4-1532aa4fba99): sendButton.click() timeout
+ * 10s với log Playwright "element is not enabled" liên tục — nút Send tồn
+ * tại/visible thật (locator resolve đúng) nhưng ChatGPT tự disable nút này
+ * khi ô nhập được coi là RỖNG, dù các bước dán/gõ prompt phía trên không hề
+ * báo lỗi gì. Bấm mù vào nút đang disabled chỉ lặp lại đúng lỗi này tới hết
+ * timeout mà không có thêm manh mối — chờ RÕ RÀNG nút chuyển enabled trước,
+ * để sendMessage có cơ hội tự phát hiện và thử gõ lại (xem lời gọi hàm này).
+ */
+async function waitForSendButtonEnabled(
+  page: Page,
+  sendButton: Locator,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const disabled = await sendButton
+      .getAttribute("aria-disabled")
+      .catch(() => null);
+    if (disabled !== "true") return true;
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+/**
+ * Xác nhận qua debug thật (job b72824b5-7545-4750-9dd4-1532aa4fba99, ảnh
+ * chụp lúc lỗi "nút Send disabled"): khi PASTE 1 đoạn text RẤT DÀI (như
+ * master prompt), ChatGPT tự động chuyển đoạn đó thành 1 THẺ đính kèm riêng
+ * (giống thẻ file, tiêu đề rút gọn theo dòng đầu, vd "# PROMPT MASTER — 1
+ * .."), thẻ này hiện spinner xoay (`<svg><use href="...#spinner">`, DOM thật
+ * xác nhận: div bọc spinner có "display: none !important" khi ĐÃ xong, chỉ
+ * hiện khi đang xử lý) trong lúc ChatGPT còn xử lý/tổng hợp nội dung thẻ.
+ * Bấm Send lúc thẻ còn spinner có thể khiến ChatGPT chưa nhận đúng nội dung
+ * hoặc nút Send chưa kịp bật — chờ MỌI spinner dạng này biến mất (không giới
+ * hạn theo tên thẻ cụ thể, để dùng chung được cho cả thẻ text tự sinh lẫn
+ * thẻ file khác nếu sau này có cùng cơ chế) trước khi tiếp tục. Dùng
+ * offsetParent !== null (không phải chỉ querySelector tồn tại trong DOM) để
+ * kiểm tra spinner có THỰC SỰ đang hiển thị hay không — element spinner vẫn
+ * NẰM SẴN trong DOM ngay cả khi đã xong, chỉ khác ở chỗ bị ẩn bằng CSS.
+ * Best-effort: timeout 30s rồi tự bỏ qua (không throw), không chặn cả job
+ * chỉ vì lỡ có spinner lạ nào đó không bao giờ biến mất.
+ */
+async function waitForComposerTilesToSettle(page: Page): Promise<void> {
+  await page
+    .waitForFunction(
+      () => {
+        const spinners = document.querySelectorAll('svg use[href$="#spinner"]');
+        for (const spinner of spinners) {
+          const svgEl = spinner.closest("svg");
+          if (svgEl && (svgEl as unknown as HTMLElement).offsetParent !== null) {
+            return false;
+          }
+        }
+        return true;
+      },
+      undefined,
+      { timeout: 30_000 },
+    )
+    .catch(() => {});
+}
+
 /** Chặn lặp vô hạn nếu vì lý do gì đó ChatAI không bao giờ đính kèm file. */
 const MAX_TURNS_WAITING_FOR_FILE = 30;
 
@@ -361,8 +424,34 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   } else {
     await insertPromptText(page, textarea, text);
   }
+  // Chờ hết spinner ở (các) thẻ đính kèm trong composer — bao gồm thẻ text
+  // ChatGPT tự sinh ra khi paste đoạn dài (xem docstring
+  // waitForComposerTilesToSettle) — TRƯỚC KHI tìm/kiểm tra nút Send, vì lúc
+  // còn spinner nút Send có thể chưa sẵn sàng.
+  await waitForComposerTilesToSettle(page);
   // await captureSnapshot(page, "before-click ask", "before-click ask");
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
+  // Xác nhận qua lỗi thật (job b72824b5-7545-4750-9dd4-1532aa4fba99): nút
+  // Send có thể vẫn "aria-disabled=true" ngay sau khi các bước dán/gõ ở trên
+  // đã chạy xong KHÔNG báo lỗi gì — bấm mù vào nút đang disabled chỉ lặp lại
+  // "element is not enabled" tới hết 10s rồi throw. Chờ RÕ RÀNG nút chuyển
+  // enabled trước; nếu sau 25s vẫn disabled (nghi ô nhập chưa thực sự nhận
+  // được text dù bước dán/gõ không báo lỗi), thử gõ lại 1 lần bằng
+  // insertPromptText (đường tin cậy nhất, không qua clipboard OS) rồi chờ
+  // tiếp — chỉ throw lỗi rõ ràng nếu vẫn disabled sau khi đã thử lại.
+  let sendButtonEnabled = await waitForSendButtonEnabled(page, sendButton, 25000);
+  if (!sendButtonEnabled) {
+    console.warn(
+      "[chatAI] Nút Send vẫn disabled sau khi dán/gõ prompt — thử gõ lại bằng insertPromptText trước khi bấm Send.",
+    );
+    await insertPromptText(page, textarea, text);
+    sendButtonEnabled = await waitForSendButtonEnabled(page, sendButton, 10000);
+  }
+  if (!sendButtonEnabled) {
+    throw new ChatAIError(
+      "Nút Send vẫn ở trạng thái disabled dù đã thử dán/gõ lại prompt — có thể ChatGPT đã đổi cấu trúc composer.",
+    );
+  }
   // ChatGPT điều hướng THẬT (từ "/" sang "/c/<id>") khi gửi tin nhắn ĐẦU
   // TIÊN của 1 hội thoại mới — xác nhận qua lỗi thật ("click action done —
   // waiting for scheduled navigations to finish" rồi timeout 30s): click ĐÃ
@@ -667,17 +756,13 @@ async function downloadAttachedFiles(
       if (!download) {
         // Xác nhận qua debug thật (job 0c2ee0e8, b38b1151): bấm file (dù
         // qua thẻ card hay link "Download file <tên>") đều có thể chỉ mở ra
-        // panel xem trước dạng "Library" (data-testid="screen-threadFlyOut")
-        // — nút "Download" trong panel này KHÔNG BAO GIỜ bắn sự kiện
-        // "download" mà Playwright bắt được (nghi dùng File System Access
-        // API/showSaveFilePicker — hộp thoại lưu file NATIVE của hệ điều
-        // hành, không hoạt động trong môi trường tự động hoá). Chờ panel
-        // xuất hiện lâu hơn (tới 20s — panel có thể chậm render sau khi vừa
-        // bấm) rồi lấy nội dung.
-        const panelContent = page.locator(
-          '[data-testid="screen-threadFlyOut"] .cm-content',
+        // panel xem trước dạng "Library" (data-testid="screen-threadFlyOut").
+        // Chờ panel xuất hiện lâu hơn (tới 20s — panel có thể chậm render
+        // sau khi vừa bấm) rồi lấy nội dung.
+        const panelContainer = page.locator(
+          '[data-testid="screen-threadFlyOut"]',
         );
-        const panelAppeared = await panelContent
+        const panelAppeared = await panelContainer
           .first()
           .waitFor({ state: "visible", timeout: 20_000 })
           .then(() => true)
@@ -685,107 +770,169 @@ async function downloadAttachedFiles(
 
         let previewText: string | null = null;
         if (panelAppeared) {
-          // Chọn hết + copy thay vì .innerText() trực tiếp — CodeMirror
-          // (editor panel này dùng) có thể ẢO HOÁ (virtualize) nội dung file
-          // dài, .innerText() khi đó chỉ đọc được đúng phần đang cuộn tới
-          // màn hình chứ KHÔNG PHẢI toàn bộ file. Ctrl+A/Ctrl+C mô phỏng
-          // thao tác "chọn hết" thật của CodeMirror (chọn theo MODEL dữ liệu
-          // đầy đủ, không phải theo DOM đang render), đọc lại từ clipboard
-          // ra được TOÀN BỘ nội dung bất kể có ảo hoá hay không.
-          const grantErr = await page
-            .context()
-            .grantPermissions(["clipboard-read", "clipboard-write"], {
-              origin: config.chatAIBaseUrl,
-            })
-            .then(() => null)
-            .catch((err) => err);
-          const clickErr = await panelContent
+          const panelContent = panelContainer.locator(".cm-content");
+          // Xác nhận qua debug thật (job
+          // "...Episode_3_-_SSS-Rank-_The_Slum-Born_Thunder_God_-_ReelShort.mp4"):
+          // panel đôi khi hiện "Preview unavailable." + nút "Download" THAY
+          // VÌ nội dung CodeMirror (.cm-content) — không phải mọi lần mở
+          // panel đều có preview đọc được như trước đây giả định. Phải chờ
+          // XÁC NHẬN .cm-content có thật render hay không rồi mới chọn đúng
+          // nhánh xử lý, không mặc định luôn có.
+          const hasCodePreview = await panelContent
             .first()
-            .click()
-            .then(() => null)
-            .catch((err) => err);
-          await page.keyboard.press("ControlOrMeta+A");
-          await page.keyboard.press("ControlOrMeta+C");
-          let clipboardErr: unknown = null;
-          previewText = await page
-            .evaluate(() => navigator.clipboard.readText())
-            .catch((err) => {
-              clipboardErr = err;
-              return null;
-            });
-          console.log(
-            `[chatAI] downloadAttachedFiles preview panel (index ${i}): grantPermissions${grantErr ? ` lỗi=${grantErr}` : " ok"}, click panel${clickErr ? ` lỗi=${clickErr}` : " ok"}, clipboard đọc được ${previewText ? previewText.length : 0} ký tự${clipboardErr ? `, lỗi clipboard=${clipboardErr}` : ""}`,
-          );
-          // Fallback cuối nếu clipboard đọc lỗi (vd bị chặn Permissions-Policy
-          // — xem lý do tương tự ở sendMessage): dùng innerText(), chấp nhận
-          // rủi ro thiếu nội dung nếu panel có ảo hoá, còn hơn không có gì.
-          if (!previewText) {
-            let innerTextErr: unknown = null;
-            previewText = await panelContent
+            .waitFor({ state: "visible", timeout: 5000 })
+            .then(() => true)
+            .catch(() => false);
+
+          if (hasCodePreview) {
+            // Chọn hết + copy thay vì .innerText() trực tiếp — CodeMirror
+            // (editor panel này dùng) có thể ẢO HOÁ (virtualize) nội dung file
+            // dài, .innerText() khi đó chỉ đọc được đúng phần đang cuộn tới
+            // màn hình chứ KHÔNG PHẢI toàn bộ file. Ctrl+A/Ctrl+C mô phỏng
+            // thao tác "chọn hết" thật của CodeMirror (chọn theo MODEL dữ liệu
+            // đầy đủ, không phải theo DOM đang render), đọc lại từ clipboard
+            // ra được TOÀN BỘ nội dung bất kể có ảo hoá hay không.
+            const grantErr = await page
+              .context()
+              .grantPermissions(["clipboard-read", "clipboard-write"], {
+                origin: config.chatAIBaseUrl,
+              })
+              .then(() => null)
+              .catch((err) => err);
+            const clickErr = await panelContent
               .first()
-              .innerText({ timeout: 5000 })
+              .click()
+              .then(() => null)
+              .catch((err) => err);
+            await page.keyboard.press("ControlOrMeta+A");
+            await page.keyboard.press("ControlOrMeta+C");
+            let clipboardErr: unknown = null;
+            previewText = await page
+              .evaluate(() => navigator.clipboard.readText())
               .catch((err) => {
-                innerTextErr = err;
+                clipboardErr = err;
                 return null;
               });
             console.log(
-              `[chatAI] downloadAttachedFiles preview panel (index ${i}): innerText fallback đọc được ${previewText ? previewText.length : 0} ký tự${innerTextErr ? `, lỗi=${innerTextErr}` : ""}`,
+              `[chatAI] downloadAttachedFiles preview panel (index ${i}): grantPermissions${grantErr ? ` lỗi=${grantErr}` : " ok"}, click panel${clickErr ? ` lỗi=${clickErr}` : " ok"}, clipboard đọc được ${previewText ? previewText.length : 0} ký tự${clipboardErr ? `, lỗi clipboard=${clipboardErr}` : ""}`,
             );
+            // Fallback cuối nếu clipboard đọc lỗi (vd bị chặn Permissions-Policy
+            // — xem lý do tương tự ở sendMessage): dùng innerText(), chấp nhận
+            // rủi ro thiếu nội dung nếu panel có ảo hoá, còn hơn không có gì.
+            if (!previewText) {
+              let innerTextErr: unknown = null;
+              previewText = await panelContent
+                .first()
+                .innerText({ timeout: 5000 })
+                .catch((err) => {
+                  innerTextErr = err;
+                  return null;
+                });
+              console.log(
+                `[chatAI] downloadAttachedFiles preview panel (index ${i}): innerText fallback đọc được ${previewText ? previewText.length : 0} ký tự${innerTextErr ? `, lỗi=${innerTextErr}` : ""}`,
+              );
+            }
+          } else {
+            // KHÔNG có .cm-content — panel đang ở biến thể "Preview
+            // unavailable." (chỉ có nút Download, không có gì để đọc qua
+            // clipboard/innerText). Best-effort: vẫn thử bấm nút Download
+            // NẰM TRONG panel này rồi chờ sự kiện download — ghi nhận CŨ (job
+            // 0c2ee0e8/b38b1151, lúc panel CÓ preview code) là nút Download
+            // trong panel KHÔNG BAO GIỜ bắn được sự kiện download Playwright
+            // bắt được (nghi dùng File System Access API), nhưng CHƯA có
+            // bằng chứng thật cho đúng biến thể "Preview unavailable" này —
+            // rất có thể dùng cơ chế tải khác hẳn vì không cần dựng
+            // CodeMirror, nên vẫn đáng thử trước khi chịu mất hẳn file.
+            console.warn(
+              `[chatAI] downloadAttachedFiles (index ${i}): panel hiện "Preview unavailable" (không có nội dung CodeMirror để đọc) — thử bấm nút Download trong panel.`,
+            );
+            const panelDownloadButton = panelContainer.getByRole("button", {
+              name: /^download$/i,
+            });
+            const hasPanelDownloadButton = await panelDownloadButton
+              .first()
+              .isVisible({ timeout: 3000 })
+              .catch(() => false);
+            if (hasPanelDownloadButton) {
+              const panelDownloadPromise = page
+                .waitForEvent("download", { timeout: 15_000 })
+                .catch(() => null);
+              await panelDownloadButton
+                .first()
+                .click({ force: true })
+                .catch(() => {});
+              download = await panelDownloadPromise;
+            }
           }
         }
 
-        if (!previewText) {
-          // Xác nhận qua thực tế (job 38b68c7a): downloadFileLinkLocator
-          // không còn khớp nút nào trên bản UI mới của ChatAI (đã đổi hết
-          // sang aria-label "Download file"/"Download" chung chung, không
-          // còn "Download <tên file>"), buộc fallback sang panel xem trước —
-          // nếu clipboard/innerText ở panel này ĐỀU thất bại, trước đây
-          // code lặng lẽ bỏ qua (continue) không log gì, khiến không thể
-          // biết bước tải file đã fail ở đây khi xem log thật.
-          console.warn(
-            `[chatAI] Không đọc được nội dung preview file đính kèm (index ${i}) — panel${
-              panelAppeared ? " đã mở nhưng đọc rỗng" : " không mở ra được"
-            }, bỏ qua file này.`,
-          );
+        if (!download) {
+          if (!previewText) {
+            // Xác nhận qua thực tế (job 38b68c7a): downloadFileLinkLocator
+            // không còn khớp nút nào trên bản UI mới của ChatAI (đã đổi hết
+            // sang aria-label "Download file"/"Download" chung chung, không
+            // còn "Download <tên file>"), buộc fallback sang panel xem trước —
+            // nếu clipboard/innerText/nút Download trong panel ĐỀU thất bại,
+            // trước đây code lặng lẽ bỏ qua (continue) không log gì, khiến
+            // không thể biết bước tải file đã fail ở đây khi xem log thật.
+            console.warn(
+              `[chatAI] Không đọc/tải được nội dung preview file đính kèm (index ${i}) — panel${
+                panelAppeared ? " đã mở nhưng đọc rỗng" : " không mở ra được"
+              }, bỏ qua file này.`,
+            );
+          }
+
+          if (previewText) {
+            await fs.promises.mkdir(config.chatAIResultsDir, {
+              recursive: true,
+            });
+            const suggestedName =
+              (await attachments
+                .nth(i)
+                .getAttribute("aria-label")
+                .catch(() => null)) || `attachment-${i}.json`;
+            const fileName = promptFileBaseName
+              ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggestedName) || ".json"}`
+              : suggestedName;
+            const filePath = path.join(config.chatAIResultsDir, fileName);
+            await fs.promises.writeFile(filePath, previewText, "utf-8");
+            savedPaths.push(filePath);
+          }
+
+          // SỬA (xác nhận qua lỗi thật, job a22dba4a-da81-48a4-89c3-8603f849a8a9):
+          // bước đóng panel TRƯỚC ĐÂY nằm TRONG nhánh `if (previewText)` — nếu
+          // đọc previewText thất bại (clipboard lỗi + innerText cũng lỗi/rỗng,
+          // xem log cảnh báo ở trên), panel "Library" bị bỏ mở LUÔN, làm bóp
+          // hẹp layout composer ở MỌI lượt sau, khiến sendMessage không tìm
+          // thấy ô nhập nào còn hiển thị (đã thêm lưới an toàn thứ 2 ngay đầu
+          // sendMessage, nhưng đóng sớm NGAY TẠI ĐÂY vẫn đúng hơn — không để
+          // trạng thái hỏng kéo dài qua các bước khác không liên quan). Đóng
+          // UNCONDITIONALLY mỗi khi panel đã thực sự mở (panelAppeared), không
+          // phụ thuộc việc đọc nội dung có thành công hay không.
+          if (panelAppeared) {
+            await page
+              .locator(
+                '[data-testid="screen-threadFlyOut"] [data-testid="close-button"]',
+              )
+              .first()
+              .click({ timeout: 2000 })
+              .catch(() => {});
+          }
+          continue;
         }
 
-        if (previewText) {
-          await fs.promises.mkdir(config.chatAIResultsDir, {
-            recursive: true,
-          });
-          const suggestedName =
-            (await attachments
-              .nth(i)
-              .getAttribute("aria-label")
-              .catch(() => null)) || `attachment-${i}.json`;
-          const fileName = promptFileBaseName
-            ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggestedName) || ".json"}`
-            : suggestedName;
-          const filePath = path.join(config.chatAIResultsDir, fileName);
-          await fs.promises.writeFile(filePath, previewText, "utf-8");
-          savedPaths.push(filePath);
-        }
-
-        // SỬA (xác nhận qua lỗi thật, job a22dba4a-da81-48a4-89c3-8603f849a8a9):
-        // bước đóng panel TRƯỚC ĐÂY nằm TRONG nhánh `if (previewText)` — nếu
-        // đọc previewText thất bại (clipboard lỗi + innerText cũng lỗi/rỗng,
-        // xem log cảnh báo ở trên), panel "Library" bị bỏ mở LUÔN, làm bóp
-        // hẹp layout composer ở MỌI lượt sau, khiến sendMessage không tìm
-        // thấy ô nhập nào còn hiển thị (đã thêm lưới an toàn thứ 2 ngay đầu
-        // sendMessage, nhưng đóng sớm NGAY TẠI ĐÂY vẫn đúng hơn — không để
-        // trạng thái hỏng kéo dài qua các bước khác không liên quan). Đóng
-        // UNCONDITIONALLY mỗi khi panel đã thực sự mở (panelAppeared), không
-        // phụ thuộc việc đọc nội dung có thành công hay không.
-        if (panelAppeared) {
-          await page
-            .locator(
-              '[data-testid="screen-threadFlyOut"] [data-testid="close-button"]',
-            )
-            .first()
-            .click({ timeout: 2000 })
-            .catch(() => {});
-        }
-        continue;
+        // Bấm nút Download TRONG panel (biến thể "Preview unavailable") ĐÃ
+        // bắn được sự kiện download thật — đóng panel rồi rơi xuống nhánh
+        // lưu file DÙNG CHUNG bên dưới (giống hệt cách xử lý "download" bắt
+        // được từ downloadPromise/secondaryDownloadPromise ở trên), không
+        // viết trùng logic lưu file ở đây.
+        await page
+          .locator(
+            '[data-testid="screen-threadFlyOut"] [data-testid="close-button"]',
+          )
+          .first()
+          .click({ timeout: 2000 })
+          .catch(() => {});
       }
 
       await fs.promises.mkdir(config.chatAIResultsDir, { recursive: true });

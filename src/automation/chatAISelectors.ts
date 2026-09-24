@@ -163,10 +163,22 @@ export const downloadFileLinkLocator = (message: Locator): Locator =>
  * hẳn biến thể CÓ emoji "📄 Tải file" (job 4c746641, xác nhận tải được thật).
  * Vì độ tin cậy không chắc chắn, dùng làm phương án CUỐI CÙNG, sau
  * fileCardLocator (xem thứ tự ưu tiên trong downloadAttachedFiles).
+ *
+ * SỬA (xác nhận qua debug thật, job 14dae602-71eb-4d36-93bb-01439ee0252e —
+ * job "Tạo kịch bản mới" nhiều tập): thêm biến thể THỨ BA, KHÔNG kèm emoji
+ * VÀ aria-label KHÔNG kết thúc bằng ".json" — mỗi tập có 1 nút RIÊNG dạng
+ * `<button aria-label="Tải file JSON Tập 1" class="behavior-btn ...
+ * entity-underline ...">` (icon + text "Tải file JSON Tập 1" là nội dung
+ * HIỂN THỊ thật, không phải chỉ aria-label) — trước đây hoàn toàn KHÔNG khớp
+ * locator nào (không ".json" ở cuối, không "group/open-file", không
+ * "Download "), khiến cả 3 locator trong downloadAttachedFiles đều
+ * count()=0 và bỏ sót file dù ChatAI đã thật sự đính kèm. Thêm điều kiện
+ * OR khớp aria-label BẮT ĐẦU bằng "Tải file" (cụm ChatAI luôn dùng cho mọi
+ * nút tải file tiếng Việt, có hoặc không có emoji/tên file ở cuối).
  */
 export const inlineFileLinkLocator = (message: Locator): Locator =>
   message.locator(
-    'button[aria-label$=".json"]:not([class*="group/open-file"])',
+    'button[aria-label$=".json"]:not([class*="group/open-file"]), button[aria-label^="Tải file"]:not([class*="group/open-file"])',
   );
 
 /**

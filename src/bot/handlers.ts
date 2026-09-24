@@ -389,6 +389,48 @@ function normalizeTypedJsonFileName(text: string): string {
     .replace(/\.json$/i, "");
 }
 
+/**
+ * Chuyển caption tự do (user gõ kèm video) thành 1 slug an toàn để đặt tên
+ * file — bỏ ký tự không an toàn cho tên file/thư mục (vd "/" dễ bị hiểu
+ * nhầm thành phân cách đường dẫn), gộp khoảng trắng thành "_", giới hạn độ
+ * dài (tránh vượt giới hạn tên file của OS nếu caption quá dài). Trả về
+ * chuỗi RỖNG nếu sau khi làm sạch không còn ký tự nào hữu ích (vd caption
+ * toàn ký tự đặc biệt/emoji) — caller tự fallback sang tên khác.
+ */
+function sanitizeCaptionForFileName(caption: string): string {
+  return caption
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80)
+    .replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Theo yêu cầu người dùng: tên file JSON (kết quả ChatAI trả về, xem
+ * downloadAttachedFiles trong chatAI.ts) cho "Tham chiếu kịch bản"/"Tham
+ * chiếu video" ưu tiên lấy theo TÊN FILE VIDEO gốc — nhưng Telegram thường
+ * KHÔNG kèm "file_name" cho video gửi qua nút camera/thư viện (chỉ có khi
+ * gửi qua nút đính kèm 📎 dạng document), khiến tên rơi về fallback generic
+ * "video-<messageId>.mp4" không có ý nghĩa gì. Ưu tiên: (1) tên file video
+ * thật (nếu Telegram có gửi kèm); (2) nếu không, dùng CAPTION user gõ kèm
+ * video (nếu có và làm sạch được, xem sanitizeCaptionForFileName) — thường
+ * là tên/mô tả ngắn user tự đặt, ý nghĩa hơn hẳn tên generic; (3) cuối cùng
+ * mới rơi về "video-<messageId>.mp4".
+ */
+function resolveVideoFileName(
+  telegramFileName: string | undefined,
+  caption: string | undefined,
+  messageId: number,
+): string {
+  const captionSlug = caption ? sanitizeCaptionForFileName(caption) : "";
+  const fileName =
+    telegramFileName ||
+    (captionSlug ? `${captionSlug}.mp4` : "") ||
+    `video-${messageId}.mp4`;
+  return fileName.replace(/ +/g, "_");
+}
+
 async function regenerateStoryboardItemLine(
   ctx: Context,
   line: string,
@@ -1413,7 +1455,7 @@ export function registerHandlers(bot: Telegraf): void {
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "videoReference");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu — bot sẽ phân tích nhân vật/bối cảnh/đạo cụ rồi trả về JSON chỉ gồm 1 prompt DUY NHẤT dùng để gen lại toàn bộ video (không chia clip).`,
+      `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu — bot sẽ phân tích nhân vật/bối cảnh/đạo cụ rồi trả về JSON gồm các đoạn video ngắn nối tiếp (mỗi đoạn tối đa 15s, ranh giới cắt theo lời thoại hợp lý) dùng để gen lại toàn bộ video.`,
     );
   });
 
@@ -1755,9 +1797,11 @@ export function registerHandlers(bot: Telegraf): void {
     // submitScriptReferenceVideoJob.
     if (waitingMode.get(userId) === "scriptReference") {
       waitingMode.delete(userId);
-      const videoFileName = (
-        ctx.message.video.file_name ?? `video-${ctx.message.message_id}.mp4`
-      ).replace(/ +/g, "_");
+      const videoFileName = resolveVideoFileName(
+        ctx.message.video.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
       let videoPath: string;
       try {
         videoPath = await downloadTelegramVideoRobust(
@@ -1792,13 +1836,17 @@ export function registerHandlers(bot: Telegraf): void {
     // Chế độ "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) — GIỐNG HỆT
     // nhánh "scriptReference" ở trên, chỉ khác masterPromptPath truyền cho
     // submitScriptReferenceVideoJob (config.promptVideoReference thay vì mặc
-    // định config.promptSplitVideo) — JSON trả về chỉ có 1 VIDEO duy nhất mô
-    // tả toàn bộ video thay vì chia SHOT/CLIP.
+    // định config.promptSplitVideo) — JSON trả về chia thành các đoạn VIDEO
+    // ngắn nối tiếp (tối đa 15s/đoạn, ranh giới theo lời thoại — xem mục 3B
+    // trong prompt_video_reference.txt) thay vì chia theo diễn biến/cảnh
+    // như prompt_split_video.txt.
     if (waitingMode.get(userId) === "videoReference") {
       waitingMode.delete(userId);
-      const videoFileName = (
-        ctx.message.video.file_name ?? `video-${ctx.message.message_id}.mp4`
-      ).replace(/ +/g, "_");
+      const videoFileName = resolveVideoFileName(
+        ctx.message.video.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
       let videoPath: string;
       try {
         videoPath = await downloadTelegramVideoRobust(
@@ -2005,10 +2053,11 @@ export function registerHandlers(bot: Telegraf): void {
         return;
       }
       waitingMode.delete(userId);
-      const videoFileName = (
-        ctx.message.document.file_name ??
-        `video-${ctx.message.message_id}.mp4`
-      ).replace(/ +/g, "_");
+      const videoFileName = resolveVideoFileName(
+        ctx.message.document.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
       let videoPath: string;
       try {
         videoPath = await downloadTelegramVideoRobust(
@@ -2051,10 +2100,11 @@ export function registerHandlers(bot: Telegraf): void {
         return;
       }
       waitingMode.delete(userId);
-      const videoFileName = (
-        ctx.message.document.file_name ??
-        `video-${ctx.message.message_id}.mp4`
-      ).replace(/ +/g, "_");
+      const videoFileName = resolveVideoFileName(
+        ctx.message.document.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
       let videoPath: string;
       try {
         videoPath = await downloadTelegramVideoRobust(

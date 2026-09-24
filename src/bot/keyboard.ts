@@ -21,9 +21,11 @@ export const SCRIPT_REFERENCE_BUTTON_LABEL = "Tham chiếu kịch bản";
  * GẦN GIỐNG SCRIPT_REFERENCE_BUTTON_LABEL (cùng askChatAIAboutReferenceVideo,
  * cùng job "scriptReferenceVideo"/processScriptReferenceVideoQueue) nhưng
  * KHÁC 2 điểm: (1) master prompt dùng config.promptVideoReference thay vì
- * config.promptSplitVideo — JSON trả về chỉ có ĐÚNG 1 phần tử VIDEO (không
- * chia SHOT/CLIP), prompt của phần tử đó mô tả TOÀN BỘ video để gen lại
- * trong 1 lần (xem prompt_video_reference.txt); (2) job đặt
+ * config.promptSplitVideo — JSON trả về chia thành các đoạn VIDEO NGẮN nối
+ * tiếp (tối đa 15s/đoạn, ranh giới cắt theo lời thoại/diễn biến hợp lý —
+ * xem mục 3B trong prompt_video_reference.txt), KHÁC prompt_split_video.txt
+ * ở chỗ không chia theo diễn biến/cảnh (không có SHOT nhiều CLIP thời lượng
+ * tự do) mà chia đều theo ngân sách thời lượng cố định; (2) job đặt
  * skipImageConfirmation=true — CHỈ dừng ở bước gửi lại JSON cho user, KHÔNG
  * tạo folder generated/, KHÔNG gửi nút xác nhận "Tạo ảnh" (khác hẳn
  * SCRIPT_REFERENCE_BUTTON_LABEL, xem xử lý trong processScriptReferenceVideoQueue).
