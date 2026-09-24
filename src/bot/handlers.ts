@@ -42,6 +42,8 @@ import {
   PROMPT_BUTTON_LABEL,
   SCRIPT_REFERENCE_BUTTON_LABEL,
   STOP_ALL_BUTTON_LABEL,
+  UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL,
+  UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL,
   VIDEO_REF_BUTTON_LABEL,
   VIDEO_REFERENCE_BUTTON_LABEL,
   promptMenu,
@@ -59,7 +61,9 @@ type PendingMode =
   | "videoReference"
   | "generateScript"
   | "continueVideo"
-  | "continueSceneFrame";
+  | "continueSceneFrame"
+  | "updateGenerateScriptPrompt"
+  | "updateVideoReferencePrompt";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -309,6 +313,77 @@ async function nextBackupVersion(
     }
   }
   return maxVersion + 1;
+}
+
+/**
+ * DÙNG CHUNG cho MỌI nút "Cập nhật prompt ..." (UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL,
+ * UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL, ...) — CHỈ khác nhau ở
+ * targetPath (đường dẫn master prompt cần ghi đè), không phải khác PROVIDER/
+ * business logic nên tham số hoá thay vì clone (quy ước clone-theo-provider
+ * dành cho khác API/job/hàng đợi, không áp dụng cho thao tác thuần "tải +
+ * sao lưu + ghi đè 1 file text" giống nhau tuyệt đối ở đây). THEO YÊU CẦU
+ * NGƯỜI DÙNG: KHÔNG giới hạn admin — bất kỳ ai trong nhóm được phép dùng bot
+ * (isAllowedGroup, đã check ở bot.hears) đều cập nhật được. Bản CŨ (nếu có)
+ * được sao lưu thành "<targetPath không đuôi>_vXX.<đuôi>" (XX tăng dần, xem
+ * nextBackupVersion) TRƯỚC khi ghi đè — không mất bản trước nếu cần khôi
+ * phục lại.
+ */
+async function handleUpdateMasterPromptUpload(
+  ctx: Context,
+  fileId: string,
+  fileName: string | undefined,
+  promptMessageId: number,
+  targetPath: string,
+): Promise<void> {
+  if (path.extname(fileName ?? "").toLowerCase() !== ".txt") {
+    await ctx.reply(
+      "Chỉ nhận file .txt cho master prompt. Đã huỷ.",
+      promptMenu,
+    );
+    return;
+  }
+  try {
+    const fileUrl = await ctx.telegram.getFileLink(fileId);
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
+    }
+    const newContent = await response.text();
+    if (!newContent.trim()) {
+      await ctx.reply("File rỗng, đã huỷ (không ghi đè).", promptMenu);
+      return;
+    }
+
+    const parsed = path.parse(targetPath);
+    const dir = parsed.dir || ".";
+
+    let backupNote = "";
+    const targetExists = await fs
+      .access(targetPath)
+      .then(() => true)
+      .catch(() => false);
+    if (targetExists) {
+      const version = await nextBackupVersion(dir, parsed.name, parsed.ext);
+      const backupFileName = `${parsed.name}_v${String(version).padStart(2, "0")}${parsed.ext}`;
+      await fs.copyFile(targetPath, path.join(dir, backupFileName));
+      backupNote = ` (đã sao lưu bản cũ thành "${backupFileName}")`;
+    }
+
+    await fs.writeFile(targetPath, newContent, "utf-8");
+    await ctx.reply(
+      `✅ Đã cập nhật "${targetPath}"`,
+      {
+        reply_parameters: { message_id: promptMessageId },
+        ...promptMenu,
+      },
+    );
+  } catch (err) {
+    console.error(`[bot] Cập nhật "${targetPath}" thất bại:`, err);
+    await ctx.reply(
+      `❌ Cập nhật thất bại: ${err instanceof Error ? err.message : String(err)}`,
+      promptMenu,
+    );
+  }
 }
 
 /**
@@ -1468,6 +1543,24 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "updateGenerateScriptPrompt");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptGenerateScript}"`,
+    );
+  });
+
+  bot.hears(UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "updateVideoReferencePrompt");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptVideoReference}"`,
+    );
+  });
+
   bot.hears(STOP_ALL_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     stopAll(ctx.from.id);
@@ -1508,7 +1601,9 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === VIDEO_REFERENCE_BUTTON_LABEL ||
       ctx.message.text === GENERATE_SCRIPT_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL ||
-      ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL
+      ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL ||
+      ctx.message.text === UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL ||
+      ctx.message.text === UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL
     ) {
       return next();
     }
@@ -1677,6 +1772,16 @@ export function registerHandlers(bot: Telegraf): void {
           { reply_parameters: { message_id: ctx.message.message_id } },
         );
       }
+    } else if (
+      mode === "updateGenerateScriptPrompt" ||
+      mode === "updateVideoReferencePrompt"
+    ) {
+      // Bắt buộc phải gửi file .txt (xem nhánh xử lý trong
+      // bot.on(message("document"))) — gõ text không kèm file thì từ chối,
+      // cùng cách với "scriptReference"/"videoReference" ở trên.
+      await ctx.reply(
+        "Chế độ cập nhật prompt bắt buộc phải gửi 1 file .txt, không nhận text.",
+      );
     } else {
       await submitImageJob({
         ctx,
@@ -1957,6 +2062,33 @@ export function registerHandlers(bot: Telegraf): void {
     }
 
     const userId = ctx.from.id;
+
+    // Chế độ "Cập nhật prompt ..." (UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL/
+    // UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL) — user upload 1 file .txt
+    // để GHI ĐÈ đúng master prompt tương ứng, xem
+    // handleUpdateMasterPromptUpload (tự sao lưu bản cũ trước).
+    if (waitingMode.get(userId) === "updateGenerateScriptPrompt") {
+      waitingMode.delete(userId);
+      await handleUpdateMasterPromptUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.message.document.file_name,
+        ctx.message.message_id,
+        config.promptGenerateScript,
+      );
+      return;
+    }
+    if (waitingMode.get(userId) === "updateVideoReferencePrompt") {
+      waitingMode.delete(userId);
+      await handleUpdateMasterPromptUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.message.document.file_name,
+        ctx.message.message_id,
+        config.promptVideoReference,
+      );
+      return;
+    }
 
     // Chế độ "ChatAI"/"Check prompt kịch bản": user gửi yêu cầu qua file (.txt/.md)
     // thay vì gõ trực tiếp (dùng khi prompt quá dài) — tải file về đĩa rồi

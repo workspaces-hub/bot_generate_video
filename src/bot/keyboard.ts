@@ -46,6 +46,28 @@ export const VIDEO_REFERENCE_BUTTON_LABEL = "Tham chiếu video";
  * runStoryboardPipelinePollo/notifyChatAISuccess).
  */
 export const GENERATE_SCRIPT_BUTTON_LABEL = "Tạo kịch bản mới";
+/**
+ * Bất kỳ ai trong nhóm được phép dùng bot (isAllowedGroup, KHÔNG giới hạn
+ * admin — theo yêu cầu người dùng) đều bấm được — user upload 1 file .txt
+ * để GHI ĐÈ master prompt prompt_generate_script.txt (dùng cho
+ * GENERATE_SCRIPT_BUTTON_LABEL), cho phép sửa prompt trực tiếp từ Telegram
+ * không cần SSH/sửa file trên server. Bản CŨ được sao lưu thành
+ * "prompt_generate_script_vXX.txt" (XX tăng dần, dùng chung nextBackupVersion
+ * với tryReplaceGeneratedFile/tryHandleReferenceJsonUpload) TRƯỚC khi ghi
+ * đè — không mất bản trước nếu cần khôi phục lại.
+ */
+export const UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL =
+  "Cập nhật prompt tạo kịch bản";
+/**
+ * GIỐNG UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL HỆT (không giới hạn
+ * admin, cùng cơ chế sao lưu bản cũ bằng nextBackupVersion trước khi ghi
+ * đè) nhưng ghi đè master prompt prompt_video_reference.txt (dùng cho
+ * VIDEO_REFERENCE_BUTTON_LABEL) thay vì prompt_generate_script.txt — RIÊNG
+ * nút/mode theo đúng quy ước clone-theo-provider của dự án, không gộp
+ * chung 1 nút rồi chọn file qua tham số.
+ */
+export const UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL =
+  "Cập nhật prompt tham chiếu video";
 /** Dừng SỚM các job đang chờ/đang gen ảnh-video của CHARACTER_REF_BUTTON_LABEL và CHATAI_BUTTON_LABEL — xem stopAll() trong queue.ts. */
 export const STOP_ALL_BUTTON_LABEL = "🛑 Stop All";
 /** Retry job "storyboardVideo" đã lỗi trước đó (xem failedStoryboardJobs/continueFailedStoryboardVideo trong queue.ts) — user nhập tên file json, bot tự tra lại. */
@@ -62,6 +84,7 @@ export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
   [CONTINUE_SCENE_FRAME_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
+  [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   [STOP_ALL_BUTTON_LABEL],
   // [IMAGE_BUTTON_LABEL, PROMPT_BUTTON_LABEL],
   // [VIDEO_REF_BUTTON_LABEL, CHARACTER_REF_BUTTON_LABEL],
