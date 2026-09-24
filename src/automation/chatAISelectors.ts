@@ -54,8 +54,21 @@ export const chatModeToggleLocator = (page: Page): Locator =>
 export const fileUploadInputLocator = (page: Page): Locator =>
   page.locator('input[type="file"]').first();
 
-/** Nút gửi prompt (icon mũi tên) cạnh ô nhập. */
+/**
+ * Nút gửi prompt (icon mũi tên) cạnh ô nhập.
+ *
+ * SỬA (xác nhận qua debug thật, job 5de37345-716d-47e6-8041-07c165ef0524):
+ * ChatGPT đã đổi hẳn nút này — KHÔNG còn `data-testid="send-button"` (thuộc
+ * tính này biến mất khỏi DOM hoàn toàn) VÀ `aria-label` đổi từ "Send prompt"
+ * thành ĐÚNG "Send" (không còn chữ "prompt"), khiến CẢ 2 candidate cũ đều
+ * không khớp được nữa — DOM thật xác nhận:
+ * `<button type="submit" class="... bg-composer-primary ..." aria-label="Send">`.
+ * Thêm candidate mới khớp CHÍNH XÁC (exact, tránh khớp nhầm các nút khác có
+ * chữ "Send" là 1 phần tên, vd "Send to...") lên đầu; giữ 2 candidate cũ
+ * phía sau làm dự phòng (phòng site đổi lại/A-B test khác tài khoản).
+ */
 export const sendButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: "Send", exact: true }),
   () => page.locator('button[data-testid="send-button"]'),
   () => page.getByRole("button", { name: /send prompt/i }),
 ];
