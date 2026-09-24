@@ -68,6 +68,118 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** 4 type asset (KHÔNG phải VIDEO) mà reconcileAssetLedgerAcrossFiles đối chiếu id xuyên file — xem docstring hàm đó. */
+const ASSET_LEDGER_TYPES = new Set(["CHARACTER", "LOCATION", "PROP", "OBJECT"]);
+
+export interface AssetLedgerReconcileResult {
+  /** Số item (CHARACTER/LOCATION/PROP/OBJECT) đã bị ghi đè type/prompt cho khớp bản canonical (id xuất hiện đầu tiên xuyên các file) — 0 nghĩa là mọi file đã nhất quán sẵn, không cần sửa gì. */
+  fixedCount: number;
+  /** Mô tả ngắn từng lần sửa/cảnh báo (id, tên file, khác biệt) — dùng để log console và báo lại cho user (xem processChatAIQueue trong queue.ts, nhánh job.type === "generateScript"). */
+  details: string[];
+}
+
+/**
+ * Hậu kiểm bằng CODE (theo yêu cầu người dùng) cho tính năng "Tạo kịch bản
+ * mới" (GENERATE_SCRIPT_BUTTON_LABEL, xem GenerateScriptJob/
+ * processChatAIQueue trong queue.ts, nhánh job.type === "generateScript"):
+ * khi ChatGPT trả về NHIỀU file JSON storyboard (mỗi file = 1 tập phim), master prompt
+ * (prompt_generate_script.txt, mục "ASSET LEDGER DÙNG CHUNG") CHỈ yêu cầu
+ * bằng TEXT rằng cùng một nhân vật/bối cảnh/đạo cụ/vật thể xuất hiện ở nhiều
+ * tập phải dùng cùng id + mô tả (prompt) giống hệt nhau ở mọi file — không
+ * có gì đảm bảo ChatGPT tuân thủ tuyệt đối 100%. Pipeline gen ảnh/video hiện
+ * tại (generateReferenceImagesForFileViaPollo, generateVideosForFileComfyUI...)
+ * đọc từng file JSON HOÀN TOÀN ĐỘC LẬP — VIDEO.ref chỉ resolve id TRONG CÙNG
+ * file — nên nếu 2 file mô tả "cùng" 1 nhân vật khác đi (dù cùng id), ảnh/
+ * video gen ra cho nhân vật đó ở 2 tập sẽ KHÔNG nhất quán.
+ *
+ * Hàm này ĐỌC LẠI toàn bộ file JSON vừa tạo (theo ĐÚNG thứ tự truyền vào —
+ * file xuất hiện TRƯỚC được coi là bản "canonical"/chuẩn cho mỗi id): với mỗi
+ * item CHARACTER/LOCATION/PROP/OBJECT, nếu 1 file sau đó có cùng id nhưng
+ * type hoặc prompt KHÁC bản canonical, GHI ĐÈ lại type/prompt của item đó cho
+ * khớp TUYỆT ĐỐI với bản canonical rồi lưu lại file đó — đảm bảo nhất quán
+ * 100% xuyên các tập, không phụ thuộc hoàn toàn vào việc ChatGPT có làm đúng
+ * hay không.
+ *
+ * KHÔNG tự sửa trường hợp NGƯỢC LẠI — 2 thực thể thực sự KHÁC NHAU vô tình
+ * bị ChatGPT đặt CHUNG 1 id (vi phạm "QUY TẮC 2" của Asset Ledger): không thể
+ * tự động phân biệt "khác vì đây là 2 thực thể khác nhau" với "khác vì
+ * ChatGPT viết lại mô tả không nhất quán" chỉ bằng cách so sánh text, và ép
+ * đồng bộ nhầm có thể phá hỏng continuity đã đúng ở 1 trong 2 file — CHỈ ghi
+ * lại cảnh báo trong `details` (kèm cả trường hợp type khác nhau, dấu hiệu rõ
+ * nhất của lỗi này) để người dùng tự kiểm tra thủ công nếu cần.
+ */
+export async function reconcileAssetLedgerAcrossFiles(
+  filePaths: string[],
+): Promise<AssetLedgerReconcileResult> {
+  const canonical = new Map<
+    string,
+    { type: string; prompt: string; sourceFile: string }
+  >();
+  const details: string[] = [];
+  let fixedCount = 0;
+
+  const parsedFiles: { filePath: string; entries: StoryboardEntry[] }[] = [];
+  for (const filePath of filePaths) {
+    if (path.extname(filePath).toLowerCase() !== ".json") continue;
+    let entries: unknown;
+    try {
+      const raw = await fs.promises.readFile(filePath, "utf-8");
+      entries = JSON.parse(raw);
+      if (!Array.isArray(entries)) throw new Error("không phải JSON array");
+    } catch (err) {
+      details.push(
+        `Bỏ qua "${path.basename(filePath)}" khi đối chiếu Asset Ledger — không đọc/parse được JSON (${err instanceof Error ? err.message : err}).`,
+      );
+      continue;
+    }
+    parsedFiles.push({ filePath, entries: entries as StoryboardEntry[] });
+  }
+
+  for (const { filePath, entries } of parsedFiles) {
+    let changed = false;
+    for (const entry of entries) {
+      if (!entry.id || !entry.type || !ASSET_LEDGER_TYPES.has(entry.type)) {
+        continue;
+      }
+      const existing = canonical.get(entry.id);
+      if (!existing) {
+        canonical.set(entry.id, {
+          type: entry.type,
+          prompt: entry.prompt ?? "",
+          sourceFile: path.basename(filePath),
+        });
+        continue;
+      }
+      const typeDiffers = entry.type !== existing.type;
+      const promptDiffers = (entry.prompt ?? "") !== existing.prompt;
+      if (!typeDiffers && !promptDiffers) continue;
+
+      if (typeDiffers) {
+        details.push(
+          `⚠️ id "${entry.id}" có type khác nhau giữa "${existing.sourceFile}" (${existing.type}) và "${path.basename(filePath)}" (${entry.type}) — đã đồng bộ về "${existing.type}"/mô tả của "${existing.sourceFile}". Kiểm tra lại thủ công nếu đây thực chất là 2 thực thể khác nhau bị trùng id.`,
+        );
+      } else {
+        details.push(
+          `Đã đồng bộ mô tả asset "${entry.id}" trong "${path.basename(filePath)}" cho khớp với bản xuất hiện đầu tiên (trong "${existing.sourceFile}").`,
+        );
+      }
+      entry.type = existing.type;
+      entry.prompt = existing.prompt;
+      fixedCount++;
+      changed = true;
+    }
+    if (changed) {
+      await fs.promises.writeFile(
+        filePath,
+        JSON.stringify(entries, null, 2),
+        "utf-8",
+      );
+    }
+  }
+
+  return { fixedCount, details };
+}
+
 /**
  * Site AIVideo từ chối vì vi phạm chính sách nội dung — nguyên văn xác nhận
  * qua log lỗi thật: "Generation failed because content violated Community
@@ -286,26 +398,102 @@ async function saveEntries(
 }
 
 /**
- * Thư mục generated/<tên file input, bỏ đuôi> — DÙNG CHUNG giữa bước tạo ảnh
- * và tạo video của CÙNG 1 file input.
+ * Thư mục generated/ dùng để lưu ảnh/video VÀ để tra ảnh tham chiếu
+ * (resolveRefImagePath/findExistingImageById nhận thẳng kết quả hàm này làm
+ * "dir") của CÙNG 1 file input — DÙNG CHUNG giữa bước tạo ảnh và tạo video.
+ *
+ * SỬA (theo yêu cầu người dùng): nếu inputPath ĐÃ nằm SẴN bên trong
+ * storage/generated/ (bất kể lồng bao nhiêu cấp) — trả về ĐÚNG thư mục cha
+ * thật sự đang chứa file đó (path.dirname), KHÔNG suy luận lại tên folder từ
+ * basename như trước. Quy tắc "dùng dirname thật" này tự động đúng cho CẢ 2
+ * layout hiện có, không cần phân biệt tường minh:
+ * 1. Mỗi file JSON có 1 folder RIÊNG cùng tên (job "chatAI", xem
+ *    ensureGeneratedFolder): "storage/generated/<file>/<file>.json" →
+ *    dirname = "storage/generated/<file>" (khớp hệt kết quả suy từ basename
+ *    trước đây, không đổi hành vi cho case này).
+ * 2. NHIỀU file JSON (nhiều tập) dùng CHUNG 1 folder theo tên phim (job
+ *    "scriptReferenceVideo"/"generateScript", xem ensureGeneratedFolderForName
+ *    trong queue.ts): "storage/generated/<tên phim>/<file>.json" → dirname =
+ *    "storage/generated/<tên phim>". TRƯỚC ĐÂY hàm này tính SAI thành
+ *    "storage/generated/<file>" (suy từ basename, bỏ qua thư mục cha thật),
+ *    khiến ảnh/video VÀ ảnh tham chiếu của các tập bị tách ra NHIỀU folder
+ *    khác nhau (mỗi tập 1 folder riêng theo tên file) thay vì gộp đúng CHUNG
+ *    1 folder theo phim — phá mất mục đích chia sẻ ảnh nhân vật/bối cảnh
+ *    xuyên các tập.
+ *
+ * Nếu inputPath CHƯA nằm trong storage/generated/ (vd path gốc trong
+ * config.chatAIResultsDir lúc ensureGeneratedFolder đặt file vào generated/
+ * LẦN ĐẦU, hoặc chỉ 1 basename user gõ tay — xem tryReplaceGeneratedFile/
+ * continueFailedStoryboardJob), tính folder MẶC ĐỊNH MỚI theo tên file (hành
+ * vi gốc, giữ nguyên không đổi).
  *
  * Xác nhận qua báo cáo thật của người dùng: caption "6.0-test-TNCPA__CHAR_001_HO_VUONG"
- * (xem tryReplaceGeneratedFile trong handlers.ts, và jsonFileName do user gõ
- * tay trong continueFailedStoryboardJob ở queue.ts) ra folder SAI là
- * "storage/generated/6" thay vì "storage/generated/6.0-test-TNCPA" — 2 nơi
- * gọi này truyền vào 1 basename KHÔNG có đuôi file thật (không phải path.json
- * đầy đủ), nhưng path.extname("6.0-test-TNCPA") lại hiểu NHẦM dấu "." trong
- * "6.0" là bắt đầu phần đuôi, trả về ".0-test-TNCPA", khiến path.basename cắt
- * mất gần hết tên, chỉ còn lại "6". Chỉ cắt đuôi khi ĐÚNG LÀ ".json" ở cuối
- * chuỗi (không dùng path.extname() thô) — an toàn cho cả file path đầy đủ
- * (vd "cay_khe_full.json") lẫn basename không có đuôi chứa dấu "." nội bộ
- * (vd tên phiên bản "6.0-test-TNCPA").
+ * ra folder SAI là "storage/generated/6" thay vì "storage/generated/6.0-test-TNCPA"
+ * — basename user gõ tay KHÔNG có đuôi file thật (không phải path .json đầy
+ * đủ), nhưng path.extname("6.0-test-TNCPA") lại hiểu NHẦM dấu "." trong "6.0"
+ * là bắt đầu phần đuôi, trả về ".0-test-TNCPA", khiến path.basename cắt mất
+ * gần hết tên, chỉ còn lại "6". Chỉ cắt đuôi khi ĐÚNG LÀ ".json" ở cuối chuỗi
+ * (không dùng path.extname() thô) — an toàn cho cả file path đầy đủ (vd
+ * "cay_khe_full.json") lẫn basename không có đuôi chứa dấu "." nội bộ (vd
+ * tên phiên bản "6.0-test-TNCPA").
  */
 export function generatedDirFor(inputPath: string): string {
+  const generatedRoot = path.resolve("./storage/generated");
+  const resolvedInput = path.resolve(inputPath);
+  const relativeToGeneratedRoot = path.relative(generatedRoot, resolvedInput);
+  const alreadyInsideGeneratedRoot =
+    relativeToGeneratedRoot !== "" &&
+    !relativeToGeneratedRoot.startsWith("..") &&
+    !path.isAbsolute(relativeToGeneratedRoot);
+  if (alreadyInsideGeneratedRoot) {
+    return path.dirname(resolvedInput);
+  }
+
   const withoutJsonExt = /\.json$/i.test(inputPath)
     ? inputPath.slice(0, -".json".length)
     : inputPath;
   return path.resolve("./storage/generated", path.basename(withoutJsonExt));
+}
+
+/**
+ * Thư mục ẢNH — theo yêu cầu người dùng: KHÁC thư mục VIDEO
+ * (generatedDirFor) khi nhiều file JSON (nhiều tập) dùng CHUNG 1 folder theo
+ * tên phim. Ảnh (CHARACTER/LOCATION/PROP/OBJECT/SCENE_SETTING) phải lưu/tra
+ * CHUNG ở cấp FILM để dùng lại được xuyên các tập, còn video thì lưu RIÊNG
+ * theo từng tập (xem generatedDirFor) — không được gộp video của các tập vào
+ * chung 1 chỗ.
+ *
+ * Layout thật trên đĩa (xem ensureGeneratedFolderForName +
+ * runStoryboardPipelinePollo trong queue.ts):
+ * - Job "chatAI" (không chia sẻ phim): storage/generated/<file>/<file>.json
+ *   — chỉ có 1 cấp folder, ảnh và video CÙNG lưu ở "storage/generated/<file>/".
+ * - Job "scriptReferenceVideo"/"generateScript" (nhiều tập CHUNG 1 phim):
+ *   storage/generated/<tên phim>/<file>/<file>.json — 2 cấp folder; ảnh lưu
+ *   ở "storage/generated/<tên phim>/" (CHUNG cho mọi tập), video lưu ở
+ *   "storage/generated/<tên phim>/<file>/" (RIÊNG từng tập).
+ *
+ * Cách tính: lấy segment ĐẦU TIÊN ngay dưới storage/generated/ trên đường
+ * dẫn tới inputPath — segment đó luôn đúng là folder phim (case 2 ở trên)
+ * hoặc trùng luôn với folder per-file (case 1, không có khái niệm phim —
+ * khi đó ảnh và video tự nhiên dùng CHUNG 1 folder, đúng hành vi gốc từ
+ * trước khi có tính năng nhiều tập).
+ */
+export function generatedImageDirFor(inputPath: string): string {
+  const generatedRoot = path.resolve("./storage/generated");
+  const resolvedInput = path.resolve(inputPath);
+  const relativeToGeneratedRoot = path.relative(generatedRoot, resolvedInput);
+  const alreadyInsideGeneratedRoot =
+    relativeToGeneratedRoot !== "" &&
+    !relativeToGeneratedRoot.startsWith("..") &&
+    !path.isAbsolute(relativeToGeneratedRoot);
+  if (!alreadyInsideGeneratedRoot) {
+    // Chưa nằm trong storage/generated/ (vd path gốc trong
+    // config.chatAIResultsDir) — không có khái niệm "folder phim" để tách,
+    // dùng chung logic với generatedDirFor (tạo folder mới theo tên file).
+    return generatedDirFor(inputPath);
+  }
+  const firstSegment = relativeToGeneratedRoot.split(path.sep)[0];
+  return path.join(generatedRoot, firstSegment);
 }
 
 /** Đuôi file coi là video kết quả — dùng cho archiveExistingGeneratedFiles (xem ensureGeneratedFolder). */
@@ -400,6 +588,30 @@ export async function ensureGeneratedFolder(
   return outputDir;
 }
 
+/**
+ * GIỐNG ensureGeneratedFolder HỆT (archive nội dung CŨ vào "vXX" nếu folder
+ * đã tồn tại từ lần gen trước, rồi mkdir) nhưng nhận THẲNG tên folder
+ * (folderName) thay vì tự suy ra từ 1 file input, và KHÔNG tự copy file nào
+ * — dùng khi NHIỀU file JSON (vd nhiều tập phim của "Tạo kịch bản mới"/"Tham
+ * chiếu kịch bản") cùng chia sẻ CHUNG 1 folder generated/<tên phim>/ (xem
+ * job.generatedFolderName, runStoryboardPipelinePollo trong queue.ts). Caller
+ * PHẢI gọi hàm này ĐÚNG 1 LẦN cho cả batch nhiều file (không gọi lại cho
+ * từng file) — nếu không, lần gọi archive của file tập sau sẽ archive away
+ * luôn (các) file tập trước vừa copy vào TRONG CÙNG batch, rồi caller tự
+ * copyFile từng file JSON vào outputDir trả về.
+ */
+export async function ensureGeneratedFolderForName(
+  folderName: string,
+): Promise<string> {
+  const outputDir = path.resolve(
+    "./storage/generated",
+    sanitizeId(folderName),
+  );
+  await archiveExistingGeneratedFiles(outputDir);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  return outputDir;
+}
+
 export interface FailedEntry {
   id: string;
   type: string;
@@ -445,11 +657,16 @@ export async function generateReferenceImagesForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -457,7 +674,7 @@ export async function generateReferenceImagesForFile(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
       // Chỉ gen khi "prompt" là string thật — entry thiếu id, hoặc prompt bị
       // sai kiểu (số/object/null từ JSON input lỗi) đều bỏ qua thay vì gọi
       // generateReferenceImage với giá trị không phải string.
@@ -553,11 +770,16 @@ export async function generateReferenceImagesForFileViaAIVideo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -565,7 +787,7 @@ export async function generateReferenceImagesForFileViaAIVideo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -692,11 +914,16 @@ export async function generateReferenceImagesForFileViaPollo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -704,7 +931,7 @@ export async function generateReferenceImagesForFileViaPollo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -1016,6 +1243,12 @@ export async function generateVideosForFile(
   }
 
   const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu (CHARACTER/LOCATION/SCENE_SETTING) có thể nằm ở folder
+  // KHÁC outputDir — khi nhiều tập dùng CHUNG 1 folder theo tên phim, ảnh lưu
+  // ở cấp phim còn video lưu RIÊNG theo từng tập (xem docstring
+  // generatedImageDirFor). Video vẫn lưu vào outputDir như cũ, CHỈ đổi nơi
+  // TRA ảnh tham chiếu.
+  const imageDir = generatedImageDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -1063,7 +1296,7 @@ export async function generateVideosForFile(
 
       const refPaths: string[] = [];
       for (const ref of refs) {
-        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+        refPaths.push(await resolveRefImagePath(imageDir, sanitizeId(ref.id)));
       }
 
       // Field "duration" (giây) trong JSON storyboard — trước đây bị bỏ qua
@@ -1179,6 +1412,9 @@ export async function verifyVideos(
   inputPath: string,
 ): Promise<VerifyVideosResult> {
   const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu có thể nằm ở folder KHÁC outputDir khi nhiều tập dùng
+  // CHUNG 1 folder theo tên phim (xem docstring generatedImageDirFor).
+  const imageDir = generatedImageDirFor(inputPath);
   const entries: StoryboardEntry[] = JSON.parse(
     await fs.promises.readFile(inputPath, "utf-8"),
   );
@@ -1229,7 +1465,7 @@ export async function verifyVideos(
         const refId = sanitizeId(ref.id);
         verifyRefs.push({
           id: refId,
-          path: await resolveRefImagePath(outputDir, refId),
+          path: await resolveRefImagePath(imageDir, refId),
         });
       }
 
@@ -1286,6 +1522,10 @@ export async function generateVideosForFilePollo(
   }
 
   const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu có thể nằm ở folder KHÁC outputDir khi nhiều tập dùng
+  // CHUNG 1 folder theo tên phim (xem docstring generatedImageDirFor) — video
+  // vẫn lưu vào outputDir như cũ, CHỈ đổi nơi TRA ảnh tham chiếu.
+  const imageDir = generatedImageDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -1346,7 +1586,7 @@ export async function generateVideosForFilePollo(
         const refPaths: string[] = [];
         for (const ref of refs) {
           refPaths.push(
-            await resolveRefImagePath(outputDir, sanitizeId(ref.id)),
+            await resolveRefImagePath(imageDir, sanitizeId(ref.id)),
           );
         }
 
@@ -1467,6 +1707,10 @@ export async function generateVideosForFileComfyUI(
   }
 
   const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu có thể nằm ở folder KHÁC outputDir khi nhiều tập dùng
+  // CHUNG 1 folder theo tên phim (xem docstring generatedImageDirFor) — video
+  // vẫn lưu vào outputDir như cũ, CHỈ đổi nơi TRA ảnh tham chiếu.
+  const imageDir = generatedImageDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -1500,7 +1744,10 @@ export async function generateVideosForFileComfyUI(
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
           Boolean(r.id) &&
-          (r.type === "CHARACTER" || r.type === "LOCATION" || r.type === "PROP"),
+          (r.type === "CHARACTER" ||
+            r.type === "LOCATION" ||
+            r.type === "PROP" ||
+            r.type === "OBJECT"),
       );
 
       if (refs.length > MAX_MINIMAX_H3_REFERENCE_IMAGES) {
@@ -1511,7 +1758,7 @@ export async function generateVideosForFileComfyUI(
 
       const refPaths: string[] = [];
       for (const ref of refs) {
-        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+        refPaths.push(await resolveRefImagePath(imageDir, sanitizeId(ref.id)));
       }
 
       const duration =
@@ -1633,11 +1880,16 @@ export async function generateSceneImagesForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -1755,11 +2007,16 @@ export async function generateSceneImagesForFileViaAIVideo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -1948,11 +2205,16 @@ export async function generateSceneImagesForFileViaPollo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(

@@ -69,7 +69,7 @@ QUY TẮC SCHEMA:
 - VIDEO.ref là array có số phần tử biến đổi theo đúng asset thực sự cần cho clip.
 - VIDEO.ref CHỈ được tham chiếu CHARACTER và LOCATION.
 - VIDEO.ref KHÔNG được tham chiếu VIDEO khác.
-- Không có giới hạn cứng số lượng ref ở schema này; pipeline vận hành có thể áp giới hạn riêng của model. Chỉ đưa asset thật sự cần thiết.
+- VIDEO.ref của MỘT clip có TỐI ĐA 9 phần tử — đây là GIỚI HẠN CỨNG của pipeline gen video (model chỉ nhận tối đa 9 ảnh reference/clip), KHÔNG được vượt quá dưới bất kỳ trường hợp nào. Chỉ đưa asset thật sự cần thiết; nếu vượt quá 9, xem thứ tự ưu tiên cắt bớt ở mục "15. QUY TẮC VIDEO.ref".
 - Mỗi phần tử ref có đúng 2 field: id và type.
 - Mọi ref.id phải tồn tại trong cùng file và ref.type phải trùng type khai báo gốc.
 - Không duplicated ref trong cùng một VIDEO.
@@ -241,6 +241,8 @@ Thứ tự VIDEO.ref mặc định:
 Trong từng nhóm, giữ thứ tự xuất hiện/nhận diện nhất quán xuyên timeline.
 
 Nếu pipeline vận hành có thứ tự upload khác, thứ tự VIDEO.ref PHẢI được sắp lại để khớp chính xác thứ tự upload thực tế.
+
+VIDEO.ref TỐI ĐA 9 phần tử (do đó tối đa `<Picture 9>`) — giới hạn CỨNG của pipeline gen video, xem cách cắt bớt khi vượt quá ở mục "15. QUY TẮC VIDEO.ref".
 
 6B. <Picture N> PHẢI KHỚP VIDEO.ref
 
@@ -480,6 +482,7 @@ Không:
 ======================================================================
 
 - VIDEO.ref chỉ chứa CHARACTER/LOCATION asset thật sự cần của clip.
+- VIDEO.ref TỐI ĐA 9 phần tử — GIỚI HẠN CỨNG của pipeline gen video, KHÔNG được vượt quá dưới bất kỳ trường hợp nào. Nếu một clip thực sự cần nhiều hơn 9 asset để đủ continuity, PHẢI cắt bớt theo thứ tự ưu tiên: giữ lại CHARACTER thật (id không chứa "PROP") đang thực sự xuất hiện/nói trong clip trước, rồi tới LOCATION, rồi tới CHARACTER có id chứa "PROP" (PROP/OBJECT) đang được thao tác trực tiếp hoặc quan trọng nhất cho continuity; loại bỏ PROP/OBJECT ít quan trọng hơn trước — không được loại bỏ CHARACTER thật hay LOCATION đang thực sự xuất hiện chỉ để né giới hạn này.
 - VIDEO.ref không chứa VIDEO khác.
 - VIDEO.ref không chứa bất kỳ scene setting/boundary type nào.
 - Mỗi ref.id tồn tại trong cùng file.
@@ -510,6 +513,7 @@ SCHEMA:
 
 REFERENCE:
 - VIDEO.ref chỉ có CHARACTER/LOCATION.
+- Kiểm tra MỌI VIDEO.ref: số phần tử <= 9. Nếu clip nào có VIDEO.ref > 9 phần tử, PHẢI cắt bớt theo đúng thứ tự ưu tiên ở mục "15. QUY TẮC VIDEO.ref" trước khi lưu — không được để lọt bất kỳ VIDEO nào vượt quá 9 ref.
 - Mọi ref.id tồn tại và ref.type đúng type khai báo.
 - Không duplicated ref.
 - VIDEO.ref chỉ chứa asset cần thiết.

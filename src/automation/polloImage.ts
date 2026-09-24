@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
+import { generateReferenceImage } from "./chatAIImage";
 import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
   captureResultId,
@@ -264,7 +265,35 @@ export async function generateImage(
         );
         continue;
       }
-      throw err;
+      // Theo yêu cầu người dùng: pollo.ai gen ảnh lỗi (không phải crash còn
+      // lượt retry) — fallback sang ChatAI (generateReferenceImage,
+      // chatAIImage.ts — provider KHÁC hẳn, browser/session riêng) thay vì
+      // để cả job thất bại luôn. Lưu vào config.downloadDir với baseFileName
+      // = jobId, cùng quy ước đặt tên tạm mà attemptGenerateImage đang dùng
+      // (xem downloadViaMediaUrl) — caller (storyboardPipeline.ts) tự rename/
+      // move file này vào đúng chỗ, không quan tâm tên tạm ở bước này.
+      console.warn(
+        `[polloImage] generateImage lỗi trên pollo.ai — fallback sang ChatAI (generateReferenceImage):`,
+        err instanceof Error ? err.message : err,
+      );
+      try {
+        const fallback = await generateReferenceImage(
+          prompt,
+          config.downloadDir,
+          jobId,
+          jobId,
+          options.referenceImagePaths,
+        );
+        return { filePaths: [fallback.path], polloResultId: null };
+      } catch (fallbackErr) {
+        console.error(
+          `[polloImage] Fallback ChatAI (generateReferenceImage) cũng lỗi:`,
+          fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+        );
+        // Ném lại lỗi GỐC của pollo.ai (không phải lỗi fallback) — đây mới
+        // là provider chính, giữ đúng context lỗi quen thuộc cho caller/log.
+        throw err;
+      }
     }
   }
 }

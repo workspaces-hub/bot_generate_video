@@ -4,7 +4,7 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import {
   dismissCloudflareChallengeIfPresent,
-  getChatAIBrowserContext,
+  getChatAIImageBrowserContext,
 } from "./chatAIBrowser";
 import { gotoChatAIWithRetry } from "./chatAI";
 import {
@@ -139,7 +139,7 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
     .catch(() => false);
 
   const stableRequiredMs = 3000;
-  const pollIntervalMs = 1000;
+  const pollIntervalMs = 10000;
   // Xác nhận qua debug thật (job d077805e): generate ẢNH đôi khi lỗi THẬT
   // phía ChatAI ("Something went wrong. Please try again." kèm nút Retry,
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
@@ -301,8 +301,10 @@ function extractChatAISessionId(url: string): string | undefined {
  * có await) nên về lý thuyết không mở 2 tab cùng lúc, hàng đợi này đảm bảo
  * chắc chắn không xảy ra dù code gọi thay đổi sau này (vd lỡ đổi sang
  * Promise.all) hoặc có thêm nơi khác cùng gọi hàm này — tránh mở nhiều tab
- * Chrome cùng lúc trên CÙNG 1 browser context dùng chung (getChatAIBrowserContext),
- * dễ gây xung đột/crash.
+ * Chrome cùng lúc trên CÙNG 1 browser context dùng chung
+ * (getChatAIImageBrowserContext — RIÊNG với getChatAIBrowserContext của
+ * askChatAI, xem docstring hàm đó trong chatAIBrowser.ts), dễ gây xung đột/
+ * crash.
  */
 let generateImageQueue: Promise<unknown> = Promise.resolve();
 
@@ -360,7 +362,7 @@ async function attemptGenerateReferenceImage(
   jobId: string,
   refImagePaths?: string[],
 ): Promise<GenerateReferenceImageResult> {
-  const context = await getChatAIBrowserContext();
+  const context = await getChatAIImageBrowserContext();
   const page = await context.newPage();
   try {
     // Xác nhận qua log lỗi thật (job 95227a24, và nhiều job khác báo
@@ -482,7 +484,7 @@ async function attemptGenerateReferenceImage(
 
     return { path: destPath, sessionId: extractChatAISessionId(page.url()) };
   } catch (err) {
-    await captureErrorSnapshot(page, jobId, err);
+    await captureErrorSnapshot(page, jobId + "_chatai_image_error", err);
     throw err instanceof ChatAIImageError
       ? err
       : new ChatAIImageError(err instanceof Error ? err.message : String(err));

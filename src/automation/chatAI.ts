@@ -572,11 +572,18 @@ async function sendMessage(page: Page, text: string): Promise<void> {
  * "<tên>-2.json"... dù chỉ có 1 kết quả). Dedupe theo aria-label (đúng bằng
  * tên file) TRƯỚC khi lặp — mỗi tên file chỉ tải ĐÚNG 1 LẦN, dù khớp bao
  * nhiêu nút.
+ *
+ * SỬA (theo yêu cầu người dùng): khi KHÔNG có promptFileName (không đặt lại
+ * tên theo file prompt gốc), lưu file ĐÚNG tên ChatAI gợi ý (suggestedName/
+ * suggested) — KHÔNG còn thêm tiền tố "<jobId>-" như trước. File gốc lưu ở
+ * config.chatAIResultsDir chỉ tồn tại tạm thời: sau khi được COPY vào
+ * storage/generated/ (xem runStoryboardPipelinePollo trong queue.ts), bản
+ * gốc này bị xoá luôn — không cần tiền tố jobId để tránh trùng tên vì mỗi
+ * file chỉ "sống" tạm trong khoảng ngắn giữa lúc tải về và lúc copy xong.
  */
 async function downloadAttachedFiles(
   page: Page,
   message: Locator,
-  jobId: string,
   promptFileName?: string,
 ): Promise<string[]> {
   const downloadLinks = downloadFileLinkLocator(message);
@@ -753,7 +760,7 @@ async function downloadAttachedFiles(
               .catch(() => null)) || `attachment-${i}.json`;
           const fileName = promptFileBaseName
             ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggestedName) || ".json"}`
-            : `${jobId}-${suggestedName}`;
+            : suggestedName;
           const filePath = path.join(config.chatAIResultsDir, fileName);
           await fs.promises.writeFile(filePath, previewText, "utf-8");
           savedPaths.push(filePath);
@@ -785,7 +792,7 @@ async function downloadAttachedFiles(
       const suggested = download.suggestedFilename() || `attachment-${i}`;
       const fileName = promptFileBaseName
         ? `${promptFileBaseName}${savedPaths.length > 0 ? `-${savedPaths.length + 1}` : ""}${path.extname(suggested)}`
-        : `${jobId}-${suggested}`;
+        : suggested;
       const filePath = path.join(config.chatAIResultsDir, fileName);
       await download.saveAs(filePath);
       savedPaths.push(filePath);
@@ -912,7 +919,6 @@ async function extractScriptFromAttachment(
  */
 async function readLatestAssistantMessage(
   page: Page,
-  jobId: string,
   promptFileName?: string,
   minMessageCount = 1,
 ): Promise<{
@@ -947,7 +953,6 @@ async function readLatestAssistantMessage(
   const downloadedFiles = await downloadAttachedFiles(
     page,
     latest,
-    jobId,
     promptFileName,
   );
   const text = await latest.innerText().catch(() => "");
@@ -1288,6 +1293,18 @@ export async function askChatAI(
   promptFileName?: string,
   /** Path local file đính kèm (tuỳ chọn) — nếu có, UPLOAD file này lên composer TRƯỚC khi gõ prompt (xem uploadAttachment), dùng khi user gửi prompt qua file thay vì gõ trực tiếp. */
   attachmentPath?: string,
+  /**
+   * true (mặc định, giữ hành vi cũ) khi attachmentPath là 1 file KỊCH BẢN
+   * DẠNG TEXT (.txt/.md) — cho phép 2 fallback missingScript/fileAccessError
+   * bên dưới đọc THẲNG attachmentPath bằng fs.readFile(..., "utf-8") rồi dán
+   * nội dung vào tin nhắn. Đặt false khi attachmentPath là file NHỊ PHÂN
+   * (video/ảnh, vd askChatAIAboutReferenceVideo) — đọc file nhị phân bằng
+   * "utf-8" không throw (Buffer luôn decode được, dù ra chuỗi rác) nên
+   * nhánh cũ sẽ ÂM THẦM dán hàng chục/hàng trăm KB dữ liệu rác vào tin nhắn
+   * thay vì phát hiện lỗi — false thì bỏ qua thẳng 2 nhánh đọc-file-làm-text
+   * này, chỉ re-upload lại file rồi nhắc ChatAI tiếp tục.
+   */
+  attachmentIsScript = true,
 ): Promise<{ downloadedFiles: string[] }> {
   const context = await getChatAIBrowserContext();
   const page = await context.newPage();
@@ -1346,7 +1363,6 @@ export async function askChatAI(
 
       const result = await readLatestAssistantMessage(
         page,
-        jobId,
         promptFileName,
         lastMessageCount + 1,
       );
@@ -1374,9 +1390,10 @@ export async function askChatAI(
         //   `${jobId}-missing-script-turn-${turn}`,
         //   `missing-script-turn-${turn}`,
         // );
-        const scriptText = attachmentPath
-          ? await extractScriptFromAttachment(attachmentPath)
-          : null;
+        const scriptText =
+          attachmentPath && attachmentIsScript
+            ? await extractScriptFromAttachment(attachmentPath)
+            : null;
 
         if (scriptText) {
           // Gửi THẲNG đúng đoạn kịch bản dưới dạng text (không upload lại
@@ -1405,11 +1422,12 @@ export async function askChatAI(
         for (const filePath of result.downloadedFiles) {
           await fs.promises.unlink(filePath).catch(() => {});
         }
-        const fileContent = attachmentPath
-          ? await fs.promises
-              .readFile(attachmentPath, "utf-8")
-              .catch(() => null)
-          : null;
+        const fileContent =
+          attachmentPath && attachmentIsScript
+            ? await fs.promises
+                .readFile(attachmentPath, "utf-8")
+                .catch(() => null)
+            : null;
 
         if (fileContent) {
           messageToSend = `Bạn báo không đọc được file đính kèm (lỗi môi trường/công cụ xử lý file phía bạn) — đây là TOÀN BỘ nội dung file đó, dán trực tiếp vào đây, dùng đúng nội dung này để tiếp tục xử lý, không cần đọc lại file đính kèm nữa:\n\n${fileContent}`;
@@ -1494,6 +1512,37 @@ export async function askChatAI(
   } finally {
     await page.close();
   }
+}
+
+/**
+ * Dùng chung cho cả 2 nút "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL)
+ * VÀ "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) trong keyboard.ts —
+ * xem submitScriptReferenceVideoJob/processScriptReferenceVideoQueue trong
+ * queue.ts. User upload 1 VIDEO tham chiếu (không phải kịch bản text) —
+ * upload video này lên ChatAI kèm master prompt tại masterPromptPath (mặc
+ * định config.promptSplitVideo — chia SHOT/CLIP theo diễn biến; truyền
+ * config.promptVideoReference để chỉ gen 1 VIDEO duy nhất mô tả toàn bộ
+ * video, xem prompt_video_reference.txt), yêu cầu ChatAI xem/nghe hết video
+ * rồi trả về DUY NHẤT 1 file JSON. Dùng lại nguyên vòng lặp
+ * turn/isComplete/downloadAttachedFiles của askChatAI — chỉ khác
+ * attachmentIsScript=false vì video là file NHỊ PHÂN, không phải file kịch
+ * bản dạng text (xem docstring tham số attachmentIsScript trong askChatAI).
+ */
+export async function askChatAIAboutReferenceVideo(
+  videoPath: string,
+  jobId: string,
+  /** Tên file video gốc (không bắt buộc) — dùng đặt tên lại file JSON ChatAI trả về, xem promptFileName trong askChatAI/downloadAttachedFiles. */
+  videoFileName?: string,
+  /** Caption user gõ kèm video — TRANSFORM_MODE mặc định ON (xem master prompt), tham số này dùng để TẮT (vd "giữ nguyên như video gốc") hoặc tuỳ chỉnh thêm. Nối vào CUỐI master prompt, KHÔNG thay thế. */
+  extraInstruction?: string,
+  /** Path master prompt để đọc (mặc định config.promptSplitVideo) — xem docstring hàm này. */
+  masterPromptPath: string = config.promptSplitVideo,
+): Promise<{ downloadedFiles: string[] }> {
+  const masterPrompt = await fs.promises.readFile(masterPromptPath, "utf-8");
+  const prompt = extraInstruction
+    ? `${masterPrompt}\n\n## YÊU CẦU BỔ SUNG TỪ NGƯỜI DÙNG (ưu tiên áp dụng, có thể bật TRANSFORM_MODE hoặc điều chỉnh khác so với mặc định ở trên)\n${extraInstruction}`
+    : masterPrompt;
+  return askChatAI(prompt, jobId, videoFileName, videoPath, false);
 }
 
 /**

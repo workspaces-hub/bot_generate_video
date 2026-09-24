@@ -86,6 +86,19 @@ export const config = {
     process.env.CHATAI_REVISE_STORAGE_STATE_PATH ??
       "./storage/chatai-revise-session.json",
   ),
+  // Session RIÊNG (tài khoản KHÁC hẳn chatAIStorageStatePath VÀ
+  // chatAIReviseStorageStatePath) chỉ dùng cho generateReferenceImage
+  // (chatAIImage.ts — CHARACTER/LOCATION/SCENE_SETTING qua ChatAI, và
+  // fallback khi pollo.ai gen ảnh lỗi, xem generateImage trong polloImage.ts).
+  // Tách riêng vì generateReferenceImage có thể chạy CÙNG LÚC với askChatAI
+  // (2 hàng đợi độc lập, xem queue.ts) — cùng lý do đã tách
+  // chatAIReviseStorageStatePath ở trên: dùng chung 1 session sẽ khiến 2 tab
+  // thao tác song song trên CÙNG 1 tài khoản. Đăng nhập bằng
+  // `npm run login-chatai -- image` (xem scripts/login-chatai.ts).
+  chatAIImageStorageStatePath: path.resolve(
+    process.env.CHATAI_IMAGE_STORAGE_STATE_PATH ??
+      "./storage/chatai-image-session.json",
+  ),
   chatAIResultsDir: path.resolve(
     process.env.CHATAI_RESULTS_DIR ?? "./storage/chatai-results",
   ),
@@ -121,6 +134,49 @@ export const config = {
   proxyUsername: process.env.PROXY_USERNAME || undefined,
   proxyPassword: process.env.PROXY_PASSWORD || undefined,
   formatOuput: "format_output.txt",
+  // Master prompt cho tính năng "Tham chiếu kịch bản" (nút
+  // SCRIPT_REFERENCE_BUTTON_LABEL, xem askChatAIAboutReferenceVideo trong
+  // chatAI.ts): user upload 1 video, bot upload video này + nội dung file
+  // này lên ChatAI, chờ ChatAI trả file JSON storyboard rồi gửi lại luôn cho
+  // user (không gen ảnh/video tiếp). Cùng quy ước path tương đối-CWD như
+  // formatOuput ở trên.
+  promptSplitVideo: "prompt_split_video.txt",
+  // Master prompt cho tính năng "Tham chiếu video" (nút
+  // VIDEO_REFERENCE_BUTTON_LABEL) — GIỐNG hệt luồng "Tham chiếu kịch bản"
+  // (cùng askChatAIAboutReferenceVideo, cùng ScriptReferenceVideoJob/
+  // processScriptReferenceVideoQueue) nhưng dùng MASTER PROMPT KHÁC: JSON
+  // trả về chỉ có ĐÚNG 1 phần tử VIDEO (không chia SHOT/CLIP) — prompt của
+  // phần tử đó mô tả TOÀN BỘ video để gen lại trong 1 lần, xem
+  // prompt_video_reference.txt.
+  promptVideoReference: "prompt_video_reference.txt",
+  // Master prompt cho tính năng "Tạo kịch bản mới" (nút
+  // GENERATE_SCRIPT_BUTTON_LABEL) — user gõ tên file json, bot tìm các file
+  // JSON storyboard đã có trong config.chatAIResultsDir có tên CHỨA chuỗi đó
+  // (có thể khớp nhiều file = nhiều tập phim), ghép nội dung các file đó +
+  // master prompt này thành 1 file đính kèm gửi lên ChatAI, yêu cầu viết lại
+  // thành 1 bộ phim MỚI TƯƠNG TỰ (đổi kịch bản/nhân vật/bối cảnh/đạo cụ/lời
+  // thoại, giữ cấu trúc kỹ thuật dựng phim) — id nhân vật/bối cảnh/đạo cụ/vật
+  // thể phải nhất quán xuyên các tập (xem prompt_generate_script.txt, mục
+  // "ASSET LEDGER DÙNG CHUNG XUYÊN SUỐT CÁC TẬP").
+  promptGenerateScript: "prompt_generate_script.txt",
+
+  // Telegram Bot API (api.telegram.org) CHỈ cho bot TẢI file <= 20MB qua
+  // getFile — video tham chiếu user gửi cho "Tham chiếu kịch bản" thường
+  // vượt mức này. Fallback: dùng MTProto (thư viện teleproto, xem
+  // src/automation/telegramMTProto.ts) đăng nhập LẠI CHÍNH bot này (qua
+  // botToken ở trên, không cần số điện thoại/OTP) để tải trực tiếp từ
+  // Telegram, không qua giới hạn 20MB của lớp HTTP Bot API. BẮT BUỘC lấy
+  // TELEGRAM_API_ID/TELEGRAM_API_HASH tại https://my.telegram.org/apps
+  // (mục "API development tools") — đây LÀ CẶP KHOÁ RIÊNG của MTProto,
+  // khác hẳn BOT_TOKEN, không có sẽ không tải được file >20MB.
+  telegramApiId: Number(process.env.TELEGRAM_API_ID ?? 0),
+  telegramApiHash: process.env.TELEGRAM_API_HASH ?? "",
+  // Session MTProto (StringSession) lưu lại sau lần đăng nhập đầu tiên — có
+  // rồi thì các lần chạy sau không cần bắt tay xác thực lại DC từ đầu.
+  telegramMTProtoSessionPath: path.resolve(
+    process.env.TELEGRAM_MTPROTO_SESSION_PATH ??
+      "./storage/mtproto-session.txt",
+  ),
   defaultModelVideo: process.env.DEFAULT_MODEL_VIDEL || "Hailuo 2.0",
 
   // Bật để askChatAI (chatAI.ts) tự chọn mức "reasoning effort" CAO NHẤT
