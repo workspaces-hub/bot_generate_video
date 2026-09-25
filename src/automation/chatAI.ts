@@ -857,11 +857,40 @@ async function downloadAttachedFiles(
               const panelDownloadPromise = page
                 .waitForEvent("download", { timeout: 15_000 })
                 .catch(() => null);
+              // Bổ sung: xác nhận qua log lỗi thật (job
+              // 69e2966e-3248-4ff8-95f0-2932744257d2_bat_mi_khoi_nghiep.mp4)
+              // — nút Download trong panel "Preview unavailable" KHÔNG bắn
+              // sự kiện download nào Playwright bắt được (giống hệt biến thể
+              // có preview code, xem comment ở nhánh else phía trên). Nghi
+              // ChatGPT mở nội dung blob ở TAB MỚI (window.open) thay vì tải
+              // xuống thật — chưa có bằng chứng debug trực tiếp xác nhận,
+              // nhưng đây là hành vi phổ biến của ChatGPT với file
+              // preview-unavailable, nên thử nghe thêm sự kiện "page" mới ở
+              // cùng context, đọc thẳng nội dung text nếu có, best-effort
+              // (không thay thế download event, chỉ bổ sung thêm 1 lối
+              // thoát nếu vẫn thất bại như trước).
+              const popupPromise = page
+                .context()
+                .waitForEvent("page", { timeout: 15_000 })
+                .catch(() => null);
               await panelDownloadButton
                 .first()
                 .click({ force: true })
                 .catch(() => {});
               download = await panelDownloadPromise;
+              if (!download) {
+                const popup = await popupPromise;
+                if (popup) {
+                  await popup.waitForLoadState("load").catch(() => {});
+                  previewText = await popup
+                    .evaluate(() => document.body.innerText)
+                    .catch(() => null);
+                  console.log(
+                    `[chatAI] downloadAttachedFiles panel Download (index ${i}): mở tab mới, đọc được ${previewText ? previewText.length : 0} ký tự.`,
+                  );
+                  await popup.close().catch(() => {});
+                }
+              }
             }
           }
         }
