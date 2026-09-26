@@ -104,12 +104,29 @@ export const workingIndicatorLocator = (page: Page): Locator =>
  * 0 phần tử dù ảnh đã tạo xong thật. Cấu trúc CHUNG cho MỌI lượt trả lời của
  * ChatAI (cả text lẫn ảnh) là `<section data-testid="conversation-turn-N">`
  * chứa 1 descendant mang class "agent-turn" — dùng cấu trúc này thay vì
- * attribute data-message-author-role để không bỏ sót trường hợp ảnh.
+ * attribute data-message-author-role để không bỏ sót trường hợp ảnh. Nhánh
+ * này áp dụng cho chế độ "Chat" (chatModeToggleLocator).
+ *
+ * BỔ SUNG nhánh RIÊNG cho chế độ "Work"/"Công việc" (workModeToggleLocator)
+ * — xác nhận qua debug thật (job 9ff64b1a-886f-4aec-97f4-af6f877a5cea VÀ
+ * 7c2ddec9-8148-4855-969d-edde0c12fa83, cả 2 đều lặp vô hạn trong
+ * sendMessage dù ChatAI đã trả lời XONG THẬT — "Analyzed" + đầy đủ nội dung
+ * + link file JSON hiện rõ trên trang): ở mode Work, DOM KHÔNG hề có
+ * `conversation-turn`/`.agent-turn`/`data-message-author-role` (0 phần tử,
+ * đã grep toàn bộ HTML xác nhận) — cấu trúc THẬT SỰ dùng là
+ * `<div data-content-search-unit-key="fallback-turn-N:M:assistant" ...>`
+ * (attribute LUÔN kết thúc bằng ":assistant" cho lượt trả lời của ChatAI,
+ * xác nhận cả 2 job trên đều khớp) bọc ngoài `<h4 data-conversation-role=
+ * "assistant">` (sr-only) và nội dung markdown thật. Vì mode Work không có
+ * `.agent-turn` nên nhánh Chat ở trên khớp 0 phần tử — phải OR thêm nhánh
+ * này, không thay thế, để hasAssistantTurn/readLatestAssistantMessage nhận
+ * đúng lượt trả lời ở CẢ HAI mode thay vì treo vô hạn (xem sendMessage).
  */
 export const assistantMessageLocator = (page: Page): Locator =>
   page
     .locator('section[data-testid^="conversation-turn-"]')
-    .filter({ has: page.locator(".agent-turn") });
+    .filter({ has: page.locator(".agent-turn") })
+    .or(page.locator('[data-content-search-unit-key$=":assistant"]'));
 
 /**
  * File ChatAI tạo ra và đính kèm trong 1 tin nhắn trả lời (vd qua code
@@ -128,7 +145,13 @@ export const assistantMessageLocator = (page: Page): Locator =>
  *    JSON có thật, ChatAI báo đã tạo, nhưng bot không tải được gì cả):
  *    `<button aria-label="📄 Tải file pip_mouse_..._full.json" class="behavior-btn ... entity-underline ...">📄 Tải file ..._full.json</button>`
  *    — nhận diện qua aria-label KẾT THÚC bằng ".json" (xem inlineFileLinkLocator).
- * fileAttachmentLocator gộp cả 3 — dùng để CHECK "đã có file xuất hiện chưa"
+ * 4. Chế độ "Work" (xem docstring assistantMessageLocator) — DOM HOÀN TOÀN
+ *    KHÁC, không phải `<button>` mà là `<span role="button">`, xác nhận qua
+ *    debug thật (job 9ff64b1a-886f-4aec-97f4-af6f877a5cea):
+ *    `<span data-file-reference="true" data-markdown-copy-text="X.json"
+ *    role="button" aria-label="Open preview of X.json">` — nhận diện qua
+ *    attribute `data-file-reference="true"` (xem workModeFileReferenceLocator).
+ * fileAttachmentLocator gộp cả 4 — dùng để CHECK "đã có file xuất hiện chưa"
  * (vd sendMessage coi đây là dấu hiệu ChatAI trả lời xong); còn lúc THỰC SỰ bấm
  * tải (downloadAttachedFiles trong chatAI.ts) phải ưu tiên
  * downloadFileLinkLocator/inlineFileLinkLocator trước, không bấm nhiều nút
@@ -140,7 +163,58 @@ export const fileAttachmentLocator = (message: Locator): Locator =>
       'button[aria-label^="Download "]',
       'button[class*="group/open-file"]',
       'button[aria-label$=".json"]',
+      '[data-file-reference="true"]',
+      '[class*="group/resource-row"]',
     ].join(", "),
+  );
+
+/**
+ * Chế độ "Work" — file tham chiếu render dạng `<span role="button"
+ * data-file-reference="true" data-markdown-copy-text="<filename>"
+ * aria-label="Open preview of <filename>">` NGAY TRONG đoạn markdown, KHÔNG
+ * PHẢI `<button>` như mọi biến thể "Chat" khác (xem fileAttachmentLocator
+ * mục 4) — xác nhận qua debug thật (job 9ff64b1a-886f-4aec-97f4-af6f877a5cea
+ * VÀ 7c2ddec9-8148-4855-969d-edde0c12fa83).
+ *
+ * SỬA (xác nhận qua debug thật, job ec31faa8-2a40-48ae-904a-26e6a7002b5d):
+ * bấm span này KHÔNG mở được panel xem trước nào ("screen-threadFlyOut"
+ * count=0 trong HTML chụp lại NGAY SAU khi bấm) — nghi đây chỉ là 1 trích
+ * dẫn/tham chiếu trong văn bản (giống citation), không phải nút tương tác
+ * thật. Hạ xuống làm phương án CUỐI CÙNG (sau
+ * workModeResourceCardDownloadButtonLocator, xem docstring đó — có bằng
+ * chứng thật đáng tin cậy hơn hẳn), chỉ dùng khi resource card không tồn
+ * tại vì lý do nào đó.
+ */
+export const workModeFileReferenceLocator = (message: Locator): Locator =>
+  message.locator('[data-file-reference="true"]');
+
+/**
+ * Chế độ "Work" — "resource card" hiện SAU đoạn trả lời (KHÁC hẳn span
+ * trích dẫn NGAY TRONG văn bản ở workModeFileReferenceLocator) — xác nhận
+ * qua debug thật (job ec31faa8-2a40-48ae-904a-26e6a7002b5d, ĐÚNG lúc
+ * workModeFileReferenceLocator bấm không ăn thua): DOM có sẵn 1 khối
+ * `<span class="group/resource-row ...">` (cùng quy ước đặt tên
+ * "group/..." với "group/open-file" đã dùng cho fileCardLocator) chứa 2 nút
+ * RIÊNG — 1 nút phủ toàn bộ card `aria-label="Open preview of <filename>"`,
+ * và 1 nút icon CHỈ hiện khi hover `aria-label="Download file"` (generic,
+ * KHÔNG có tên file — khác hẳn quy ước aria-label="Download <filename>" của
+ * downloadFileLinkLocator). Nút "Download file" này mới là nút tải THẬT
+ * (mục đích rõ ràng qua icon + nhãn, không mơ hồ như span trích dẫn).
+ *
+ * QUAN TRỌNG: vì aria-label CHUNG CHUNG (không có tên file), KHÔNG dùng để
+ * dedupe/đặt tên file khi có NHIỀU file cùng lượt — downloadAttachedFiles
+ * phải tự tra thêm attribute `title` (tên file thật) trên phần tử hiển thị
+ * tên trong CÙNG resource-row này (workModeResourceCardRowLocator) làm nhãn
+ * thay thế.
+ */
+export const workModeResourceCardRowLocator = (message: Locator): Locator =>
+  message.locator('[class*="group/resource-row"]');
+
+export const workModeResourceCardDownloadButtonLocator = (
+  message: Locator,
+): Locator =>
+  workModeResourceCardRowLocator(message).locator(
+    'button[aria-label="Download file"]',
   );
 
 /**

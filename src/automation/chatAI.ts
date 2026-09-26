@@ -29,6 +29,9 @@ import {
   signInIndicatorCandidates,
   stopGeneratingButtonCandidates,
   workingIndicatorLocator,
+  workModeFileReferenceLocator,
+  workModeResourceCardDownloadButtonLocator,
+  workModeResourceCardRowLocator,
   workModeToggleLocator,
 } from "./chatAISelectors";
 import { firstVisible, isPageCrashError } from "./selectors";
@@ -353,7 +356,11 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
  * textarea.fill() (set thẳng nội dung, không cần clipboard, không gõ từng
  * phím) khi gặp lỗi này.
  */
-async function sendMessage(page: Page, text: string): Promise<void> {
+async function sendMessage(
+  page: Page,
+  text: string,
+  jobId: string,
+): Promise<void> {
   let clipboardOk = true;
   try {
     await page
@@ -542,6 +549,15 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   // Retry (maxRetriesOnError) ở dưới, hoặc lỗi ném ra từ chính Playwright
   // (vd page bị đóng/crash).
   let stableSince: number | null = null;
+  // Theo yêu cầu người dùng: đếm số lần poll LIÊN TỤC mà VẪN chưa từng thấy
+  // nút Stop (hasSeenGenerating false) — xác nhận qua log lỗi thật (lặp lại
+  // vô hạn "stopButtonVisible=false, workingIndicatorVisible=false,
+  // hasSeenGenerating=false" dù user xác nhận ChatGPT đã trả lời xong trên
+  // trình duyệt thật). Dùng để chụp 1 debug snapshot DUY NHẤT khi vượt
+  // ngưỡng nghi ngờ, thay vì đoán mù nguyên nhân (selector nút Stop/tin nhắn
+  // trả lời có thể đã lỗi thời, giống lần trước với nút Send).
+  let neverGeneratingPollCount = 0;
+  let stuckSnapshotTaken = false;
   while (true) {
     const retryButton = await firstVisible(
       regenerateErrorButtonCandidates(page),
@@ -591,22 +607,22 @@ async function sendMessage(page: Page, text: string): Promise<void> {
       stableSince = null;
     }
 
-    // const hasFileReady = await (async () => {
-    //   const messages = assistantMessageLocator(page);
-    //   if ((await messages.count()) === 0) return false;
-    //   return (await fileAttachmentLocator(messages.last()).count()) > 0;
-    // })();
-
-    // console.log(
-    //   "stillGenerating ",
-    //   stillGenerating,
-    //   "hasSeenGenerating",
-    //   hasSeenGenerating,
-    // );
+    // Theo yêu cầu người dùng: log tiến trình chờ (trước đây comment sẵn ở
+    // đây nhưng chưa bật) — để biết đang kẹt ở bước nào khi ChatGPT đã xong
+    // thật trên trình duyệt nhưng bot chưa thấy phản hồi (vd đang chờ nút
+    // Stop biến mất ổn định, hay đang retry lỗi...).
+    console.log(
+      `[chatAI] sendMessage: đang chờ ChatAI — stopButtonVisible=${stopButtonVisible}, workingIndicatorVisible=${workingIndicatorVisible}, hasSeenGenerating=${hasSeenGenerating}, stableSince=${stableSince === null ? "chưa ổn định" : `${Date.now() - stableSince}ms`}, retriesUsed=${retriesUsed}/${maxRetriesOnError}.`,
+    );
     if (!stillGenerating) {
       if (hasSeenGenerating) {
         if (stableSince === null) stableSince = Date.now();
-        if (Date.now() - stableSince >= stableRequiredMs) return;
+        if (Date.now() - stableSince >= stableRequiredMs) {
+          console.log(
+            `[chatAI] sendMessage: ChatAI đã trả lời xong (nút Stop vắng mặt ổn định ${stableRequiredMs}ms).`,
+          );
+          return;
+        }
       } else {
         // Chưa từng thấy nút Stop — chỉ coi là xong nếu trang đã thật sự có
         // tin nhắn trả lời (trường hợp hiếm: ChatAI trả lời quá nhanh). Không có
@@ -614,7 +630,24 @@ async function sendMessage(page: Page, text: string): Promise<void> {
         // 1beafb45 ở trên).
         const hasAssistantTurn =
           (await assistantMessageLocator(page).count()) > 0;
-        if (hasAssistantTurn) return;
+        if (hasAssistantTurn) {
+          console.log(
+            "[chatAI] sendMessage: ChatAI đã có tin nhắn trả lời (chưa từng thấy nút Stop — trả lời quá nhanh), coi như xong.",
+          );
+          return;
+        }
+        neverGeneratingPollCount++;
+        if (neverGeneratingPollCount >= 6 && !stuckSnapshotTaken) {
+          stuckSnapshotTaken = true;
+          console.warn(
+            `[chatAI] sendMessage: sau ${neverGeneratingPollCount} lần poll (~${(neverGeneratingPollCount * pollIntervalMs) / 1000}s) vẫn CHƯA TỪNG thấy nút Stop VÀ chưa có tin nhắn trả lời nào — nghi selector nút Stop/tin nhắn trả lời đã lỗi thời (ChatGPT đổi DOM, giống lần trước với nút Send) hoặc trang chưa điều hướng đúng sang hội thoại thật. Chụp debug snapshot để kiểm tra.`,
+          );
+          await captureSnapshot(
+            page,
+            `${jobId}_stuck-no-generating-signal`,
+            "stuck-no-generating-signal",
+          );
+        }
       }
     }
 
@@ -678,26 +711,55 @@ async function downloadAttachedFiles(
   const downloadLinks = downloadFileLinkLocator(message);
   const fileCards = fileCardLocator(message);
   const inlineLinks = inlineFileLinkLocator(message);
+  // Chế độ "Work" — xem docstring workModeResourceCardDownloadButtonLocator/
+  // workModeFileReferenceLocator. Thử SAU CÙNG các biến thể mode "Chat" ở
+  // trên, vì mode Work không có bất kỳ <button> nào khớp 3 locator đó (đã
+  // xác nhận qua debug thật, xem job 9ff64b1a-886f-4aec-97f4-af6f877a5cea).
+  // Ưu tiên resource card (nút "Download file" thật, đáng tin cậy hơn) TRƯỚC
+  // span trích dẫn workModeRefs (xác nhận qua debug thật, job
+  // ec31faa8-2a40-48ae-904a-26e6a7002b5d: bấm span trích dẫn không mở được
+  // gì cả, trong khi resource card có nút Download rõ ràng).
+  const workModeResourceCardDownloads =
+    workModeResourceCardDownloadButtonLocator(message);
+  const workModeRefs = workModeFileReferenceLocator(message);
   let attachments = downloadLinks;
   if ((await attachments.count()) === 0) attachments = fileCards;
   if ((await attachments.count()) === 0) attachments = inlineLinks;
+  if ((await attachments.count()) === 0) attachments = workModeResourceCardDownloads;
+  if ((await attachments.count()) === 0) attachments = workModeRefs;
   const totalMatched = await attachments.count();
+  // resource card CÓ nút Download nhưng aria-label CHUNG CHUNG ("Download
+  // file", không có tên file) — nếu đang ở nhánh này, dedupe/đặt tên file
+  // phải tra thêm attribute "title" (tên file thật) trên phần tử hiển thị
+  // tên NẰM TRONG CÙNG resource-row thay vì tin vào aria-label (xem docstring
+  // workModeResourceCardDownloadButtonLocator).
+  const isResourceCardTier = attachments === workModeResourceCardDownloads;
 
-  // Dedupe theo aria-label (với cả 3 locator trên, aria-label luôn LÀ tên
-  // file thật hoặc chứa tên file) — giữ lại index ĐẦU TIÊN cho mỗi tên file,
-  // bỏ qua các lần khớp lặp lại sau đó của CÙNG 1 file.
+  // Dedupe theo tên file thật (aria-label với 3 locator "Chat"/workModeRefs,
+  // hoặc title của resource-row với tier resource card ở trên) — giữ lại
+  // index ĐẦU TIÊN cho mỗi tên file, bỏ qua các lần khớp lặp lại sau đó của
+  // CÙNG 1 file.
   const seenLabels = new Set<string>();
   const indicesToProcess: number[] = [];
   for (let i = 0; i < totalMatched; i++) {
-    const label =
-      (await attachments
-        .nth(i)
-        .getAttribute("aria-label")
-        .catch(() => null)) ?? `__no-label-${i}`;
+    const label = isResourceCardTier
+      ? ((await workModeResourceCardRowLocator(message)
+          .nth(i)
+          .locator("[title]")
+          .first()
+          .getAttribute("title")
+          .catch(() => null)) ?? `__no-label-${i}`)
+      : ((await attachments
+          .nth(i)
+          .getAttribute("aria-label")
+          .catch(() => null)) ?? `__no-label-${i}`);
     if (seenLabels.has(label)) continue;
     seenLabels.add(label);
     indicesToProcess.push(i);
   }
+  console.log(
+    `[chatAI] downloadAttachedFiles: khớp ${totalMatched} attachment, xử lý ${indicesToProcess.length} file (đã dedupe theo tên).`,
+  );
 
   const savedPaths: string[] = [];
   // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file ChatAI
@@ -709,6 +771,9 @@ async function downloadAttachedFiles(
     : null;
 
   for (const i of indicesToProcess) {
+    console.log(
+      `[chatAI] downloadAttachedFiles (index ${i}): bắt đầu tải file đính kèm...`,
+    );
     try {
       // QUAN TRỌNG: gắn .catch() NGAY khi tạo promise (cùng statement), TRƯỚC
       // khi click() — nếu không, click() throw (vd element bị re-render/stale
@@ -972,6 +1037,9 @@ async function downloadAttachedFiles(
       const filePath = path.join(config.chatAIResultsDir, fileName);
       await download.saveAs(filePath);
       savedPaths.push(filePath);
+      console.log(
+        `[chatAI] downloadAttachedFiles (index ${i}): đã lưu "${filePath}".`,
+      );
     } catch (err) {
       console.warn(`[chatAI] Không tải được file đính kèm (index ${i}):`, err);
     }
@@ -1535,7 +1603,7 @@ export async function askChatAI(
     let lastTurnWasFileAccessError = false;
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
       lastTurnWasFileAccessError = false;
-      await sendMessage(page, messageToSend);
+      await sendMessage(page, messageToSend, jobId);
 
       const result = await readLatestAssistantMessage(
         page,
@@ -1903,7 +1971,7 @@ Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài đ�
       console.log(
         `[chatAI] askChatAIWithInlineContent(${jobId}): lượt ${turn}/${MAX_TURNS_WAITING_FOR_FILE} — gửi tin nhắn, đang chờ ChatAI trả lời...`,
       );
-      await sendMessage(page, messageToSend);
+      await sendMessage(page, messageToSend, jobId);
 
       // Chờ tới khi có tin nhắn trả lời MỚI (đếm tăng so với lượt trước) —
       // cùng cơ chế poll đã dùng trong readLatestAssistantMessage (trang có
@@ -2121,7 +2189,7 @@ export async function verifyVideo(
       .replace("[MÔ TẢ VIDEO NGAY TRƯỚC ĐÓ NẾU CÓ]", previousVideoBlock)
       .replace("[MÔ TẢ VIDEO HIỆN TẠI CẦN ĐÁNH GIÁ]", generatedVideoBlock);
 
-    await sendMessage(page, message);
+    await sendMessage(page, message, currentVideoId);
 
     const messages = assistantMessageLocator(page);
     // Chờ tới khi có ÍT NHẤT 1 tin nhắn trả lời — cùng cơ chế poll đã dùng
@@ -2228,7 +2296,7 @@ ${prompt}
 
 Hãy viết lại ĐÚNG prompt này để mô tả lại y hệt ý tưởng, bối cảnh, hành động, bố cục — nhưng thay thế hoặc loại bỏ mọi tên riêng, thương hiệu, nhân vật có bản quyền hoặc từ ngữ nhạy cảm có thể khiến công cụ kiểm duyệt nội dung từ chối. Chỉ trả lời DUY NHẤT prompt mới, không thêm giải thích, không dùng dấu ngoặc kép hay markdown.`;
 
-    await sendMessage(page, message);
+    await sendMessage(page, message, jobId);
 
     const latest = assistantMessageLocator(page).last();
     const text = await latest.innerText().catch(() => "");

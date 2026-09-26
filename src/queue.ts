@@ -2749,6 +2749,9 @@ async function processChatAIQueue(): Promise<void> {
     while (chatAIJobs.length > 0) {
       const job = chatAIJobs[0];
       const jobId = randomUUID();
+      console.log(
+        `[queue] processChatAIQueue: bắt đầu job ${jobId} (type="${job.type}").`,
+      );
       try {
         // Theo yêu cầu người dùng: xử lý job BẰNG askChatAI (upload file lên
         // composer ChatGPT — nhanh/ổn định hơn ở đa số trường hợp bình
@@ -2779,6 +2782,9 @@ async function processChatAIQueue(): Promise<void> {
             job.promptAttachmentPath,
           ));
         }
+        console.log(
+          `[queue] processChatAIQueue(${jobId}): askChatAI xong, tải được ${downloadedFiles.length} file.`,
+        );
 
         // "Tạo kịch bản mới" (job.type === "generateScript", dùng CHUNG hàng
         // đợi này với "chatAI" — xem docstring GenerateScriptJob) cần 2 bước
@@ -2848,8 +2854,17 @@ async function processChatAIQueue(): Promise<void> {
         // xem docstring runStoryboardPipelinePollo. Kết quả của lượt này
         // KHÔNG dùng cho notifyChatAISuccess (processedJsonCount giống hệt
         // result ở trên, cùng đếm trên CHÍNH downloadedFiles).
+        console.log(
+          `[queue] processChatAIQueue(${jobId}): bắt đầu runStoryboardPipelinePollo (gửi nút xác nhận "Tạo ảnh")...`,
+        );
         const result = await runStoryboardPipelinePollo(downloadedFiles, job);
+        console.log(
+          `[queue] processChatAIQueue(${jobId}): runStoryboardPipelinePollo xong, đang gửi kết quả cho user (notifyChatAISuccess)...`,
+        );
         await notifyChatAISuccess(job, result);
+        console.log(
+          `[queue] processChatAIQueue(${jobId}): đã gửi xong kết quả cho user.`,
+        );
       } catch (err) {
         await notifyError(job, err);
       } finally {
@@ -2893,6 +2908,9 @@ async function processScriptReferenceVideoQueue(): Promise<void> {
     while (scriptReferenceVideoJobs.length > 0) {
       const job = scriptReferenceVideoJobs[0];
       const jobId = randomUUID();
+      console.log(
+        `[queue] processScriptReferenceVideoQueue: bắt đầu job ${jobId} ("${job.videoFileName}", skipImageConfirmation=${job.skipImageConfirmation ?? false}).`,
+      );
       try {
         const { downloadedFiles } = await askChatAIAboutReferenceVideo(
           job.videoPath,
@@ -2900,6 +2918,9 @@ async function processScriptReferenceVideoQueue(): Promise<void> {
           job.videoFileName,
           job.extraInstruction,
           job.masterPromptPath,
+        );
+        console.log(
+          `[queue] processScriptReferenceVideoQueue(${jobId}): askChatAIAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
         );
         for (const filePath of downloadedFiles) {
           if (path.extname(filePath).toLowerCase() !== ".json") continue;
@@ -2943,12 +2964,21 @@ async function processScriptReferenceVideoQueue(): Promise<void> {
             job.videoFileName,
             path.extname(job.videoFileName),
           );
+          console.log(
+            `[queue] processScriptReferenceVideoQueue(${jobId}): bắt đầu runStoryboardPipelinePollo (gửi nút xác nhận "Tạo ảnh")...`,
+          );
           const result = await runStoryboardPipelinePollo(
             downloadedFiles,
             job,
           );
+          console.log(
+            `[queue] processScriptReferenceVideoQueue(${jobId}): runStoryboardPipelinePollo xong, đang gửi kết quả cho user...`,
+          );
           await notifyChatAISuccess(job, result);
         }
+        console.log(
+          `[queue] processScriptReferenceVideoQueue(${jobId}): đã xử lý xong job.`,
+        );
       } catch (err) {
         await notifyError(job, err);
       } finally {
