@@ -14,8 +14,8 @@
 # Yêu cầu HEADLESS=false trong .env (browser thật mới có gì để xem qua VNC).
 #
 # Biến môi trường tuỳ chỉnh (đều có default hợp lý):
-#   DISPLAY_NUM   (mặc định 1)    — số hiệu display Xvfb (:1, khớp display bot
-#                                    đang dùng — xem "chạy bot qua display :1").
+#   DISPLAY_NUM   (mặc định 99)   — số hiệu display Xvfb (:99, khớp display bot
+#                                    đang dùng — xem "chạy bot qua display :99").
 #                                    Nếu display này ĐÃ CÓ Xvfb chạy sẵn, script
 #                                    tự phát hiện và dùng lại (không tạo thêm
 #                                    display mới, không kill khi thoát).
@@ -31,7 +31,7 @@
 #   SCREEN_ARGS   (mặc định "1920x1080x24") — độ phân giải/độ sâu màu Xvfb.
 set -euo pipefail
 
-DISPLAY_NUM="${DISPLAY_NUM:-1}"
+DISPLAY_NUM="${DISPLAY_NUM:-99}"
 VNC_PORT="${VNC_PORT:-5900}"
 NOVNC_PORT="${NOVNC_PORT:-6080}"
 VNC_PASSWORD="${VNC_PASSWORD:-}"

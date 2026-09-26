@@ -35,6 +35,11 @@ export const getChatAIBrowserContext = createBrowserContextManager(
   'Chạy "npm run login-chatai" trước khi dùng tính năng ChatAI.',
   true,
   ".oaiusercontent.com",
+  true,
+  // disableGpu=false — xem docstring tham số disableGpu trong browser.ts
+  // (nghi vấn tắt GPU phá fingerprint WebGL, khiến Cloudflare Turnstile
+  // kẹt "Just a moment..." không có checkbox để bấm).
+  false,
 );
 
 /**
@@ -50,6 +55,8 @@ export const getChatAIReviseBrowserContext = createBrowserContextManager(
   'Chạy "npm run login-chatai -- revise" trước khi dùng tính năng sửa prompt vi phạm nội dung.',
   true,
   ".oaiusercontent.com",
+  true,
+  false, // disableGpu=false — xem chú thích ở getChatAIBrowserContext.
 );
 
 /**
@@ -68,6 +75,8 @@ export const getChatAIImageBrowserContext = createBrowserContextManager(
   'Chạy "npm run login-chatai -- image" trước khi dùng tính năng tạo ảnh qua ChatAI.',
   true,
   ".oaiusercontent.com",
+  true,
+  false, // disableGpu=false — xem chú thích ở getChatAIBrowserContext.
 );
 
 /**

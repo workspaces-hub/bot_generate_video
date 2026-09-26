@@ -118,6 +118,96 @@ async function logAccountInfo(page: Page, jobId: string): Promise<void> {
 }
 
 /**
+ * Tìm giá trị đầu tiên gán cho key `key` ở BẤT KỲ độ sâu nào trong 1 object
+ * JSON lồng nhau (BFS-ish qua đệ quy, giới hạn `depth` để tránh vòng lặp/JSON
+ * quá sâu) — dùng để dò các field ẩn sâu (vd plan_type thường nằm trong
+ * accounts.default.account.plan_type hoặc tương tự) mà KHÔNG cần biết trước
+ * chính xác đường dẫn (cấu trúc response ChatGPT có thể đổi bất cứ lúc nào).
+ */
+function findValueForKey(
+  obj: unknown,
+  key: string,
+  depth = 6,
+): unknown {
+  if (depth < 0 || !obj || typeof obj !== "object") return undefined;
+  const record = obj as Record<string, unknown>;
+  if (key in record && record[key] !== null && record[key] !== undefined) {
+    return record[key];
+  }
+  for (const value of Object.values(record)) {
+    if (value && typeof value === "object") {
+      const found = findValueForKey(value, key, depth - 1);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Theo yêu cầu người dùng: bắt trực tiếp response JSON của ChatGPT có chứa
+ * "default_model_slug" (vd {"default_model_slug":"gpt-5.6-sol-wm",
+ * "limits_progress":[...]}) — người dùng tự lấy được JSON này qua tab
+ * Network của DevTools, cho thấy đây là cách đáng tin cậy hơn HẲN so với đọc
+ * text nút "Open profile menu" (logAccountInfo ở trên — từng bị kẹt
+ * "Loading profile" do 2 phần tử DOM trùng lặp, xem accountMenuButtonLocator,
+ * và có lúc không đọc được gì cả). KHÔNG cần biết trước đúng URL/path của
+ * endpoint — quét MỌI response JSON, chỉ log lần ĐẦU TIÊN thấy mỗi key (best
+ * effort, lỗi parse JSON bỏ qua). Gắn listener này NGAY SAU newPage(), TRƯỚC
+ * goto — response quan trọng có thể bắn ra sớm ngay trong lúc tải trang.
+ *
+ * SỬA (xác nhận qua log thật, cả VPS lẫn local đều default_model_slug="gpt-5-6"
+ * — GIỐNG HỆT nhau, loại trừ khả năng model khác nhau là nguyên nhân kết quả
+ * chênh lệch độ sâu phân tích): bổ sung dò thêm "plan_type" (gói Free/Plus/
+ * Pro/Team — thường ẩn sâu trong response check account, KHÔNG nằm ở top
+ * level, xem findValueForKey ở trên) — nếu 2 môi trường CÙNG model nhưng
+ * KHÁC gói, đây là nghi vấn còn lại hợp lý nhất (gói thấp hơn có thể bị giới
+ * hạn effort/tool-calling ngầm dù chọn cùng model).
+ */
+function attachModelInfoLogger(page: Page, jobId: string): void {
+  return
+  let loggedModel = false;
+  let loggedPlan = false;
+  page.on("response", (response) => {
+    if (loggedModel && loggedPlan) return;
+    const contentType = response.headers()["content-type"] || "";
+    if (!contentType.includes("application/json")) return;
+    response
+      .json()
+      .then((body) => {
+        if (!body || typeof body !== "object") return;
+
+        if (!loggedModel) {
+          const slug = (body as Record<string, unknown>).default_model_slug;
+          if (typeof slug === "string") {
+            loggedModel = true;
+            const limitsProgress = (body as Record<string, unknown>)
+              .limits_progress;
+            const limits = Array.isArray(limitsProgress)
+              ? limitsProgress
+                  .map((l) => `${l?.feature_name}=${l?.remaining}`)
+                  .join(", ")
+              : "";
+            console.log(
+              `[chatAI] askChatAI(${jobId}): model đang dùng (qua network, url=${response.url()}): ${slug}${limits ? ` | limits còn lại: ${limits}` : ""}`,
+            );
+          }
+        }
+
+        if (!loggedPlan) {
+          const planType = findValueForKey(body, "plan_type");
+          if (typeof planType === "string") {
+            loggedPlan = true;
+            console.log(
+              `[chatAI] askChatAI(${jobId}): gói tài khoản (qua network, url=${response.url()}): ${planType}`,
+            );
+          }
+        }
+      })
+      .catch(() => {});
+  });
+}
+
+/**
  * page.goto tới ChatGPT kèm retry — xác nhận qua lỗi thật (nhiều job khác
  * nhau): proxy VPS thoáng qua bị lỗi tunnel (net::ERR_TUNNEL_CONNECTION_
  * FAILED) khiến 1 lần goto thất bại hẳn (không phải chỉ chậm) dù chỉ vài
@@ -255,7 +345,7 @@ async function waitForComposerTilesToSettle(page: Page): Promise<void> {
 }
 
 /** Chặn lặp vô hạn nếu vì lý do gì đó ChatAI không bao giờ đính kèm file. */
-const MAX_TURNS_WAITING_FOR_FILE = 2;
+const MAX_TURNS_WAITING_FOR_FILE = 4;
 
 /**
  * Chờ file tile trong composer hết trạng thái "đang upload" — xác nhận qua
@@ -629,7 +719,7 @@ async function sendMessage(
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
   // Tự bấm Retry (giới hạn số lần) trước khi chịu thua, vì nguyên nhân hay
   // gặp là quá tải server nhất thời, thử lại thường tự qua.
-  const maxRetriesOnError = 10;
+  const maxRetriesOnError = 15;
   let retriesUsed = 0;
 
   // Xác nhận qua thực tế (job ec8f3f90, "Connection interrupted. Waiting for
@@ -1774,6 +1864,7 @@ export async function askChatAI(
 ): Promise<{ downloadedFiles: string[] }> {
   const context = await getChatAIBrowserContext();
   const page = await context.newPage();
+  attachModelInfoLogger(page, jobId);
   try {
     await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
       waitUntil: "domcontentloaded",
@@ -1803,7 +1894,7 @@ export async function askChatAI(
     // đang đăng nhập 2 TÀI KHOẢN/GÓI khác nhau (dự án có sẵn nhiều session
     // riêng — chatai-session.json/_L/_Y, xem config.ts) chứ không phải do
     // code — log này giúp đối chiếu trực tiếp qua log thật thay vì đoán.
-    await logAccountInfo(page, jobId);
+    // await logAccountInfo(page, jobId);
 
     // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
     // (CHATAI_MODE) — xem docstring selectChatAIModeFromConfig.
@@ -1945,15 +2036,28 @@ export async function askChatAI(
       // MAX_TURNS_WAITING_FOR_FILE lượt mà vẫn "partial" (vd video thật sự
       // không có audio nghe được, sẽ MÃI MÃI partial), job vẫn trả về được
       // file partial này thay vì mất trắng.
+      //
+      // SỬA (xác nhận qua debug thật, job ed885ec5-f431-43e3-8ca9-1b8d3932059e):
+      // isPartialAnalysisText khớp NHẦM cả lúc ChatAI chỉ đang TƯỜNG THUẬT
+      // tiến độ bằng lời (vd "Hiện trạng vẫn giữ: analysis_status = "partial"
+      // ... Tiếp tục xử lý phần còn lại.") mà KHÔNG hề đính kèm file JSON nào
+      // — câu "Tiếp tục xử lý" cũ quá nhẹ, ChatAI cứ tường thuật tiếp vòng
+      // vòng (4 lượt liên tiếp 0 file) tới hết MAX_TURNS_WAITING_FOR_FILE rồi
+      // job trả về TAY KHÔNG. Chỉ coi lượt này là 1 kết quả partial "hợp lệ"
+      // khi THỰC SỰ có file đính kèm (result.downloadedFiles.length > 0);
+      // nếu không, dù vẫn còn giữ file tốt nhất từ lượt trước (nếu có), phải
+      // đòi rõ ràng ChatAI XUẤT FILE NGAY thay vì chỉ mô tả tiến độ bằng lời.
       if (result.partialAnalysis) {
         if (result.downloadedFiles.length > 0) {
           downloadedFiles = await replaceBestResultFiles(
             downloadedFiles,
             result.downloadedFiles,
           );
+          messageToSend = 'Tiếp tục xử lý';
+        } else {
+          messageToSend =
+            'Bạn chưa đính kèm file JSON nào ở lượt vừa rồi — chỉ mô tả tiến độ bằng lời không đủ. Hãy XUẤT NGAY file JSON kết quả (dù chỉ đạt analysis_status="partial" theo đúng schema đã nêu), đính kèm dưới dạng file, không chỉ tường thuật.';
         }
-        messageToSend =
-          'Tiếp tục xử lý';
         continue;
       }
 
@@ -2197,6 +2301,7 @@ async function attemptAskChatAIWithInlineContent(
   );
   const context = await getChatAIBrowserContext();
   const page = await context.newPage();
+  attachModelInfoLogger(page, jobId);
   try {
     await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
       waitUntil: "domcontentloaded",
@@ -2219,7 +2324,7 @@ async function attemptAskChatAIWithInlineContent(
 
     // Theo yêu cầu người dùng: log tài khoản/gói đang dùng — xem docstring
     // logAccountInfo (đối chiếu VPS vs local).
-    await logAccountInfo(page, jobId);
+    // await logAccountInfo(page, jobId);
 
     // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
     // — xem docstring selectChatAIModeFromConfig.

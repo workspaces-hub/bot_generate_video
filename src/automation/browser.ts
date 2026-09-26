@@ -32,11 +32,31 @@ export function createBrowserContextManager(
   useProxy = true,
   proxyBypass?: string,
   disableHttp2AndQuic = true,
+  /**
+   * Theo yêu cầu người dùng: cho phép TẮT "--disable-gpu"/"--disable-software-
+   * rasterizer" riêng cho 1 site cụ thể — mặc định true (giữ nguyên hành vi
+   * cũ, tiết kiệm CPU, xem docstring disableGpu trong launch.ts). Đặt false
+   * cho ChatAI (chatAIBrowser.ts): nghi vấn (tương quan thời điểm, CHƯA xác
+   * nhận hẳn) việc tắt GPU trên toàn bộ browser từ 2026-09-10 làm hỏng
+   * fingerprint WebGL/canvas, khiến Cloudflare Turnstile (chỉ ChatAI mới có,
+   * AIVideo/Pollo không dùng Turnstile) chuyển sang chế độ non-interactive
+   * không hiện checkbox nào để bấm và không bao giờ tự pass — xác nhận qua
+   * log thật: cơ chế bấm checkbox (dò qua page.frames(), xem
+   * dismissCloudflareChallengeIfPresent) từng hoạt động đúng từ đầu tháng 8
+   * (job afd3c6d8/30520119), giờ báo "KHÔNG tìm/bấm được checkbox nào trong
+   * bất kỳ frame nào" dù đã dò đúng frame Turnstile.
+   */
+  disableGpu = true,
 ): BrowserContextGetter {
   let contextPromise: Promise<BrowserContext> | null = null;
 
   async function launchNewContext(): Promise<BrowserContext> {
-    const browser = await launchRealChrome(useProxy, proxyBypass, disableHttp2AndQuic);
+    const browser = await launchRealChrome(
+      useProxy,
+      proxyBypass,
+      disableHttp2AndQuic,
+      disableGpu,
+    );
     const hasSession = fs.existsSync(storageStatePath);
     if (!hasSession) {
       console.warn(
