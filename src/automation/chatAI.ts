@@ -1589,7 +1589,7 @@ export async function askChatAI(
     // nhận isComplete=true) — chỉ còn dựa thẳng vào isComplete (xem
     // isCompletionText/isIncompleteText) để quyết định dừng hay tiếp tục.
     const CONTINUE_MESSAGE =
-      "yes. chỉ gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json";
+      'Tiếp tục xử lý. khi hoàn thành thì thông báo "Đã hoàn thành", gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json';
 
     let messageToSend = prompt;
     let downloadedFiles: string[] = [];
