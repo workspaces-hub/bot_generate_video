@@ -10,7 +10,18 @@ import type { Locator, Page } from "playwright";
 export async function firstVisible(candidates: Array<() => Locator>, timeoutMs = 5000): Promise<Locator> {
   const errors: string[] = [];
   for (const make of candidates) {
-    const locator = make().first();
+    const raw = make();
+    // SỬA (xác nhận qua debug thật, job 2670e114-86ee-4f67-a0d8-d0f15dc8b151):
+    // ChatGPT có thể render TRÙNG LẶP cùng 1 phần tử (vd 2 nút "Open profile
+    // menu" — 1 bản "sidebar thu gọn" ẨN VĨNH VIỄN, không bao giờ hiển thị/
+    // cập nhật, và 1 bản thật đang hiển thị). `.first()` trước đây lấy phần
+    // tử ĐẦU TIÊN theo thứ tự DOM bất kể ẩn/hiện — nếu bản ẩn đứng trước,
+    // `.first()` khoá cứng vào đúng phần tử đó rồi chờ nó "visible" MÃI MÃI
+    // (không bao giờ đúng), dù phần tử thật (hiển thị) đã sẵn sàng ngay bên
+    // cạnh — gây timeout dù nhìn màn hình vẫn thấy nút bình thường. Giao với
+    // page.locator(':visible') (Playwright hỗ trợ intersect qua .and()) để
+    // chỉ lấy phần tử THẬT SỰ đang hiển thị trước khi gọi .first().
+    const locator = raw.and(raw.page().locator(":visible")).first();
     try {
       await locator.waitFor({ state: "visible", timeout: timeoutMs });
       return locator;

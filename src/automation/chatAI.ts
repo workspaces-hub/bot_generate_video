@@ -9,6 +9,7 @@ import {
   getChatAIReviseBrowserContext,
 } from "./chatAIBrowser";
 import {
+  accountMenuButtonLocator,
   assistantMessageLocator,
   chatModeToggleLocator,
   downloadButtonCandidates,
@@ -76,6 +77,44 @@ async function notifyAdminUrl(jobId: string, url: string): Promise<void> {
       `[chatAI] Job ${jobId} — url hội thoại: ${url}`,
     )
     .catch(() => {});
+}
+
+/**
+ * Log tên tài khoản + gói ChatGPT đang đăng nhập (xem docstring
+ * accountMenuButtonLocator) — theo yêu cầu người dùng, để đối chiếu "chạy ở
+ * VPS và local ra kết quả khác nhau" có phải do 2 môi trường đang đăng nhập
+ * 2 tài khoản/gói khác nhau hay không (dự án có nhiều session riêng, xem
+ * config.chatAIStorageStatePath và các biến thể _L/_Y). Best-effort — không
+ * throw nếu không đọc được (không chặn job chỉ vì thiếu 1 dòng log).
+ */
+async function logAccountInfo(page: Page, jobId: string): Promise<void> {
+  // Xác nhận qua log thật (job 549b4a5d-dc78-4f92-9387-c414d638148a VÀ
+  // 1f464982-bc31-46ba-ad45-3fdecdd56fd0, LẶP LẠI ở 2 job khác nhau): đọc
+  // ngay sau networkidle chỉ bắt được placeholder "Loading profile" — poll
+  // 8s vẫn CHƯA đủ (thử lại lần thứ 2 vẫn y hệt). Nâng lên 20s (widget tài
+  // khoản có vẻ tự fetch riêng, chậm hơn nhiều so với networkidle của trang
+  // chính). Nếu SAU 20s vẫn còn "Loading" — chụp lại debug snapshot 1 LẦN
+  // để có bằng chứng thật xem widget này thực sự kẹt hay do lỗi selector
+  // khác, không đoán mù thêm.
+  const button = accountMenuButtonLocator(page).first();
+  let info: string | null = null;
+  const deadline = Date.now() + 20_000;
+  do {
+    info = await button.innerText({ timeout: 2000 }).catch(() => null);
+    if (info && !/loading/i.test(info)) break;
+    await page.waitForTimeout(500);
+  } while (Date.now() < deadline);
+  const stillLoading = !info || /loading/i.test(info);
+  console.log(
+    `[chatAI] askChatAI(${jobId}): tài khoản ChatGPT đang dùng: ${info ? info.replace(/\s+/g, " ").trim() : "(không đọc được)"}`,
+  );
+  if (stillLoading) {
+    await captureSnapshot(
+      page,
+      `${jobId}_account-info-stuck-loading`,
+      "account-info-stuck-loading",
+    );
+  }
 }
 
 /**
@@ -1371,17 +1410,20 @@ async function readLatestAssistantMessage(
 }
 
 /**
- * Chọn mode "Công việc"/"Work" thay vì "Trò chuyện"/"Chat" (DOM thật xác
- * nhận: radio group `data-tpp-toggle-value="chatgpt|work"`) — best-effort,
- * không throw nếu không tìm thấy toggle (có thể site đã đổi giao diện, hoặc
- * tài khoản không có tính năng này) và bỏ qua nếu đã ở đúng mode "work"
- * (aria-checked="true") để tránh click thừa.
+ * Chọn mode "Công việc"/"Work" thay vì "Trò chuyện"/"Chat" — SỬA (xác nhận
+ * qua debug thật, job 57dec179-f6f1-4cdf-b695-437aded7364d): DOM đổi hẳn
+ * sang `<div role="group" aria-label="Composer mode">` + 2 nút
+ * `aria-pressed="true|false"` (xem docstring workModeToggleLocator), KHÔNG
+ * còn `aria-checked` (thuộc tính của role="radio" cũ) — best-effort, không
+ * throw nếu không tìm thấy toggle (có thể site đã đổi giao diện, hoặc tài
+ * khoản không có tính năng này) và bỏ qua nếu đã ở đúng mode "work"
+ * (aria-pressed="true") để tránh click thừa.
  */
 export async function selectWorkMode(page: Page, jobId: string): Promise<void> {
   try {
     const workToggle = workModeToggleLocator(page).first();
     const alreadyOn =
-      (await workToggle.getAttribute("aria-checked").catch(() => null)) ===
+      (await workToggle.getAttribute("aria-pressed").catch(() => null)) ===
       "true";
     if (alreadyOn) return;
 
@@ -1423,8 +1465,11 @@ export async function selectWorkMode(page: Page, jobId: string): Promise<void> {
 export async function selectChatMode(page: Page, jobId: string): Promise<void> {
   try {
     const chatToggle = chatModeToggleLocator(page).first();
+    // SỬA (cùng lý do đã sửa ở selectWorkMode — xem docstring
+    // workModeToggleLocator): "Composer mode" đổi sang aria-pressed, không
+    // còn aria-checked.
     const alreadyOn =
-      (await chatToggle.getAttribute("aria-checked").catch(() => null)) ===
+      (await chatToggle.getAttribute("aria-pressed").catch(() => null)) ===
       "true";
     if (alreadyOn) return;
 
@@ -1455,7 +1500,7 @@ export async function selectChatMode(page: Page, jobId: string): Promise<void> {
 async function selectChatAIModeFromConfig(page: Page, jobId: string): Promise<void> {
   if (config.chatAIMode === "work") {
     await selectWorkMode(page, jobId);
-    await selectModelGPT6AstraMediumEffort(page, jobId);
+    // await selectModelGPT6AstraMediumEffort(page, jobId);
   } else {
     await selectChatMode(page, jobId);
   }
@@ -1751,6 +1796,15 @@ export async function askChatAI(
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
 
+    // Theo yêu cầu người dùng: log tên tài khoản/gói (Plus/Pro/Free...) —
+    // xem docstring logAccountInfo. Kết quả phân tích chênh lệch RẤT nhiều
+    // giữa 2 lần chạy (vd VPS trả kết quả sơ sài, thiếu hẳn bước dùng
+    // ffmpeg/ffprobe/Python mà lần chạy local có) rất có thể do 2 lần chạy
+    // đang đăng nhập 2 TÀI KHOẢN/GÓI khác nhau (dự án có sẵn nhiều session
+    // riêng — chatai-session.json/_L/_Y, xem config.ts) chứ không phải do
+    // code — log này giúp đối chiếu trực tiếp qua log thật thay vì đoán.
+    await logAccountInfo(page, jobId);
+
     // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
     // (CHATAI_MODE) — xem docstring selectChatAIModeFromConfig.
     await selectChatAIModeFromConfig(page, jobId);
@@ -1899,7 +1953,7 @@ export async function askChatAI(
           );
         }
         messageToSend =
-          'Tiếp tục xử lý để phân tích đầy đủ hơn';
+          'Tiếp tục xử lý';
         continue;
       }
 
@@ -2162,6 +2216,10 @@ async function attemptAskChatAIWithInlineContent(
     await page
       .waitForLoadState("networkidle", { timeout: 30_000 })
       .catch(() => {});
+
+    // Theo yêu cầu người dùng: log tài khoản/gói đang dùng — xem docstring
+    // logAccountInfo (đối chiếu VPS vs local).
+    await logAccountInfo(page, jobId);
 
     // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
     // — xem docstring selectChatAIModeFromConfig.

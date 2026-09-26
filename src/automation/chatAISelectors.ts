@@ -28,18 +28,34 @@ export const promptTextareaCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
- * Toggle "Trò chuyện" (Chat) / "Công việc" (Work) — DOM thật xác nhận: 1 cặp
- * `<button role="radio" data-tpp-toggle-value="chatgpt|work">` (radio group,
- * `aria-checked="true"` trên nút đang chọn). Nhận diện qua attribute
- * `data-tpp-toggle-value="work"` (ổn định, không phụ thuộc ngôn ngữ hiển thị
- * — tiếng Việt là "Công việc", tiếng Anh là "Work").
+ * Toggle "Trò chuyện" (Chat) / "Công việc" (Work) — SỬA (xác nhận qua debug
+ * thật, job 57dec179-f6f1-4cdf-b695-437aded7364d): ChatGPT đã đổi hẳn cấu
+ * trúc — KHÔNG còn `role="radio"`/`data-tpp-toggle-value` nào cả (grep xác
+ * nhận 0 khớp trong HTML thật), khiến workToggle.click() cũ chờ mãi rồi
+ * timeout 15s (đúng lỗi đã gặp: "Không chọn được mode 'Work'..."). Cấu trúc
+ * MỚI: `<div role="group" aria-label="Composer mode">` bọc 2
+ * `<button type="button" aria-pressed="true|false">Chat</button>`/`Work`
+ * (không còn radio, chỉ còn text hiển thị + aria-pressed để biết nút nào
+ * đang chọn). Scope theo group "Composer mode" TRƯỚC khi tìm theo tên nút —
+ * tránh khớp nhầm chữ "Work" xuất hiện RIÊNG Ở NƠI KHÁC trên trang (vd tag
+ * nhỏ "Work" cạnh tên hội thoại trong sidebar, xác nhận có thật trong cùng
+ * trang debug này).
  */
-export const workModeToggleLocator = (page: Page): Locator =>
-  page.locator('button[role="radio"][data-tpp-toggle-value="work"]');
+const composerModeToggleGroupLocator = (page: Page): Locator =>
+  page.getByRole("group", { name: "Composer mode" });
 
-/** Cùng radio group với workModeToggleLocator ở trên, giá trị còn lại ("Trò chuyện"/"Chat") — data-tpp-toggle-value="chatgpt". */
+export const workModeToggleLocator = (page: Page): Locator =>
+  composerModeToggleGroupLocator(page).getByRole("button", {
+    name: "Work",
+    exact: true,
+  });
+
+/** Cùng group "Composer mode" với workModeToggleLocator ở trên, giá trị còn lại ("Trò chuyện"/"Chat"). */
 export const chatModeToggleLocator = (page: Page): Locator =>
-  page.locator('button[role="radio"][data-tpp-toggle-value="chatgpt"]');
+  composerModeToggleGroupLocator(page).getByRole("button", {
+    name: "Chat",
+    exact: true,
+  });
 
 /**
  * CHƯA có DOM thật xác nhận (tính năng upload ảnh tham chiếu mới, chưa chạy
@@ -316,6 +332,28 @@ export const signInIndicatorCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/^log in$/i),
   () => page.getByRole("button", { name: /^log in$/i }),
 ];
+
+/**
+ * Nút mở menu tài khoản (góc dưới-trái sidebar) — DOM thật xác nhận:
+ * `<button aria-label="Open profile menu">` chứa tên tài khoản (vd "Mr An")
+ * và tên gói (vd "Plus"/"Pro"/"Free") ở 2 <span> con. Theo yêu cầu người
+ * dùng: dùng để log lại xem 2 lần chạy (vd VPS vs local) có đang đăng nhập
+ * CÙNG tài khoản/gói hay không — dự án có sẵn NHIỀU session riêng
+ * (chatai-session.json/_L/_Y, xem config.ts), khác tài khoản/gói có thể
+ * khiến ChatGPT cấp quyền dùng tool (Python/ffmpeg/Code Interpreter) khác
+ * hẳn nhau, dẫn tới chênh lệch chất lượng kết quả phân tích RẤT lớn giữa 2
+ * lần chạy dù cùng 1 prompt.
+ *
+ * SỬA (xác nhận qua debug thật, job 2670e114-86ee-4f67-a0d8-d0f15dc8b151):
+ * trang có ĐÚNG 2 phần tử khớp `[aria-label="Open profile menu"]` cùng lúc —
+ * 1 bản "sidebar thu gọn" (`aria-busy="true"` MÃI MÃI, chỉ có text
+ * sr-only "Loading profile", KHÔNG BAO GIỜ có dữ liệu thật vì không hiển
+ * thị nên ChatGPT không buồn tải) và 1 bản "sidebar đầy đủ" (có avatar +
+ * tên + gói thật, ĐANG HIỂN THỊ). `.first()` trước đây luôn khớp đúng bản
+ * ẩn/kẹt loading — thêm `:visible` để chỉ khớp bản đang hiển thị thật.
+ */
+export const accountMenuButtonLocator = (page: Page): Locator =>
+  page.locator('button[aria-label="Open profile menu"]:visible');
 
 /**
  * Nút chọn mức "reasoning effort" hiện ở toolbar cạnh ô nhập. CHỈ LÀ NHÃN
