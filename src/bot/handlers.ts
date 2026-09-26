@@ -1706,8 +1706,13 @@ export function registerHandlers(bot: Telegraf): void {
       // VIDEO chưa "success", giống hệt luồng xác nhận bình thường (xem
       // confirmVideoGenerationComfy). Đổi từ "storyboardVideoPollo" sang
       // "storyboardVideoComfy" theo yêu cầu người dùng.
-      const jsonPath = path.join(
-        generatedDirFor(jsonFileName),
+      //
+      // SỬA (theo yêu cầu người dùng): dùng resolveExistingGeneratedJsonPath
+      // (rule path JSON mới, xem docstring) thay vì chỉ generatedDirFor —
+      // file JSON có thể nằm ở rule-2 (nested, phim nhiều tập) chứ không chỉ
+      // rule-1 (flat) như trước, tránh báo "không tìm thấy" oan cho job
+      // thuộc rule-2.
+      const jsonPath = await resolveExistingGeneratedJsonPath(
         `${jsonFileName}.json`,
       );
       const fileExists = await fs
@@ -1745,8 +1750,11 @@ export function registerHandlers(bot: Telegraf): void {
       // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
       const jsonFileName = normalizeTypedJsonFileName(ctx.message.text);
-      const jsonPath = path.join(
-        generatedDirFor(jsonFileName),
+      // SỬA (theo yêu cầu người dùng, cùng lý do với "continueVideo" ở
+      // trên): dùng resolveExistingGeneratedJsonPath thay vì chỉ
+      // generatedDirFor — file JSON có thể nằm ở rule-2 (nested, phim nhiều
+      // tập).
+      const jsonPath = await resolveExistingGeneratedJsonPath(
         `${jsonFileName}.json`,
       );
       const fileExists = await fs
