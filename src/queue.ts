@@ -13,6 +13,7 @@ import {
   ChatAIError,
 } from "./automation/chatAI";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
+import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import {
   getPolloBrowserContext,
   getPolloImageBrowserContext,
@@ -2915,6 +2916,13 @@ async function processChatAIQueue(): Promise<void> {
         }
       }
     }
+    // SỬA (theo yêu cầu người dùng, an toàn hơn lần trước — xem docstring
+    // close() trong browser.ts): đóng Chrome khi hàng đợi rỗng để giải
+    // phóng RAM. close() giờ tự kiểm tra context.pages().length trước khi
+    // đóng thật — nếu verifyVideo (processVideoQueue, dùng CHUNG context
+    // này) đang mở page xử lý dở, sẽ tự bỏ qua lần đóng này thay vì đóng mù
+    // làm gãy job đang chạy ở hàng đợi kia.
+    await getChatAIBrowserContext.close();
   } finally {
     chatAIProcessing = false;
   }

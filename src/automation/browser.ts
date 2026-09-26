@@ -88,8 +88,24 @@ export function createBrowserContextManager(
   async function close(): Promise<void> {
     if (!contextPromise) return;
     const current = contextPromise;
-    contextPromise = null;
     const context = await current.catch(() => null);
+    // SỬA (xác nhận qua debug thật, bật DEBUG=pw:browser,pw:channel — xem
+    // lịch sử xoá close() ở processChatAIQueue): context này có thể ĐANG
+    // ĐƯỢC DÙNG bởi 1 hàng đợi KHÁC tại đúng lúc hàng đợi gọi close() vừa
+    // rỗng (vd getChatAIBrowserContext dùng chung giữa processChatAIQueue
+    // VÀ verifyVideo/processVideoQueue — 2 hàng đợi ĐỘC LẬP, chạy đồng
+    // thời). Đóng mù browser lúc đó sẽ làm gãy NGAY job đang chạy dở ở hàng
+    // đợi kia ("Target page, context or browser has been closed"). Kiểm tra
+    // context.pages().length TRƯỚC khi đóng — còn page nào đang mở nghĩa là
+    // có nơi khác đang dùng, bỏ qua lần đóng này (giữ nguyên cache cho tới
+    // lần gọi close() sau, khi mọi page đã đóng hết).
+    if (context && context.pages().length > 0) {
+      console.warn(
+        `[${logLabel}] Bỏ qua đóng Chrome — vẫn còn ${context.pages().length} page đang mở (nơi khác đang dùng chung context này).`,
+      );
+      return;
+    }
+    contextPromise = null;
     const browser = context?.browser();
     if (browser?.isConnected()) {
       await browser.close().catch((err) => {
