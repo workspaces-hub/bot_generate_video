@@ -1303,9 +1303,13 @@ export async function generateVideosForFile(
       // hoàn toàn (chỉ log cảnh báo, đã comment sẵn). Giờ truyền thẳng vào
       // GenerateVideoOptions.duration (chuẩn hoá về "Ns", khớp nhãn chip
       // durationChipCandidates) để tự chọn đúng thời lượng trên AIVideo.
+      // SỬA (theo yêu cầu người dùng): làm tròn LÊN (Math.ceil, vd 2.1 → 3)
+      // thay vì làm tròn gần nhất (Math.round, vd 2.1 → 2) — chip thời lượng
+      // chỉ chọn được số nguyên giây, làm tròn xuống có thể cắt ngắn hơn ý
+      // storyboard yêu cầu.
       const duration =
         typeof entry.duration === "number" && entry.duration > 0
-          ? `${Math.round(entry.duration)}s`
+          ? `${Math.ceil(entry.duration)}s`
           : undefined;
 
       // Gắn type khai báo trong entry.ref theo ĐÚNG THỨ TỰ với refPaths —
@@ -1599,9 +1603,11 @@ export async function generateVideosForFilePollo(
           );
         }
 
+        // SỬA (theo yêu cầu người dùng): làm tròn LÊN (Math.ceil, vd 2.1 → 3)
+        // thay vì Math.round — cùng lý do với nhánh AIVideo ở trên.
         const duration =
           typeof entry.duration === "number" && entry.duration > 0
-            ? `${Math.round(entry.duration)}s`
+            ? `${Math.ceil(entry.duration)}s`
             : undefined;
 
         if (isStopStoryboardRequested(inputPath)) break;
@@ -1761,9 +1767,13 @@ export async function generateVideosForFileComfyUI(
         refPaths.push(await resolveRefImagePath(imageDir, sanitizeId(ref.id)));
       }
 
+      // SỬA (theo yêu cầu người dùng): làm tròn LÊN (Math.ceil, vd 2.1 → 3)
+      // — trước đây truyền thẳng số thập phân gốc, không làm tròn — cùng quy
+      // ước với nhánh AIVideo/Pollo ở trên (luôn làm tròn lên thành số
+      // nguyên giây khi gen video).
       const duration =
         typeof entry.duration === "number" && entry.duration > 0
-          ? entry.duration
+          ? Math.ceil(entry.duration)
           : COMFYUI_DEFAULT_DURATION_SECONDS;
 
       // aspectRatio/frameRate — 2 field mới trong VIDEO entry (xem

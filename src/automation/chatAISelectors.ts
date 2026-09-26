@@ -297,6 +297,20 @@ export const regenerateErrorButtonCandidates = (page: Page): Array<() => Locator
   () => page.getByRole("button", { name: /^thử lại$/i }),
 ];
 
+/**
+ * ChatGPT báo đang xử lý CHẬM HƠN bình thường (thường do quá tải hạ tầng
+ * phía ChatGPT) — nguyên văn: "Our systems are thinking a bit more about
+ * this request before responding." Theo yêu cầu người dùng: gặp trạng thái
+ * này thì reload lại trang thay vì tiếp tục chờ (xem sendMessage) — cùng
+ * cách xử lý "Something went wrong"/Retry ở trên, khác ở chỗ trạng thái này
+ * KHÔNG có nút bấm nào, chỉ hiện text, nên hành động khắc phục duy nhất là
+ * tự reload.
+ */
+export const thinkingLongerIndicatorLocator = (page: Page): Locator =>
+  page.getByText(
+    "Our systems are thinking a bit more about this request before responding.",
+  );
+
 /** Dấu hiệu CHƯA đăng nhập (trang ChatAI hiện màn hình đăng nhập). */
 export const signInIndicatorCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/^log in$/i),

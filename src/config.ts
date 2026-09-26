@@ -144,7 +144,7 @@ export const config = {
   // Master prompt cho tính năng "Tham chiếu video" (nút
   // VIDEO_REFERENCE_BUTTON_LABEL) — GIỐNG hệt luồng "Tham chiếu kịch bản"
   // (cùng askChatAIAboutReferenceVideo, cùng ScriptReferenceVideoJob/
-  // processScriptReferenceVideoQueue) nhưng dùng MASTER PROMPT KHÁC: JSON
+  // processChatAIQueue) nhưng dùng MASTER PROMPT KHÁC: JSON
   // trả về chỉ có ĐÚNG 1 phần tử VIDEO (không chia SHOT/CLIP) — prompt của
   // phần tử đó mô tả TOÀN BỘ video để gen lại trong 1 lần, xem
   // prompt_video_reference.txt.

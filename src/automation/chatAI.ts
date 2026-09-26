@@ -27,6 +27,7 @@ import {
   regenerateErrorButtonCandidates,
   sendButtonCandidates,
   signInIndicatorCandidates,
+  thinkingLongerIndicatorLocator,
   stopGeneratingButtonCandidates,
   workingIndicatorLocator,
   workModeFileReferenceLocator,
@@ -572,6 +573,33 @@ async function sendMessage(
       await retryButton.click().catch(() => {});
       retriesUsed++;
       stableSince = null;
+      await page.waitForTimeout(pollIntervalMs);
+      continue;
+    }
+
+    // Theo yêu cầu người dùng: ChatGPT báo "Our systems are thinking a bit
+    // more about this request before responding." — trạng thái này KHÔNG có
+    // nút bấm nào (khác "Something went wrong"/Retry ở trên), chỉ hiện
+    // text, nên hành động khắc phục duy nhất là tự reload lại trang rồi chờ
+    // tiếp (giữ nguyên hasSeenGenerating/stableSince — không reset, vì
+    // reload chỉ để thoát trạng thái "đang nghĩ chậm", không phải bắt đầu
+    // lại từ đầu).
+    const isThinkingLonger =
+      (await thinkingLongerIndicatorLocator(page)
+        .count()
+        .catch(() => 0)) > 0;
+    if (isThinkingLonger) {
+      console.warn(
+        '[chatAI] sendMessage: ChatGPT báo "Our systems are thinking a bit more about this request before responding." — reload lại trang.',
+      );
+      await page
+        .reload({ waitUntil: "domcontentloaded", timeout: 60_000 })
+        .catch((err) => {
+          console.warn(
+            "[chatAI] sendMessage: reload lại trang thất bại (bỏ qua, thử tiếp ở vòng poll sau):",
+            err instanceof Error ? err.message : err,
+          );
+        });
       await page.waitForTimeout(pollIntervalMs);
       continue;
     }
@@ -1589,7 +1617,7 @@ export async function askChatAI(
     // nhận isComplete=true) — chỉ còn dựa thẳng vào isComplete (xem
     // isCompletionText/isIncompleteText) để quyết định dừng hay tiếp tục.
     const CONTINUE_MESSAGE =
-      'Tiếp tục xử lý. khi hoàn thành thì thông báo "Đã hoàn thành", gửi file JSON kết quả khi đã ghép hết các phần và tên file chứa _full.json';
+      'Tiếp tục xử lý.';
 
     let messageToSend = prompt;
     let downloadedFiles: string[] = [];
@@ -1604,12 +1632,19 @@ export async function askChatAI(
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
       lastTurnWasFileAccessError = false;
       await sendMessage(page, messageToSend, jobId);
+      // Theo yêu cầu người dùng: log lại URL trang (có session/conversation
+      // id thật, dạng https://chatgpt.com/c/<id>) NGAY SAU KHI gửi tin nhắn
+      // xong — để mở lại đúng đúng hội thoại đó khi cần kiểm tra thủ công.
+      console.log(
+        `[chatAI] askChatAI(${jobId}): đã gửi tin nhắn xong (lượt ${turn}), url hiện tại: ${page.url()}`,
+      );
 
       const result = await readLatestAssistantMessage(
         page,
         promptFileName,
         lastMessageCount + 1,
       );
+      console.log('jobId, result', jobId, result);
       lastMessageCount = result.messageCount;
       await captureSnapshot(
         page,
@@ -1761,7 +1796,7 @@ export async function askChatAI(
 /**
  * Dùng chung cho cả 2 nút "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL)
  * VÀ "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) trong keyboard.ts —
- * xem submitScriptReferenceVideoJob/processScriptReferenceVideoQueue trong
+ * xem submitScriptReferenceVideoJob/processChatAIQueue trong
  * queue.ts. User upload 1 VIDEO tham chiếu (không phải kịch bản text) —
  * upload video này lên ChatAI kèm master prompt tại masterPromptPath (mặc
  * định config.promptSplitVideo — chia SHOT/CLIP theo diễn biến; truyền

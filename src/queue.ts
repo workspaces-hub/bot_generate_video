@@ -17,7 +17,6 @@ import {
   getPolloBrowserContext,
   getPolloImageBrowserContext,
 } from "./automation/polloBrowser";
-import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import {
   clearStopStoryboardRequest,
   ensureGeneratedFolder,
@@ -58,8 +57,7 @@ interface BaseJob {
    * theo đúng tên file đó (ensureGeneratedFolder/generatedDirFor). Field
    * này được SET ĐỘNG (không có ở lúc enqueue) ngay khi job biết được
    * downloadedFiles, TRƯỚC khi gọi runStoryboardPipelinePollo — xem
-   * processScriptReferenceVideoQueue/processChatAIQueue (nhánh
-   * job.type === "generateScript").
+   * processChatAIQueue (nhánh job.type === "generateScript"/"scriptReferenceVideo").
    */
   generatedFolderName?: string;
   /**
@@ -106,8 +104,10 @@ export interface ChatAIJob extends BaseJob {
  * text), gửi kèm master prompt config.promptSplitVideo lên ChatAI (xem
  * askChatAIAboutReferenceVideo). Từ lúc có JSON trở đi, xử lý GIỐNG HỆT
  * ChatAIJob — gửi file JSON, tạo folder generated/, gửi nút xác nhận "Tạo
- * ảnh (Pollo)" (xem runStoryboardPipelinePollo/notifyChatAISuccess, dùng
- * chung với processChatAIQueue — xem processScriptReferenceVideoQueue).
+ * ảnh (Pollo)" (xem runStoryboardPipelinePollo/notifyChatAISuccess) — dùng
+ * CHUNG hàng đợi/vòng xử lý processChatAIQueue với ChatAIJob/GenerateScriptJob
+ * (xem docstring khai báo mảng chatAIJobs — trước đây có hàng đợi RIÊNG,
+ * đã gộp lại vì cả 2 dùng chung 1 browser context, chạy riêng dễ race).
  *
  * Cũng dùng cho "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL, xem
  * masterPromptPath) — nhưng SỬA theo yêu cầu người dùng: tính năng đó CHỈ
@@ -116,7 +116,7 @@ export interface ChatAIJob extends BaseJob {
  */
 export interface ScriptReferenceVideoJob extends BaseJob {
   type: "scriptReferenceVideo";
-  /** Path local video đã tải về từ Telegram — upload lên ChatAI làm attachment, xoá sau khi job xong (finally trong processScriptReferenceVideoQueue). */
+  /** Path local video đã tải về từ Telegram — upload lên ChatAI làm attachment, xoá sau khi job xong (finally trong processChatAIQueue). */
   videoPath: string;
   /** Tên file video gốc user upload — dùng đặt tên lại file JSON ChatAI trả về (xem askChatAIAboutReferenceVideo/downloadAttachedFiles). */
   videoFileName: string;
@@ -124,7 +124,7 @@ export interface ScriptReferenceVideoJob extends BaseJob {
   extraInstruction?: string;
   /** Path master prompt dùng cho job này (mặc định config.promptSplitVideo nếu không truyền — xem askChatAIAboutReferenceVideo). Nút "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) truyền config.promptVideoReference để chỉ gen 1 VIDEO duy nhất thay vì chia SHOT/CLIP. */
   masterPromptPath?: string;
-  /** true = job CHỈ gửi lại JSON cho user rồi dừng, KHÔNG tạo folder generated/, KHÔNG gửi nút "Tạo ảnh" xác nhận (xem processScriptReferenceVideoQueue). Nút "Tham chiếu video" đặt true; "Tham chiếu kịch bản" giữ mặc định false/undefined. */
+  /** true = job CHỈ gửi lại JSON cho user rồi dừng, KHÔNG tạo folder generated/, KHÔNG gửi nút "Tạo ảnh" xác nhận (xem processChatAIQueue). Nút "Tham chiếu video" đặt true; "Tham chiếu kịch bản" giữ mặc định false/undefined. */
   skipImageConfirmation?: boolean;
 }
 
@@ -420,13 +420,19 @@ let videoProcessing = false;
  * nào đang dở, không xoá nhầm.
  */
 let currentVideoJob: AIVideoJob | null = null;
-// GenerateScriptJob dùng CHUNG mảng/hàng đợi này với ChatAIJob (theo yêu cầu
-// người dùng — xem docstring GenerateScriptJob, enqueueJob, processChatAIQueue)
-// thay vì có mảng/file lưu/vòng xử lý RIÊNG.
-const chatAIJobs: (ChatAIJob | GenerateScriptJob)[] = [];
+// GenerateScriptJob VÀ ScriptReferenceVideoJob dùng CHUNG mảng/hàng đợi này
+// với ChatAIJob (theo yêu cầu người dùng — xem docstring GenerateScriptJob/
+// ScriptReferenceVideoJob, enqueueJob, processChatAIQueue) thay vì có
+// mảng/file lưu/vòng xử lý RIÊNG. SỬA (trước đây ScriptReferenceVideoJob có
+// hàng đợi RIÊNG — scriptReferenceVideoJobs/processScriptReferenceVideoQueue
+// — nhưng cả 2 hàng đợi dùng CHUNG 1 browser context (getChatAIBrowserContext)
+// nên chạy 2 vòng xử lý ĐỘC LẬP dễ dính race condition (xem lịch sử xoá
+// getChatAIBrowserContext.close() ở processChatAIQueue) — gộp chung hẳn 1
+// hàng đợi/1 vòng xử lý duy nhất loại bỏ hoàn toàn khả năng 2 job dùng
+// CÙNG browser context chạy ĐỒNG THỜI.
+const chatAIJobs: (ChatAIJob | GenerateScriptJob | ScriptReferenceVideoJob)[] =
+  [];
 let chatAIProcessing = false;
-const scriptReferenceVideoJobs: ScriptReferenceVideoJob[] = [];
-let scriptReferenceVideoProcessing = false;
 
 /**
  * 2 hàng đợi ẢNH/VIDEO gen bằng pollo.ai — TÁCH RIÊNG hẳn khỏi imageJobs/
@@ -766,7 +772,6 @@ export function initQueue(botTelegram: Telegram): void {
   loadPersistedImageJobs();
   loadPersistedVideoJobs();
   loadPersistedChatAIJobs();
-  loadPersistedScriptReferenceVideoJobs();
   loadPersistedPolloImageJobs();
   loadPersistedPolloVideoJobs();
   loadPersistedComfyVideoJobs();
@@ -784,7 +789,6 @@ export function initQueue(botTelegram: Telegram): void {
   void processImageQueue();
   void processVideoQueue();
   void processChatAIQueue();
-  void processScriptReferenceVideoQueue();
   void processPolloImageQueue();
   void processPolloVideoQueue();
   void processComfyVideoQueue();
@@ -957,15 +961,34 @@ function persistComfyVideoJobs(): void {
 
 function loadPersistedChatAIJobs(): void {
   try {
-    if (!fs.existsSync(CHATAI_QUEUE_FILE)) return;
-    const restored: (ChatAIJob | GenerateScriptJob)[] = JSON.parse(
-      fs.readFileSync(CHATAI_QUEUE_FILE, "utf-8"),
-    );
-    if (restored.length > 0) {
-      chatAIJobs.push(...restored);
-      console.log(
-        `[queue] Khôi phục ${restored.length} job ChatAI còn dang dở từ lần chạy trước.`,
+    if (fs.existsSync(CHATAI_QUEUE_FILE)) {
+      const restored: (ChatAIJob | GenerateScriptJob | ScriptReferenceVideoJob)[] =
+        JSON.parse(fs.readFileSync(CHATAI_QUEUE_FILE, "utf-8"));
+      if (restored.length > 0) {
+        chatAIJobs.push(...restored);
+        console.log(
+          `[queue] Khôi phục ${restored.length} job ChatAI còn dang dở từ lần chạy trước.`,
+        );
+      }
+    }
+    // SỬA (theo yêu cầu người dùng — gộp hàng đợi "Tham chiếu kịch bản"/
+    // "Tham chiếu video" vào chung chatAIJobs, xem docstring ở khai báo mảng
+    // chatAIJobs): migrate 1 LẦN DUY NHẤT job còn sót trong file hàng đợi CŨ
+    // (SCRIPT_REFERENCE_VIDEO_QUEUE_FILE, từ bản trước khi gộp) sang chung
+    // chatAIJobs rồi XOÁ file cũ — nếu không xoá, lần khởi động SAU sẽ đọc
+    // lại đúng những job này thêm 1 lần nữa (trùng lặp).
+    if (fs.existsSync(SCRIPT_REFERENCE_VIDEO_QUEUE_FILE)) {
+      const legacy: ScriptReferenceVideoJob[] = JSON.parse(
+        fs.readFileSync(SCRIPT_REFERENCE_VIDEO_QUEUE_FILE, "utf-8"),
       );
+      if (legacy.length > 0) {
+        chatAIJobs.push(...legacy);
+        console.log(
+          `[queue] Migrate ${legacy.length} job "Tham chiếu kịch bản/video" từ hàng đợi cũ sang chung hàng đợi ChatAI.`,
+        );
+        persistChatAIJobs();
+      }
+      fs.unlinkSync(SCRIPT_REFERENCE_VIDEO_QUEUE_FILE);
     }
   } catch (err) {
     console.error(
@@ -985,44 +1008,6 @@ function persistChatAIJobs(): void {
     );
   } catch (err) {
     console.error("[queue] Không ghi được file hàng đợi ChatAI:", err);
-  }
-}
-
-function loadPersistedScriptReferenceVideoJobs(): void {
-  try {
-    if (!fs.existsSync(SCRIPT_REFERENCE_VIDEO_QUEUE_FILE)) return;
-    const restored: ScriptReferenceVideoJob[] = JSON.parse(
-      fs.readFileSync(SCRIPT_REFERENCE_VIDEO_QUEUE_FILE, "utf-8"),
-    );
-    if (restored.length > 0) {
-      scriptReferenceVideoJobs.push(...restored);
-      console.log(
-        `[queue] Khôi phục ${restored.length} job "Tham chiếu kịch bản" còn dang dở từ lần chạy trước.`,
-      );
-    }
-  } catch (err) {
-    console.error(
-      '[queue] Không đọc được file hàng đợi "Tham chiếu kịch bản" đã lưu, bỏ qua:',
-      err,
-    );
-  }
-}
-
-function persistScriptReferenceVideoJobs(): void {
-  try {
-    fs.mkdirSync(path.dirname(SCRIPT_REFERENCE_VIDEO_QUEUE_FILE), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      SCRIPT_REFERENCE_VIDEO_QUEUE_FILE,
-      JSON.stringify(scriptReferenceVideoJobs, null, 2),
-      "utf-8",
-    );
-  } catch (err) {
-    console.error(
-      '[queue] Không ghi được file hàng đợi "Tham chiếu kịch bản":',
-      err,
-    );
   }
 }
 
@@ -1120,19 +1105,17 @@ function isComfyStoryboardJobQueued(jsonPath: string, entryId?: string): boolean
  * chờ nhau.
  */
 export function enqueueJob(job: GenerationJob): void {
-  // Theo yêu cầu người dùng: "generateScript" dùng CHUNG hàng đợi với
-  // "chatAI" (chatAIJobs/processChatAIQueue) — KHÔNG có mảng/hàng đợi riêng
-  // (xem docstring GenerateScriptJob).
-  if (job.type === "chatAI" || job.type === "generateScript") {
+  // Theo yêu cầu người dùng: "generateScript" VÀ "scriptReferenceVideo" dùng
+  // CHUNG hàng đợi với "chatAI" (chatAIJobs/processChatAIQueue) — KHÔNG có
+  // mảng/hàng đợi riêng (xem docstring GenerateScriptJob/ScriptReferenceVideoJob).
+  if (
+    job.type === "chatAI" ||
+    job.type === "generateScript" ||
+    job.type === "scriptReferenceVideo"
+  ) {
     chatAIJobs.push(job);
     persistChatAIJobs();
     void processChatAIQueue();
-    return;
-  }
-  if (job.type === "scriptReferenceVideo") {
-    scriptReferenceVideoJobs.push(job);
-    persistScriptReferenceVideoJobs();
-    void processScriptReferenceVideoQueue();
     return;
   }
   if (
@@ -1249,37 +1232,20 @@ export function stopAll(userId: number): StopAllResult {
     | ScriptReferenceVideoJob
     | GenerateScriptJob
   )[] = [];
+  // Job "scriptReferenceVideo" dùng CHUNG chatAIJobs với "chatAI"/
+  // "generateScript" (xem docstring khai báo mảng chatAIJobs) — cùng 1 vòng
+  // huỷ duy nhất, chỉ thêm bước dọn videoPath riêng cho đúng type đó.
   const chatAIStartIndex = chatAIProcessing ? 1 : 0;
   for (let i = chatAIJobs.length - 1; i >= chatAIStartIndex; i--) {
     if (chatAIJobs[i].userId === userId) {
-      cancelledChatAIJobs.push(chatAIJobs[i]);
-      chatAIJobs.splice(i, 1);
+      const [cancelled] = chatAIJobs.splice(i, 1);
+      cancelledChatAIJobs.push(cancelled);
+      if (cancelled.type === "scriptReferenceVideo") {
+        fsp.unlink(cancelled.videoPath).catch(() => {});
+      }
     }
   }
   if (cancelledChatAIJobs.length > 0) persistChatAIJobs();
-
-  // Cùng cơ chế với hàng đợi ChatAI ở trên, áp dụng cho job "Tham chiếu kịch
-  // bản" (xem ScriptReferenceVideoJob) — job ĐANG xử lý dở (index 0) không
-  // bị huỷ, chỉ huỷ job còn đang CHỜ của đúng userId.
-  const scriptReferenceVideoStartIndex = scriptReferenceVideoProcessing
-    ? 1
-    : 0;
-  for (
-    let i = scriptReferenceVideoJobs.length - 1;
-    i >= scriptReferenceVideoStartIndex;
-    i--
-  ) {
-    if (scriptReferenceVideoJobs[i].userId === userId) {
-      const [cancelled] = scriptReferenceVideoJobs.splice(i, 1);
-      cancelledChatAIJobs.push(cancelled);
-      fsp.unlink(cancelled.videoPath).catch(() => {});
-    }
-  }
-  if (
-    cancelledChatAIJobs.some((job) => job.type === "scriptReferenceVideo")
-  ) {
-    persistScriptReferenceVideoJobs();
-  }
 
   // KHÔNG cần đoạn riêng cho "Tạo kịch bản mới" (GenerateScriptJob) — job
   // này dùng CHUNG mảng chatAIJobs với "chatAI" (xem enqueueJob) nên vòng
@@ -2742,6 +2708,19 @@ async function processComfyVideoQueue(): Promise<void> {
   }
 }
 
+/**
+ * SỬA (theo yêu cầu người dùng): gộp CHUNG job "chatAI"/"generateScript"
+ * (nguồn text/file JSON có sẵn) VÀ "scriptReferenceVideo" (nguồn video upload,
+ * trước đây có hàng đợi/vòng xử lý RIÊNG — processScriptReferenceVideoQueue)
+ * vào 1 vòng xử lý DUY NHẤT. Lý do: cả 2 loại job đều dùng CHUNG 1 browser
+ * context (getChatAIBrowserContext) — chạy 2 vòng "void" ĐỘC LẬP đồng thời
+ * (như trước đây) khiến job này đang askChatAI dùng context thì job kia (hàng
+ * đợi rỗng) tự tiện đóng/dọn context giữa chừng, gây lỗi "Target page,
+ * context or browser has been closed" (xác nhận qua debug thật, bật
+ * DEBUG=pw:browser,pw:channel — log "close" và "newPage" gửi đi CÙNG 1 thời
+ * điểm). Gộp hẳn 1 hàng đợi loại bỏ khả năng 2 job cùng dùng context này chạy
+ * đồng thời.
+ */
 async function processChatAIQueue(): Promise<void> {
   if (chatAIProcessing || !telegram) return;
   chatAIProcessing = true;
@@ -2753,38 +2732,51 @@ async function processChatAIQueue(): Promise<void> {
         `[queue] processChatAIQueue: bắt đầu job ${jobId} (type="${job.type}").`,
       );
       try {
-        // Theo yêu cầu người dùng: xử lý job BẰNG askChatAI (upload file lên
-        // composer ChatGPT — nhanh/ổn định hơn ở đa số trường hợp bình
-        // thường) TRƯỚC, CHỈ fallback sang askChatAIWithInlineContent (dán
-        // thẳng nội dung file vào tin nhắn, né công cụ đọc file — chậm hơn,
-        // nhiều lượt hơn, nhưng cứu được đúng lúc công cụ đọc file của
-        // ChatGPT đang hỏng) khi askChatAI báo rõ ChatAIError.fileAccessError
-        // (xem askChatAI: throw riêng field này khi ChatGPT báo lỗi công cụ
-        // đọc file LẶP LẠI tới hết lượt, không phải mọi lỗi khác).
         let downloadedFiles: string[];
-        try {
-          ({ downloadedFiles } = await askChatAI(
-            job.prompt,
+        if (job.type === "scriptReferenceVideo") {
+          ({ downloadedFiles } = await askChatAIAboutReferenceVideo(
+            job.videoPath,
             jobId,
-            job.promptFileName,
-            job.promptAttachmentPath,
+            job.videoFileName,
+            job.extraInstruction,
+            job.masterPromptPath,
           ));
-        } catch (err) {
-          if (!(err instanceof ChatAIError) || !err.fileAccessError) throw err;
-          console.warn(
-            `[queue] askChatAI dính fileAccessError (job ${jobId}) — fallback sang askChatAIWithInlineContent:`,
-            err.message,
+          console.log(
+            `[queue] processChatAIQueue(${jobId}): askChatAIAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
           );
-          ({ downloadedFiles } = await askChatAIWithInlineContent(
-            job.prompt,
-            jobId,
-            job.promptFileName,
-            job.promptAttachmentPath,
-          ));
+        } else {
+          // Theo yêu cầu người dùng: xử lý job BẰNG askChatAI (upload file lên
+          // composer ChatGPT — nhanh/ổn định hơn ở đa số trường hợp bình
+          // thường) TRƯỚC, CHỈ fallback sang askChatAIWithInlineContent (dán
+          // thẳng nội dung file vào tin nhắn, né công cụ đọc file — chậm hơn,
+          // nhiều lượt hơn, nhưng cứu được đúng lúc công cụ đọc file của
+          // ChatGPT đang hỏng) khi askChatAI báo rõ ChatAIError.fileAccessError
+          // (xem askChatAI: throw riêng field này khi ChatGPT báo lỗi công cụ
+          // đọc file LẶP LẠI tới hết lượt, không phải mọi lỗi khác).
+          try {
+            ({ downloadedFiles } = await askChatAI(
+              job.prompt,
+              jobId,
+              job.promptFileName,
+              job.promptAttachmentPath,
+            ));
+          } catch (err) {
+            if (!(err instanceof ChatAIError) || !err.fileAccessError) throw err;
+            console.warn(
+              `[queue] askChatAI dính fileAccessError (job ${jobId}) — fallback sang askChatAIWithInlineContent:`,
+              err.message,
+            );
+            ({ downloadedFiles } = await askChatAIWithInlineContent(
+              job.prompt,
+              jobId,
+              job.promptFileName,
+              job.promptAttachmentPath,
+            ));
+          }
+          console.log(
+            `[queue] processChatAIQueue(${jobId}): askChatAI xong, tải được ${downloadedFiles.length} file.`,
+          );
         }
-        console.log(
-          `[queue] processChatAIQueue(${jobId}): askChatAI xong, tải được ${downloadedFiles.length} file.`,
-        );
 
         // "Tạo kịch bản mới" (job.type === "generateScript", dùng CHUNG hàng
         // đợi này với "chatAI" — xem docstring GenerateScriptJob) cần 2 bước
@@ -2849,94 +2841,8 @@ async function processChatAIQueue(): Promise<void> {
             );
           });
         }
-        // const result = await runStoryboardPipeline(downloadedFiles, job);
-        // Gửi THÊM 1 lượt xác nhận riêng cho Pollo (nút "Tạo ảnh (Pollo)") —
-        // xem docstring runStoryboardPipelinePollo. Kết quả của lượt này
-        // KHÔNG dùng cho notifyChatAISuccess (processedJsonCount giống hệt
-        // result ở trên, cùng đếm trên CHÍNH downloadedFiles).
-        console.log(
-          `[queue] processChatAIQueue(${jobId}): bắt đầu runStoryboardPipelinePollo (gửi nút xác nhận "Tạo ảnh")...`,
-        );
-        const result = await runStoryboardPipelinePollo(downloadedFiles, job);
-        console.log(
-          `[queue] processChatAIQueue(${jobId}): runStoryboardPipelinePollo xong, đang gửi kết quả cho user (notifyChatAISuccess)...`,
-        );
-        await notifyChatAISuccess(job, result);
-        console.log(
-          `[queue] processChatAIQueue(${jobId}): đã gửi xong kết quả cho user.`,
-        );
-      } catch (err) {
-        await notifyError(job, err);
-      } finally {
-        if (job.promptAttachmentPath) {
-          await fsp.unlink(job.promptAttachmentPath).catch(() => {});
-        }
-        chatAIJobs.shift();
-        persistChatAIJobs();
-        // KHÔNG cần clearStopStoryboardRequest() ở đây — job "chatAI" (chỉ
-        // gọi askChatAI) không có jsonPath và không hề tự gọi
-        // generateReferenceImagesForFileViaAIVideo/generateSceneImagesForFileViaAIVideo/
-        // generateVideosForFile (những hàm đó chỉ chạy ở job
-        // "storyboardImagesAIVideo"/"storyboardSceneImagesAIVideo"/
-        // "storyboardVideo", xem processImageQueue/processVideoQueue) — cờ
-        // "Stop All" theo jsonPath không áp dụng cho job này.
-        // Chờ giữa các lần gọi gen json (askChatAI) liên tiếp — tránh gửi
-        // request quá nhanh lên ChatAI (theo yêu cầu người dùng). Chỉ
-        // chờ khi còn job kế tiếp, tránh delay vô ích lúc hàng đợi đã hết.
-        if (chatAIJobs.length > 0) {
-          await sleep(30000);
-        }
-      }
-    }
-    await getChatAIBrowserContext.close();
-  } finally {
-    chatAIProcessing = false;
-  }
-}
 
-/**
- * SỬA theo yêu cầu người dùng: sau khi gửi file JSON, giờ cũng gửi nút xác
- * nhận "Tạo ảnh (Pollo)" GIỐNG HỆT processChatAIQueue (gọi chung
- * runStoryboardPipelinePollo + notifyChatAISuccess) — trước đây job này chỉ
- * gửi JSON rồi dừng, không cho tạo ảnh tiếp. Vẫn KHÁC processChatAIQueue ở
- * chỗ nguồn là video (askChatAIAboutReferenceVideo) thay vì askChatAI.
- */
-async function processScriptReferenceVideoQueue(): Promise<void> {
-  if (scriptReferenceVideoProcessing || !telegram) return;
-  scriptReferenceVideoProcessing = true;
-  try {
-    while (scriptReferenceVideoJobs.length > 0) {
-      const job = scriptReferenceVideoJobs[0];
-      const jobId = randomUUID();
-      console.log(
-        `[queue] processScriptReferenceVideoQueue: bắt đầu job ${jobId} ("${job.videoFileName}", skipImageConfirmation=${job.skipImageConfirmation ?? false}).`,
-      );
-      try {
-        const { downloadedFiles } = await askChatAIAboutReferenceVideo(
-          job.videoPath,
-          jobId,
-          job.videoFileName,
-          job.extraInstruction,
-          job.masterPromptPath,
-        );
-        console.log(
-          `[queue] processScriptReferenceVideoQueue(${jobId}): askChatAIAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
-        );
-        for (const filePath of downloadedFiles) {
-          if (path.extname(filePath).toLowerCase() !== ".json") continue;
-          await sendDocumentMaybeSplit(
-            job.chatId,
-            filePath,
-            "✅ prompts",
-            job.promptMessageId,
-          ).catch((err) => {
-            console.error(
-              `[queue] Gửi file JSON "${filePath}" (Tham chiếu kịch bản) thất bại:`,
-              err,
-            );
-          });
-        }
-        if (job.skipImageConfirmation) {
+        if (job.type === "scriptReferenceVideo" && job.skipImageConfirmation) {
           // "Tham chiếu video" — CHỈ dừng ở bước gửi JSON, không tạo folder
           // generated/, không gửi nút xác nhận "Tạo ảnh" (theo yêu cầu
           // người dùng, khác "Tham chiếu kịch bản" ở nhánh else bên dưới).
@@ -2947,7 +2853,7 @@ async function processScriptReferenceVideoQueue(): Promise<void> {
             await telegram.sendMessage(
               job.chatId,
               "✅ ChatAI đã trả lời xong (không có file JSON đính kèm nào).",
-              { 
+              {
                 reply_parameters: { message_id: job.promptMessageId },
                 ...promptMenu,
               },
@@ -2955,46 +2861,62 @@ async function processScriptReferenceVideoQueue(): Promise<void> {
           }
           await deleteStatusMessage(job);
         } else {
-          // "Tham chiếu kịch bản" — job KHÁC "chatAI" nên
-          // runStoryboardPipelinePollo dùng CHUNG 1 folder generated/<tên
-          // phim>/ cho MỌI file JSON của job này (xem docstring
-          // generatedFolderName trong BaseJob) — "tên phim" lấy từ chính
-          // tên video gốc user đã upload (job.videoFileName), bỏ đuôi file.
-          job.generatedFolderName = path.basename(
-            job.videoFileName,
-            path.extname(job.videoFileName),
-          );
+          if (job.type === "scriptReferenceVideo") {
+            // "Tham chiếu kịch bản" — job KHÁC "chatAI" nên
+            // runStoryboardPipelinePollo dùng CHUNG 1 folder generated/<tên
+            // phim>/ cho MỌI file JSON của job này (xem docstring
+            // generatedFolderName trong BaseJob) — "tên phim" lấy từ chính
+            // tên video gốc user đã upload (job.videoFileName), bỏ đuôi file.
+            job.generatedFolderName = path.basename(
+              job.videoFileName,
+              path.extname(job.videoFileName),
+            );
+          }
+          // Gửi THÊM 1 lượt xác nhận riêng cho Pollo (nút "Tạo ảnh (Pollo)") —
+          // xem docstring runStoryboardPipelinePollo. Kết quả của lượt này
+          // KHÔNG dùng cho notifyChatAISuccess (processedJsonCount giống hệt
+          // result ở trên, cùng đếm trên CHÍNH downloadedFiles).
           console.log(
-            `[queue] processScriptReferenceVideoQueue(${jobId}): bắt đầu runStoryboardPipelinePollo (gửi nút xác nhận "Tạo ảnh")...`,
+            `[queue] processChatAIQueue(${jobId}): bắt đầu runStoryboardPipelinePollo (gửi nút xác nhận "Tạo ảnh")...`,
           );
-          const result = await runStoryboardPipelinePollo(
-            downloadedFiles,
-            job,
-          );
+          const result = await runStoryboardPipelinePollo(downloadedFiles, job);
           console.log(
-            `[queue] processScriptReferenceVideoQueue(${jobId}): runStoryboardPipelinePollo xong, đang gửi kết quả cho user...`,
+            `[queue] processChatAIQueue(${jobId}): runStoryboardPipelinePollo xong, đang gửi kết quả cho user (notifyChatAISuccess)...`,
           );
           await notifyChatAISuccess(job, result);
         }
         console.log(
-          `[queue] processScriptReferenceVideoQueue(${jobId}): đã xử lý xong job.`,
+          `[queue] processChatAIQueue(${jobId}): đã xử lý xong job.`,
         );
       } catch (err) {
         await notifyError(job, err);
       } finally {
-        await fsp.unlink(job.videoPath).catch(() => {});
-        scriptReferenceVideoJobs.shift();
-        persistScriptReferenceVideoJobs();
-        // Cùng lý do chờ giữa các lượt gọi ChatAI liên tiếp như
-        // processChatAIQueue — tránh gửi request quá nhanh lên ChatAI.
-        if (scriptReferenceVideoJobs.length > 0) {
+        if (job.promptAttachmentPath) {
+          await fsp.unlink(job.promptAttachmentPath).catch(() => {});
+        }
+        if (job.type === "scriptReferenceVideo") {
+          await fsp.unlink(job.videoPath).catch(() => {});
+        }
+        chatAIJobs.shift();
+        persistChatAIJobs();
+        // KHÔNG cần clearStopStoryboardRequest() ở đây — các job này (chỉ
+        // gọi askChatAI/askChatAIAboutReferenceVideo) không có jsonPath và
+        // không hề tự gọi generateReferenceImagesForFileViaAIVideo/
+        // generateSceneImagesForFileViaAIVideo/generateVideosForFile (những
+        // hàm đó chỉ chạy ở job "storyboardImagesAIVideo"/
+        // "storyboardSceneImagesAIVideo"/"storyboardVideo", xem
+        // processImageQueue/processVideoQueue) — cờ "Stop All" theo jsonPath
+        // không áp dụng cho các job này.
+        // Chờ giữa các lần gọi gen json (askChatAI) liên tiếp — tránh gửi
+        // request quá nhanh lên ChatAI (theo yêu cầu người dùng). Chỉ
+        // chờ khi còn job kế tiếp, tránh delay vô ích lúc hàng đợi đã hết.
+        if (chatAIJobs.length > 0) {
           await sleep(30000);
         }
       }
     }
-    await getChatAIBrowserContext.close();
   } finally {
-    scriptReferenceVideoProcessing = false;
+    chatAIProcessing = false;
   }
 }
 
@@ -3105,7 +3027,7 @@ async function runStoryboardPipeline(
  */
 async function runStoryboardPipelinePollo(
   downloadedFiles: string[],
-  /** Cũng nhận ScriptReferenceVideoJob/GenerateScriptJob — processScriptReferenceVideoQueue/processChatAIQueue (job "generateScript" dùng CHUNG hàng đợi với "chatAI") tái dùng HÀM NÀY để gửi nút "Tạo ảnh (Pollo)", chỉ cần các field chung của BaseJob (chatId/userId/promptMessageId). */
+  /** Cũng nhận ScriptReferenceVideoJob/GenerateScriptJob — cùng dùng CHUNG hàng đợi/processChatAIQueue với "chatAI" — tái dùng HÀM NÀY để gửi nút "Tạo ảnh (Pollo)", chỉ cần các field chung của BaseJob (chatId/userId/promptMessageId). */
   job: ChatAIJob | ScriptReferenceVideoJob | GenerateScriptJob,
 ): Promise<ChatAIPipelineResult> {
   let processedJsonCount = 0;
@@ -3116,8 +3038,8 @@ async function runStoryboardPipelinePollo(
   // generatedDirFor, nhánh else bên dưới): storage/generated/<file>/<file>.json.
   // Job KHÁC "chatAI" (ScriptReferenceVideoJob/GenerateScriptJob) dùng CHUNG 1
   // folder generated/<tên phim>/ cho MỌI file JSON của job
-  // (job.generatedFolderName, set bởi processScriptReferenceVideoQueue/
-  // processChatAIQueue ngay khi biết downloadedFiles) — chỉ archive/mkdir
+  // (job.generatedFolderName, set bởi processChatAIQueue ngay khi biết
+  // downloadedFiles) — chỉ archive/mkdir
   // folder phim này 1 LẦN DUY NHẤT trước khi lặp (xem
   // ensureGeneratedFolderForName), KHÔNG lặp lại cho từng file, nếu không sẽ
   // archive away chính (các) file tập trước vừa copy vào TRONG CÙNG batch.

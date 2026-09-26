@@ -14,12 +14,12 @@ export const CHATAI_CHECK_BUTTON_LABEL = "Check prompt kịch bản";
  * trả file JSON storyboard, gửi lại cho user KÈM nút xác nhận "Tạo ảnh
  * (Pollo)" — cùng luồng xác nhận với CHATAI_BUTTON_LABEL/
  * CHATAI_CHECK_BUTTON_LABEL sau khi có JSON (xem submitScriptReferenceVideoJob,
- * processScriptReferenceVideoQueue).
+ * processChatAIQueue).
  */
 export const SCRIPT_REFERENCE_BUTTON_LABEL = "Tham chiếu kịch bản";
 /**
  * GẦN GIỐNG SCRIPT_REFERENCE_BUTTON_LABEL (cùng askChatAIAboutReferenceVideo,
- * cùng job "scriptReferenceVideo"/processScriptReferenceVideoQueue) nhưng
+ * cùng job "scriptReferenceVideo"/processChatAIQueue) nhưng
  * KHÁC 2 điểm: (1) master prompt dùng config.promptVideoReference thay vì
  * config.promptSplitVideo — JSON trả về chia thành các đoạn VIDEO NGẮN nối
  * tiếp (tối đa 15s/đoạn, ranh giới cắt theo lời thoại/diễn biến hợp lý —
@@ -28,7 +28,7 @@ export const SCRIPT_REFERENCE_BUTTON_LABEL = "Tham chiếu kịch bản";
  * tự do) mà chia đều theo ngân sách thời lượng cố định; (2) job đặt
  * skipImageConfirmation=true — CHỈ dừng ở bước gửi lại JSON cho user, KHÔNG
  * tạo folder generated/, KHÔNG gửi nút xác nhận "Tạo ảnh" (khác hẳn
- * SCRIPT_REFERENCE_BUTTON_LABEL, xem xử lý trong processScriptReferenceVideoQueue).
+ * SCRIPT_REFERENCE_BUTTON_LABEL, xem xử lý trong processChatAIQueue).
  */
 export const VIDEO_REFERENCE_BUTTON_LABEL = "Tham chiếu video";
 /**

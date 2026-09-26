@@ -1078,7 +1078,7 @@ interface SubmitScriptReferenceVideoParams {
   ctx: Context;
 }
 
-/** Dùng chung cho cả nút "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL) và "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) — user upload 1 video, đẩy job "scriptReferenceVideo" (xem processScriptReferenceVideoQueue trong queue.ts): hỏi ChatAI, gửi lại JSON — kèm nút xác nhận "Tạo ảnh (Pollo)" trừ khi skipImageConfirmation=true. Master prompt dùng khác nhau theo masterPromptPath. */
+/** Dùng chung cho cả nút "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL) và "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) — user upload 1 video, đẩy job "scriptReferenceVideo" (xem processChatAIQueue trong queue.ts): hỏi ChatAI, gửi lại JSON — kèm nút xác nhận "Tạo ảnh (Pollo)" trừ khi skipImageConfirmation=true. Master prompt dùng khác nhau theo masterPromptPath. */
 async function submitScriptReferenceVideoJob({
   ctx,
   groupChatId,
