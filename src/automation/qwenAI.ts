@@ -196,7 +196,8 @@ async function callOpenRouter(
     );
   }
 
-  const data = (await response.json()) as {
+  const okBodyText = await response.text().catch(() => "");
+  let data: {
     choices?: Array<{
       message?: {
         content?: unknown;
@@ -211,6 +212,20 @@ async function callOpenRouter(
       } | null;
     }>;
   };
+  try {
+    data = JSON.parse(okBodyText);
+  } catch (err) {
+    // Body rỗng/không hợp lệ dù HTTP 200 — lỗi mạng thoáng qua (kết nối bị
+    // cắt giữa chừng), KHÔNG throw cứng để retry được như provider_unavailable.
+    console.warn(
+      `[qwenAI] callOpenRouter(${jobId}): body trả về không phải JSON hợp lệ (rỗng hoặc bị cắt): "${okBodyText.slice(0, 500)}"`,
+    );
+    return {
+      text: "",
+      finishReason: "error",
+      errorType: "invalid_response_body",
+    };
+  }
 
   const choice = data.choices?.[0];
   const text = choice?.message?.content;
@@ -261,7 +276,8 @@ async function callOpenRouterWithProviderRetry(
     const isTransientProviderError =
       result.finishReason === "error" &&
       (result.errorType === "provider_unavailable" ||
-        result.errorType === "download_failed");
+        result.errorType === "download_failed" ||
+        result.errorType === "invalid_response_body");
 
     if (
       !isTransientProviderError ||
@@ -521,7 +537,8 @@ ${extraInstruction}`
       if (
         finishReason === "error" &&
         (errorType === "provider_unavailable" ||
-          errorType === "download_failed")
+          errorType === "download_failed" ||
+          errorType === "invalid_response_body")
       ) {
         throw new QwenAIError(
           `Qwen/OpenRouter vẫn lỗi (${errorType}) sau ${PROVIDER_ERROR_MAX_RETRIES} lần retry (job ${jobId}, ${turnLabel}).`,
