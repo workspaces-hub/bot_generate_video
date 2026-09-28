@@ -175,6 +175,22 @@ async function callOpenRouter(
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "");
+
+    // Lỗi tạm thời phía provider khi tải video/audio (URL công khai bị
+    // nghẽn/timeout thoáng qua) — KHÔNG throw cứng ở đây vì sẽ bỏ qua luôn
+    // callOpenRouterWithProviderRetry (throw thoát khỏi vòng lặp retry).
+    // Trả về kết quả có cấu trúc để lớp retry xử lý giống provider_unavailable.
+    if (/failed to download multimodal content/i.test(bodyText)) {
+      console.warn(
+        `[qwenAI] callOpenRouter(${jobId}): HTTP ${response.status} — lỗi tải multimodal content tạm thời: ${bodyText.slice(0, 500)}`,
+      );
+      return {
+        text: "",
+        finishReason: "error",
+        errorType: "download_failed",
+      };
+    }
+
     throw new QwenAIError(
       `OpenRouter trả lỗi HTTP ${response.status} (job ${jobId}, model=${config.qwenOmniModel}): ${bodyText.slice(0, 2000)}`,
     );
@@ -244,7 +260,8 @@ async function callOpenRouterWithProviderRetry(
 
     const isTransientProviderError =
       result.finishReason === "error" &&
-      result.errorType === "provider_unavailable";
+      (result.errorType === "provider_unavailable" ||
+        result.errorType === "download_failed");
 
     if (
       !isTransientProviderError ||
@@ -254,7 +271,7 @@ async function callOpenRouterWithProviderRetry(
     }
 
     console.warn(
-      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): ${turnLabel} — lỗi hạ tầng tạm thời (provider_unavailable), thử lại NGUYÊN request (lần ${attempt + 1}/${PROVIDER_ERROR_MAX_RETRIES})...`,
+      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): ${turnLabel} — lỗi hạ tầng tạm thời (${result.errorType}), thử lại NGUYÊN request (lần ${attempt + 1}/${PROVIDER_ERROR_MAX_RETRIES})...`,
     );
   }
 
@@ -503,10 +520,11 @@ ${extraInstruction}`
 
       if (
         finishReason === "error" &&
-        errorType === "provider_unavailable"
+        (errorType === "provider_unavailable" ||
+          errorType === "download_failed")
       ) {
         throw new QwenAIError(
-          `Qwen/OpenRouter vẫn provider_unavailable sau ${PROVIDER_ERROR_MAX_RETRIES} lần retry (job ${jobId}, ${turnLabel}).`,
+          `Qwen/OpenRouter vẫn lỗi (${errorType}) sau ${PROVIDER_ERROR_MAX_RETRIES} lần retry (job ${jobId}, ${turnLabel}).`,
         );
       }
 
