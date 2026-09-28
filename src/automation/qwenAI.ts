@@ -620,7 +620,7 @@ ${extraInstruction}`
         videoFileName,
         path.extname(videoFileName),
       )
-    : `qwen-${jobId}`;
+    : `${jobId}`;
 
   const filePath = path.join(
     config.chatAIResultsDir,
