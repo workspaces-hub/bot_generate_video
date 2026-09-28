@@ -48,3 +48,8 @@ export DISPLAY=:99
 
 nohup dbus-launch --exit-with-session startxfce4 \
   > /tmp/xfce.log 2>&1 &
+
+
+  sudo ufw allow 8787/tcp
+
+sudo apt install -y ffmpeg

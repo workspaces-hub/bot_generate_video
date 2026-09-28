@@ -6,12 +6,12 @@ import { Telegraf, type Telegram } from "telegraf";
 import { config } from "./config";
 import { generateVideo } from "./automation/aiVideo";
 import { generateImage } from "./automation/aiVideoImage";
-import {
-  askChatAI,
-  askChatAIAboutReferenceVideo,
-  askChatAIWithInlineContent,
-  ChatAIError,
-} from "./automation/chatAI";
+// Theo yêu cầu người dùng: processChatAIQueue giờ dùng Qwen (qua OpenRouter —
+// xem qwenAI.ts) THAY CHO ChatGPT/Playwright (askChatAI/
+// askChatAIAboutReferenceVideo/askChatAIWithInlineContent/ChatAIError của
+// chatAI.ts — vẫn còn nguyên trong file đó, chỉ không import ở đây nữa vì
+// không còn nơi nào trong queue.ts gọi tới).
+import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import {
@@ -2735,7 +2735,7 @@ async function processChatAIQueue(): Promise<void> {
       try {
         let downloadedFiles: string[];
         if (job.type === "scriptReferenceVideo") {
-          ({ downloadedFiles } = await askChatAIAboutReferenceVideo(
+          ({ downloadedFiles } = await askQwenAboutReferenceVideo(
             job.videoPath,
             jobId,
             job.videoFileName,
@@ -2743,39 +2743,23 @@ async function processChatAIQueue(): Promise<void> {
             job.masterPromptPath,
           ));
           console.log(
-            `[queue] processChatAIQueue(${jobId}): askChatAIAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
+            `[queue] processChatAIQueue(${jobId}): askQwenAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
           );
         } else {
-          // Theo yêu cầu người dùng: xử lý job BẰNG askChatAI (upload file lên
-          // composer ChatGPT — nhanh/ổn định hơn ở đa số trường hợp bình
-          // thường) TRƯỚC, CHỈ fallback sang askChatAIWithInlineContent (dán
-          // thẳng nội dung file vào tin nhắn, né công cụ đọc file — chậm hơn,
-          // nhiều lượt hơn, nhưng cứu được đúng lúc công cụ đọc file của
-          // ChatGPT đang hỏng) khi askChatAI báo rõ ChatAIError.fileAccessError
-          // (xem askChatAI: throw riêng field này khi ChatGPT báo lỗi công cụ
-          // đọc file LẶP LẠI tới hết lượt, không phải mọi lỗi khác).
-          try {
-            ({ downloadedFiles } = await askChatAI(
-              job.prompt,
-              jobId,
-              job.promptFileName,
-              job.promptAttachmentPath,
-            ));
-          } catch (err) {
-            if (!(err instanceof ChatAIError) || !err.fileAccessError) throw err;
-            console.warn(
-              `[queue] askChatAI dính fileAccessError (job ${jobId}) — fallback sang askChatAIWithInlineContent:`,
-              err.message,
-            );
-            ({ downloadedFiles } = await askChatAIWithInlineContent(
-              job.prompt,
-              jobId,
-              job.promptFileName,
-              job.promptAttachmentPath,
-            ));
-          }
+          // Theo yêu cầu người dùng: đổi sang askQwen (Qwen qua OpenRouter,
+          // xem qwenAI.ts) THAY CHO askChatAI/askChatAIWithInlineContent —
+          // askQwen KHÔNG có khái niệm "upload file lên composer" (chỉ dán
+          // thẳng nội dung file làm text, xem docstring askQwen), nên không
+          // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
+          // fileAccessError kiểu ChatGPT để mà fallback).
+          ({ downloadedFiles } = await askQwen(
+            job.prompt,
+            jobId,
+            job.promptFileName,
+            job.promptAttachmentPath,
+          ));
           console.log(
-            `[queue] processChatAIQueue(${jobId}): askChatAI xong, tải được ${downloadedFiles.length} file.`,
+            `[queue] processChatAIQueue(${jobId}): askQwen xong, tải được ${downloadedFiles.length} file.`,
           );
         }
 

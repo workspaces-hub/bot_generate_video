@@ -160,6 +160,30 @@ export const config = {
   // "ASSET LEDGER DÙNG CHUNG XUYÊN SUỐT CÁC TẬP").
   promptGenerateScript: "prompt_generate_script.txt",
 
+  // Theo yêu cầu người dùng: bản clone của askChatAIAboutReferenceVideo dùng
+  // API Qwen (qua OpenRouter, KHÔNG phải browser automation) thay vì
+  // ChatGPT/Playwright — xem askQwenAboutReferenceVideo trong qwenAI.ts. Lấy
+  // API key tại https://openrouter.ai/settings/keys.
+  openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
+  // Slug model do người dùng cung cấp trực tiếp (xác nhận qua yêu cầu người
+  // dùng — KHÔNG tự đoán/sửa lại) — nếu OpenRouter báo lỗi "model not found",
+  // kiểm tra lại đúng slug tại https://openrouter.ai/models rồi override qua
+  // biến môi trường này, không cần sửa code.
+  qwenOmniModel: process.env.QWEN_OPENROUTER_MODEL ?? "qwen3.8-omni-flash",
+
+  // SỬA (xác nhận qua lỗi thật: video 28.7MB base64 hoá ~38MB bị OpenRouter
+  // trả 413 Request Entity Too Large): base64 inline không dùng được với
+  // video thật — chuyển sang serve video qua 1 static file server nhỏ ngay
+  // trên VPS (xem qwenFileServer.ts), gửi URL công khai đó cho OpenRouter
+  // thay vì nhúng base64. QWEN_PUBLIC_BASE_URL PHẢI là URL công khai trỏ tới
+  // đúng VPS đang chạy bot (vd "http://<ip-vps>:8787") — để trống thì
+  // askQwenAboutReferenceVideo báo lỗi rõ ràng thay vì âm thầm dùng URL sai.
+  qwenPublicBaseUrl: process.env.QWEN_PUBLIC_BASE_URL ?? "",
+  qwenFileServerPort: Number(process.env.QWEN_FILE_SERVER_PORT ?? 8787),
+  qwenFileServeDir: path.resolve(
+    process.env.QWEN_FILE_SERVE_DIR ?? "./storage/qwen-public-tmp",
+  ),
+
   // Telegram Bot API (api.telegram.org) CHỈ cho bot TẢI file <= 20MB qua
   // getFile — video tham chiếu user gửi cho "Tham chiếu kịch bản" thường
   // vượt mức này. Fallback: dùng MTProto (thư viện teleproto, xem
