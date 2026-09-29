@@ -39,7 +39,16 @@ process.on("uncaughtException", (err) => {
   console.error("[bot] Uncaught exception:", err);
 });
 
-const bot = new Telegraf(config.botToken);
+// handlerTimeout mặc định của Telegraf là 90_000ms (xem node_modules/telegraf/
+// lib/telegraf.js — dùng p-timeout bọc quanh middleware) — xác nhận qua lỗi
+// thật (2026-09-29): "TimeoutError: Promise timed out after 90000
+// milliseconds" khi tải video "Tham chiếu kịch bản" lớn qua MTProto
+// (downloadTelegramVideoRobust trong handlers.ts) chạy ĐỒNG BỘ ngay trong
+// handler, trước khi enqueue job — video lớn + retry (xem
+// telegramMTProto.ts) hoàn toàn có thể vượt 90s dù không có gì sai. Nới lên
+// 10 phút — đủ dư cho cả trường hợp chậm nhất, vẫn hữu hạn (không dùng
+// Infinity) để 1 handler thật sự bị treo (bug khác) không giữ mãi vô thời hạn.
+const bot = new Telegraf(config.botToken, { handlerTimeout: 600_000 });
 
 // QUAN TRỌNG: Telegraf mặc định (không có bot.catch) sẽ "throw err" lại sau
 // khi console.error (xem handleError trong telegraf.js) — bất kỳ lỗi nào

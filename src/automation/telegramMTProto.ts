@@ -4,6 +4,10 @@ import { TelegramClient } from "teleproto";
 import { StringSession } from "teleproto/sessions";
 import { config } from "../config";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Tải file Telegram LỚN (>20MB, vượt giới hạn getFile của HTTP Bot API) —
  * dùng MTProto (thư viện teleproto/GramJS) đăng nhập LẠI CHÍNH bot đang
@@ -78,6 +82,17 @@ async function getClient(): Promise<TelegramClient> {
  * tra lại message qua chính session MTProto của bot rồi tải trực tiếp từ
  * đó, không cần decode file_id).
  */
+/**
+ * Retry ngắn cho downloadMedia — xác nhận qua lỗi thật (2026-09-29):
+ * "TimeoutError: Timeout while fetching data. (caused by upload.GetFile)"
+ * kèm `code: 503, errorMessage: 'Timeout'` — đây là lỗi phía SERVER Telegram
+ * (DC lưu file phản hồi chậm/quá tải), không phải sai tham số hay session
+ * hỏng. Loại lỗi này thường tự qua nếu thử lại sau vài giây — không retry
+ * thì user phải upload lại nguyên video từ đầu (xem downloadTelegramVideoRobust
+ * trong handlers.ts) chỉ vì 1 lần Telegram chập chờn thoáng qua.
+ */
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
 export async function downloadTelegramMediaViaMTProto(
   chatId: number,
   messageId: number,
@@ -93,12 +108,29 @@ export async function downloadTelegramMediaViaMTProto(
   }
 
   await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
-  const result = await client.downloadMedia(message, {
-    outputFile: destPath,
-  });
-  if (!result) {
-    throw new Error(
-      `[MTProto] Tải media thất bại (message ${messageId}, chat ${chatId}).`,
-    );
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      const result = await client.downloadMedia(message, {
+        outputFile: destPath,
+      });
+      if (!result) {
+        throw new Error(
+          `[MTProto] Tải media thất bại (message ${messageId}, chat ${chatId}).`,
+        );
+      }
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_DOWNLOAD_ATTEMPTS) {
+        console.warn(
+          `[MTProto] Tải media lỗi (lần ${attempt}/${MAX_DOWNLOAD_ATTEMPTS}, message ${messageId}, chat ${chatId}), thử lại sau 5s:`,
+          err instanceof Error ? err.message : err,
+        );
+        await sleep(5000);
+      }
+    }
   }
+  throw lastError;
 }

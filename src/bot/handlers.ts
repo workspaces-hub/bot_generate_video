@@ -248,6 +248,87 @@ async function downloadTelegramVideoRobust(
 }
 
 /**
+ * Dùng chung cho cả 4 nơi nhận video "Tham chiếu kịch bản"/"Tham chiếu
+ * video" (qua message("video") lẫn message("document")) — tải video rồi
+ * enqueue job "scriptReferenceVideo" (xem submitScriptReferenceVideoJob).
+ *
+ * QUAN TRỌNG: tải video KHÔNG await trong handler nữa — chạy ở NỀN (IIFE
+ * "void (async () => {...})()"). Xác nhận qua lỗi thật (2026-09-29):
+ * "TimeoutError: Promise timed out after 90000 milliseconds" — handlerTimeout
+ * của Telegraf (đã nới lên 10 phút ở index.ts, xem đó) là 1 giá trị CỐ ĐỊNH,
+ * trong khi video "Tham chiếu kịch bản" có thể dài tới hàng chục phút/1
+ * tiếng — không có con số cố định nào chắc chắn đủ cho MỌI video, kể cả 10
+ * phút. Tải ở nền loại bỏ hẳn việc phải đoán 1 con số timeout "đủ lớn": thời
+ * gian tải KHÔNG còn tính vào handlerTimeout nữa (handler trả lời NGAY rồi
+ * kết thúc), chỉ còn bị giới hạn bởi timeout nội bộ của chính MTProto/retry
+ * (xem telegramMTProto.ts), vốn nên là nơi kiểm soát việc này thay vì
+ * Telegraf. Trả lời ngay 1 tin nhắn trạng thái "Đang tải" để user biết đã
+ * nhận — xoá đi khi xong (thành công thì submitScriptReferenceVideoJob tự
+ * gửi trạng thái "Đang xử lý" riêng, thất bại thì báo lỗi thay vào đó).
+ */
+async function handleScriptReferenceVideoUpload(
+  ctx: Context,
+  fileId: string,
+  chatId: number,
+  messageId: number,
+  videoFileName: string,
+  extraInstruction: string | undefined,
+  options?: { masterPromptPath?: string; skipImageConfirmation?: boolean },
+): Promise<void> {
+  const userId = ctx.from!.id;
+  const ext = path.extname(videoFileName) || ".mp4";
+
+  const downloadingMessage = await ctx.reply("⏳ Đang tải video từ Telegram...", {
+    reply_parameters: { message_id: messageId },
+  });
+
+  void (async () => {
+    let videoPath: string;
+    try {
+      videoPath = await downloadTelegramVideoRobust(
+        ctx,
+        fileId,
+        chatId,
+        messageId,
+        ext,
+      );
+    } catch (err) {
+      console.error("[bot] Tải video Telegram thất bại:", err);
+      await ctx.telegram
+        .deleteMessage(chatId, downloadingMessage.message_id)
+        .catch(() => {});
+      await ctx.reply(
+        isTelegramFileTooBigError(err)
+          ? TELEGRAM_FILE_TOO_BIG_REPLY
+          : `Không tải được video từ Telegram, đã huỷ.${err instanceof Error ? ` (${err.message})` : ""}`,
+        promptMenu,
+      );
+      return;
+    }
+
+    await ctx.telegram
+      .deleteMessage(chatId, downloadingMessage.message_id)
+      .catch(() => {});
+    await submitScriptReferenceVideoJob({
+      ctx,
+      groupChatId: chatId,
+      promptMessageId: messageId,
+      userId,
+      videoPath,
+      videoFileName,
+      extraInstruction,
+      masterPromptPath: options?.masterPromptPath,
+      skipImageConfirmation: options?.skipImageConfirmation,
+    });
+  })().catch((err) => {
+    console.error(
+      "[bot] Lỗi không mong đợi khi tải/enqueue video tham chiếu (nền):",
+      err,
+    );
+  });
+}
+
+/**
  * Prompt cố định gửi kèm khi user đưa yêu cầu qua file (.txt/.md) thay vì gõ
  * trực tiếp — file được UPLOAD thẳng lên ChatAI (xem askChatAI,
  * downloadTelegramFile + submitChatAIJob), ChatAI tự đọc nội dung file, không cần
@@ -1915,34 +1996,14 @@ export function registerHandlers(bot: Telegraf): void {
         ctx.message.caption,
         ctx.message.message_id,
       );
-      let videoPath: string;
-      try {
-        videoPath = await downloadTelegramVideoRobust(
-          ctx,
-          ctx.message.video.file_id,
-          ctx.chat.id,
-          ctx.message.message_id,
-          path.extname(videoFileName) || ".mp4",
-        );
-      } catch (err) {
-        console.error("[bot] Tải video Telegram thất bại:", err);
-        await ctx.reply(
-          isTelegramFileTooBigError(err)
-            ? TELEGRAM_FILE_TOO_BIG_REPLY
-            : `Không tải được video từ Telegram, đã huỷ.${err instanceof Error ? ` (${err.message})` : ""}`,
-          promptMenu,
-        );
-        return;
-      }
-      await submitScriptReferenceVideoJob({
+      await handleScriptReferenceVideoUpload(
         ctx,
-        groupChatId: ctx.chat.id,
-        promptMessageId: ctx.message.message_id,
-        userId,
-        videoPath,
+        ctx.message.video.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
         videoFileName,
-        extraInstruction: ctx.message.caption?.trim() || undefined,
-      });
+        ctx.message.caption?.trim() || undefined,
+      );
       return;
     }
 
@@ -1960,36 +2021,15 @@ export function registerHandlers(bot: Telegraf): void {
         ctx.message.caption,
         ctx.message.message_id,
       );
-      let videoPath: string;
-      try {
-        videoPath = await downloadTelegramVideoRobust(
-          ctx,
-          ctx.message.video.file_id,
-          ctx.chat.id,
-          ctx.message.message_id,
-          path.extname(videoFileName) || ".mp4",
-        );
-      } catch (err) {
-        console.error("[bot] Tải video Telegram thất bại:", err);
-        await ctx.reply(
-          isTelegramFileTooBigError(err)
-            ? TELEGRAM_FILE_TOO_BIG_REPLY
-            : `Không tải được video từ Telegram, đã huỷ.${err instanceof Error ? ` (${err.message})` : ""}`,
-          promptMenu,
-        );
-        return;
-      }
-      await submitScriptReferenceVideoJob({
+      await handleScriptReferenceVideoUpload(
         ctx,
-        groupChatId: ctx.chat.id,
-        promptMessageId: ctx.message.message_id,
-        userId,
-        videoPath,
+        ctx.message.video.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
         videoFileName,
-        extraInstruction: ctx.message.caption?.trim() || undefined,
-        masterPromptPath: config.promptVideoReference,
-        skipImageConfirmation: true,
-      });
+        ctx.message.caption?.trim() || undefined,
+        { masterPromptPath: config.promptVideoReference, skipImageConfirmation: true },
+      );
       return;
     }
 
@@ -2198,34 +2238,14 @@ export function registerHandlers(bot: Telegraf): void {
         ctx.message.caption,
         ctx.message.message_id,
       );
-      let videoPath: string;
-      try {
-        videoPath = await downloadTelegramVideoRobust(
-          ctx,
-          ctx.message.document.file_id,
-          ctx.chat.id,
-          ctx.message.message_id,
-          path.extname(videoFileName) || ".mp4",
-        );
-      } catch (err) {
-        console.error("[bot] Tải video Telegram thất bại:", err);
-        await ctx.reply(
-          isTelegramFileTooBigError(err)
-            ? TELEGRAM_FILE_TOO_BIG_REPLY
-            : `Không tải được video từ Telegram, đã huỷ.${err instanceof Error ? ` (${err.message})` : ""}`,
-          promptMenu,
-        );
-        return;
-      }
-      await submitScriptReferenceVideoJob({
+      await handleScriptReferenceVideoUpload(
         ctx,
-        groupChatId: ctx.chat.id,
-        promptMessageId: ctx.message.message_id,
-        userId,
-        videoPath,
+        ctx.message.document.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
         videoFileName,
-        extraInstruction: ctx.message.caption?.trim() || undefined,
-      });
+        ctx.message.caption?.trim() || undefined,
+      );
       return;
     }
 
@@ -2245,36 +2265,15 @@ export function registerHandlers(bot: Telegraf): void {
         ctx.message.caption,
         ctx.message.message_id,
       );
-      let videoPath: string;
-      try {
-        videoPath = await downloadTelegramVideoRobust(
-          ctx,
-          ctx.message.document.file_id,
-          ctx.chat.id,
-          ctx.message.message_id,
-          path.extname(videoFileName) || ".mp4",
-        );
-      } catch (err) {
-        console.error("[bot] Tải video Telegram thất bại:", err);
-        await ctx.reply(
-          isTelegramFileTooBigError(err)
-            ? TELEGRAM_FILE_TOO_BIG_REPLY
-            : `Không tải được video từ Telegram, đã huỷ.${err instanceof Error ? ` (${err.message})` : ""}`,
-          promptMenu,
-        );
-        return;
-      }
-      await submitScriptReferenceVideoJob({
+      await handleScriptReferenceVideoUpload(
         ctx,
-        groupChatId: ctx.chat.id,
-        promptMessageId: ctx.message.message_id,
-        userId,
-        videoPath,
+        ctx.message.document.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
         videoFileName,
-        extraInstruction: ctx.message.caption?.trim() || undefined,
-        masterPromptPath: config.promptVideoReference,
-        skipImageConfirmation: true,
-      });
+        ctx.message.caption?.trim() || undefined,
+        { masterPromptPath: config.promptVideoReference, skipImageConfirmation: true },
+      );
       return;
     }
 
