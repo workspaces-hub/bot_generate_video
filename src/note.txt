@@ -50,6 +50,8 @@ nohup dbus-launch --exit-with-session startxfce4 \
   > /tmp/xfce.log 2>&1 &
 
 
-  sudo ufw allow 8787/tcp
+sudo ufw allow 8787/tcp
 
 sudo apt install -y ffmpeg
+
+./cleanup_old_files.sh /workspace/runpod-slim/ComfyUI/output/video --hours 4

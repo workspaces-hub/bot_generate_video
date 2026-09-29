@@ -401,11 +401,18 @@ async function attemptGenerateReferenceImage(
     // không phải lỗi selector. Coi đây là lỗi TẠM THỜI phía ChatAI, tự gõ lại
     // NGUYÊN prompt (gọi lại sendImagePrompt) để thử lại vài lần trước khi
     // chịu thua, vì không có nút Retry sẵn cho case này như case kia.
+    // Trước đây gõ thẳng "prompt" nguyên văn làm tin nhắn chat — ChatAI có
+    // lúc hiểu nhầm thành 1 câu hỏi/yêu cầu trò chuyện thông thường (trả lời
+    // bằng lời thay vì vẽ ảnh) thay vì lệnh tạo ảnh, đặc biệt với prompt
+    // ngắn/mơ hồ. Bọc thêm chỉ dẫn rõ ràng để ChatAI LUÔN hiểu đây là lệnh
+    // tạo ảnh, dùng đúng nguyên văn mô tả bên dưới làm prompt vẽ.
+    const imageGenerationInstruction = `Tạo 1 ảnh minh hoạ theo ĐÚNG NGUYÊN VĂN mô tả sau đây (dùng chính xác mô tả này làm prompt vẽ ảnh, không hỏi lại, không diễn giải lại bằng lời, không thêm bớt nội dung):\n\n${prompt}`;
+
     const maxChatAITextFailureRetries = 5;
     let images: Locator;
     let latest: Locator;
     for (let attempt = 0; ; attempt++) {
-      await sendImagePrompt(page, `${prompt}`);
+      await sendImagePrompt(page, imageGenerationInstruction);
       // await captureSnapshot(page, jobId, "result");
 
       const messages = assistantMessageLocator(page);

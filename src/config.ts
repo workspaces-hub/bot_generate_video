@@ -183,6 +183,11 @@ export const config = {
   qwenFileServeDir: path.resolve(
     process.env.QWEN_FILE_SERVE_DIR ?? "./storage/qwen-public-tmp",
   ),
+  // Số lượt tối đa cho chiến lược "mỗi lượt 1 phần JSON hoàn chỉnh" (xem
+  // askQwenAboutReferenceVideo/askQwen trong qwenAI.ts) — trước đây hardcode
+  // = 20, chuyển qua env để chỉnh được không cần sửa code/build lại (vd tăng
+  // lên nếu video dài/nội dung nhiều khiến 20 lượt chưa đủ để model gửi hết).
+  qwenMaxPartTurns: Number(process.env.QWEN_MAX_PART_TURNS ?? 20),
 
   // Telegram Bot API (api.telegram.org) CHỈ cho bot TẢI file <= 20MB qua
   // getFile — video tham chiếu user gửi cho "Tham chiếu kịch bản" thường

@@ -12,7 +12,9 @@ const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
 
 const DONE_MARKER = "ĐÃ HOÀN THÀNH";
-const MAX_PART_TURNS = 20;
+// Đọc từ .env (QWEN_MAX_PART_TURNS, xem config.ts) thay vì hardcode — chỉnh
+// được không cần sửa code/build lại.
+const MAX_PART_TURNS = config.qwenMaxPartTurns;
 const PROVIDER_ERROR_MAX_RETRIES = 3;
 const AUDIO_SAMPLE_RATE = 16000;
 const AUDIO_BITRATE = "64k";
