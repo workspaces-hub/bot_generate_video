@@ -4,7 +4,7 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import {
   dismissCloudflareChallengeIfPresent,
-  getChatAIBrowserContext,
+  getChatAIImageBrowserContext,
 } from "./chatAIBrowser";
 import { gotoChatAIWithRetry } from "./chatAI";
 import {
@@ -139,7 +139,7 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
     .catch(() => false);
 
   const stableRequiredMs = 3000;
-  const pollIntervalMs = 1000;
+  const pollIntervalMs = 10000;
   // Xác nhận qua debug thật (job d077805e): generate ẢNH đôi khi lỗi THẬT
   // phía ChatAI ("Something went wrong. Please try again." kèm nút Retry,
   // data-testid="regenerate-thread-error-button") — không phải lỗi selector.
@@ -301,8 +301,10 @@ function extractChatAISessionId(url: string): string | undefined {
  * có await) nên về lý thuyết không mở 2 tab cùng lúc, hàng đợi này đảm bảo
  * chắc chắn không xảy ra dù code gọi thay đổi sau này (vd lỡ đổi sang
  * Promise.all) hoặc có thêm nơi khác cùng gọi hàm này — tránh mở nhiều tab
- * Chrome cùng lúc trên CÙNG 1 browser context dùng chung (getChatAIBrowserContext),
- * dễ gây xung đột/crash.
+ * Chrome cùng lúc trên CÙNG 1 browser context dùng chung
+ * (getChatAIImageBrowserContext — RIÊNG với getChatAIBrowserContext của
+ * askChatAI, xem docstring hàm đó trong chatAIBrowser.ts), dễ gây xung đột/
+ * crash.
  */
 let generateImageQueue: Promise<unknown> = Promise.resolve();
 
@@ -360,7 +362,7 @@ async function attemptGenerateReferenceImage(
   jobId: string,
   refImagePaths?: string[],
 ): Promise<GenerateReferenceImageResult> {
-  const context = await getChatAIBrowserContext();
+  const context = await getChatAIImageBrowserContext();
   const page = await context.newPage();
   try {
     // Xác nhận qua log lỗi thật (job 95227a24, và nhiều job khác báo
@@ -399,11 +401,18 @@ async function attemptGenerateReferenceImage(
     // không phải lỗi selector. Coi đây là lỗi TẠM THỜI phía ChatAI, tự gõ lại
     // NGUYÊN prompt (gọi lại sendImagePrompt) để thử lại vài lần trước khi
     // chịu thua, vì không có nút Retry sẵn cho case này như case kia.
+    // Trước đây gõ thẳng "prompt" nguyên văn làm tin nhắn chat — ChatAI có
+    // lúc hiểu nhầm thành 1 câu hỏi/yêu cầu trò chuyện thông thường (trả lời
+    // bằng lời thay vì vẽ ảnh) thay vì lệnh tạo ảnh, đặc biệt với prompt
+    // ngắn/mơ hồ. Bọc thêm chỉ dẫn rõ ràng để ChatAI LUÔN hiểu đây là lệnh
+    // tạo ảnh, dùng đúng nguyên văn mô tả bên dưới làm prompt vẽ.
+    const imageGenerationInstruction = `Tạo 1 ảnh minh hoạ theo ĐÚNG NGUYÊN VĂN mô tả sau đây (dùng chính xác mô tả này làm prompt vẽ ảnh, không hỏi lại, không diễn giải lại bằng lời, không thêm bớt nội dung):\n\n${prompt}`;
+
     const maxChatAITextFailureRetries = 5;
     let images: Locator;
     let latest: Locator;
     for (let attempt = 0; ; attempt++) {
-      await sendImagePrompt(page, `${prompt}`);
+      await sendImagePrompt(page, imageGenerationInstruction);
       // await captureSnapshot(page, jobId, "result");
 
       const messages = assistantMessageLocator(page);
@@ -482,7 +491,7 @@ async function attemptGenerateReferenceImage(
 
     return { path: destPath, sessionId: extractChatAISessionId(page.url()) };
   } catch (err) {
-    await captureErrorSnapshot(page, jobId, err);
+    await captureErrorSnapshot(page, jobId + "_chatai_image_error", err);
     throw err instanceof ChatAIImageError
       ? err
       : new ChatAIImageError(err instanceof Error ? err.message : String(err));

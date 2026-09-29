@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
+import { generateReferenceImage } from "./chatAIImage";
 import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
   captureResultId,
@@ -264,7 +265,35 @@ export async function generateImage(
         );
         continue;
       }
-      throw err;
+      // Theo yêu cầu người dùng: pollo.ai gen ảnh lỗi (không phải crash còn
+      // lượt retry) — fallback sang ChatAI (generateReferenceImage,
+      // chatAIImage.ts — provider KHÁC hẳn, browser/session riêng) thay vì
+      // để cả job thất bại luôn. Lưu vào config.downloadDir với baseFileName
+      // = jobId, cùng quy ước đặt tên tạm mà attemptGenerateImage đang dùng
+      // (xem downloadViaMediaUrl) — caller (storyboardPipeline.ts) tự rename/
+      // move file này vào đúng chỗ, không quan tâm tên tạm ở bước này.
+      console.warn(
+        `[polloImage] generateImage lỗi trên pollo.ai — fallback sang ChatAI (generateReferenceImage):`,
+        err instanceof Error ? err.message : err,
+      );
+      try {
+        const fallback = await generateReferenceImage(
+          prompt,
+          config.downloadDir,
+          jobId,
+          jobId,
+          options.referenceImagePaths,
+        );
+        return { filePaths: [fallback.path], polloResultId: null };
+      } catch (fallbackErr) {
+        console.error(
+          `[polloImage] Fallback ChatAI (generateReferenceImage) cũng lỗi:`,
+          fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+        );
+        // Ném lại lỗi GỐC của pollo.ai (không phải lỗi fallback) — đây mới
+        // là provider chính, giữ đúng context lỗi quen thuộc cho caller/log.
+        throw err;
+      }
     }
   }
 }
@@ -313,7 +342,26 @@ async function attemptGenerateImage(
     await page.keyboard.insertText(prompt);
     await page.waitForTimeout(300);
 
-    await enableUnlimitedIfNotEnoughCredit(page, jobId);
+    // alwaysEnable=true — theo yêu cầu người dùng: gen ẢNH luôn bật
+    // Unlimited, không cần so sánh credit/phí trước (khác generateVideo,
+    // vẫn giữ hành vi cũ chỉ bật khi credit không đủ).
+    await enableUnlimitedIfNotEnoughCredit(page, jobId, true);
+
+    // Log + ảnh debug xác nhận switch Unlimited THẬT SỰ đã bật (aria-checked
+    // đọc lại trực tiếp từ DOM, không suy đoán qua việc enableUnlimitedIfNotEnoughCredit
+    // không throw) — theo yêu cầu người dùng, dùng để kiểm tra fix
+    // alwaysEnable hoạt động đúng.
+    const unlimitedSwitchChecked = await page
+      .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+      .first()
+      .getAttribute("aria-checked")
+      .catch(() => null);
+    console.log(
+      `[pollo-image] Unlimited switch sau enableUnlimitedIfNotEnoughCredit(alwaysEnable=true): aria-checked="${unlimitedSwitchChecked}"`,
+    );
+    // await captureSnapshot(page, `${jobId}_unlimited-check`, "unlimited-check", {
+    //   includeHtml: true,
+    // });
 
     const baseline = await captureResultBaseline(page);
     // Theo yêu cầu người dùng: chụp ảnh debug NGAY TRƯỚC khi bấm Generate —
@@ -325,6 +373,32 @@ async function attemptGenerateImage(
     // dùng chung tên, sẽ mất ảnh "before" khi job lỗi (lúc cần xem nhất).
     // await captureSnapshot(page, `${jobId}_before-generate`, "before-click-generate");
     await dismissBlockingOverlays(page);
+
+    // Xác nhận LẠI Unlimited NGAY TRƯỚC lúc bấm Generate (không chỉ tin
+    // check ngay sau enableUnlimitedIfNotEnoughCredit ở trên) — theo yêu cầu
+    // người dùng. Chưa có bằng chứng thật nào cho thấy switch bị reset giữa
+    // 2 điểm này (không có bước upload/thao tác nào chen vào), nhưng vẫn
+    // kiểm tra lại cho chắc + tự bật lại nếu phát hiện tắt, giống cách
+    // generateVideo re-apply duration/aspect ratio ngay trước Generate.
+    const unlimitedSwitchLocator = page
+      .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+      .first();
+    let unlimitedCheckedBeforeGenerate = await unlimitedSwitchLocator
+      .getAttribute("aria-checked")
+      .catch(() => null);
+    if (unlimitedCheckedBeforeGenerate !== "true") {
+      console.warn(
+        `[pollo-image] Unlimited KHÔNG còn bật ngay trước Generate (aria-checked="${unlimitedCheckedBeforeGenerate}") — thử bật lại.`,
+      );
+      await enableUnlimitedIfNotEnoughCredit(page, jobId, true);
+      unlimitedCheckedBeforeGenerate = await unlimitedSwitchLocator
+        .getAttribute("aria-checked")
+        .catch(() => null);
+    }
+    console.log(
+      `[pollo-image] Unlimited switch NGAY TRƯỚC khi bấm Generate: aria-checked="${unlimitedCheckedBeforeGenerate}"`,
+    );
+
     const generateButton = generateButtonLocator(page).first();
     await waitForGenerateButtonEnabled(page, generateButton);
     const recordId = await captureGenerationRecordId(page, () =>
@@ -346,6 +420,17 @@ async function attemptGenerateImage(
         : null;
     if (recordId !== null) {
       console.log(`[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`);
+    }
+
+    // SỬA (theo yêu cầu người dùng, cùng lý do đã sửa cho attemptGenerateVideo
+    // trong pollo.ts): API xác nhận rõ status "failed" thì throw NGAY, không
+    // rơi xuống chờ dò DOM nữa — dò DOM chắc chắn không bao giờ thấy ảnh mới
+    // khi generation đã failed thật, tránh tốn thời gian chờ hết
+    // config.generationTimeoutMs vô ích.
+    if (apiStatus === "failed") {
+      throw new GenerationError(
+        `pollo.ai báo generate thất bại (status: "failed", record ${recordId}) — không tạo được ảnh.`,
+      );
     }
 
     const downloadViaMediaUrl = async (mediaUrl: string): Promise<string> => {

@@ -4,16 +4,18 @@ import { config } from "../src/config";
 import { launchRealChrome } from "../src/automation/launch";
 
 const target = (process.argv[2] ?? "main").toLowerCase();
-if (target !== "main" && target !== "revise") {
+if (target !== "main" && target !== "revise" && target !== "image") {
   console.error(
-    'Tham số phải là "main" hoặc "revise" (mặc định "main"). Cách dùng: npm run login-chatai -- revise',
+    'Tham số phải là "main", "revise" hoặc "image" (mặc định "main"). Cách dùng: npm run login-chatai -- revise',
   );
   process.exit(1);
 }
 const storageStatePath =
   target === "main"
     ? config.chatAIStorageStatePath
-    : config.chatAIReviseStorageStatePath;
+    : target === "revise"
+      ? config.chatAIReviseStorageStatePath
+      : config.chatAIImageStorageStatePath;
 
 /**
  * Mở một cửa sổ Chrome thật để bạn đăng nhập tay vào ChatAI (kể cả
@@ -22,10 +24,11 @@ const storageStatePath =
  * của tài khoản đang chọn ("main": CHATAI_STORAGE_STATE_PATH — dùng cho
  * askChatAI; "revise": CHATAI_REVISE_STORAGE_STATE_PATH — dùng RIÊNG cho
  * reviseGenerationPrompt, xem config.chatAIReviseStorageStatePath để biết lý
- * do tách tài khoản). Bot sẽ dùng file này để tự động thao tác mà không cần
- * đăng nhập lại. Dùng proxy giống lúc bot thật sự gọi ChatAI (xem
- * chatAIBrowser.ts) — tắt proxy khiến IP thẳng của VPS bị ChatAI chặn bằng
- * Cloudflare challenge.
+ * do tách tài khoản; "image": CHATAI_IMAGE_STORAGE_STATE_PATH — dùng RIÊNG
+ * cho generateReferenceImage, xem config.chatAIImageStorageStatePath). Bot sẽ
+ * dùng file này để tự động thao tác mà không cần đăng nhập lại. Dùng proxy
+ * giống lúc bot thật sự gọi ChatAI (xem chatAIBrowser.ts) — tắt proxy khiến
+ * IP thẳng của VPS bị ChatAI chặn bằng Cloudflare challenge.
  */
 async function main(): Promise<void> {
   const browser = await launchRealChrome();

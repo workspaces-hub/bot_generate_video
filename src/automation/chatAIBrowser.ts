@@ -35,6 +35,11 @@ export const getChatAIBrowserContext = createBrowserContextManager(
   'Chạy "npm run login-chatai" trước khi dùng tính năng ChatAI.',
   true,
   ".oaiusercontent.com",
+  true,
+  // disableGpu=false — xem docstring tham số disableGpu trong browser.ts
+  // (nghi vấn tắt GPU phá fingerprint WebGL, khiến Cloudflare Turnstile
+  // kẹt "Just a moment..." không có checkbox để bấm).
+  false,
 );
 
 /**
@@ -50,6 +55,28 @@ export const getChatAIReviseBrowserContext = createBrowserContextManager(
   'Chạy "npm run login-chatai -- revise" trước khi dùng tính năng sửa prompt vi phạm nội dung.',
   true,
   ".oaiusercontent.com",
+  true,
+  false, // disableGpu=false — xem chú thích ở getChatAIBrowserContext.
+);
+
+/**
+ * BrowserContext RIÊNG (tài khoản KHÁC hẳn getChatAIBrowserContext/
+ * getChatAIReviseBrowserContext ở trên) — theo yêu cầu người dùng, chỉ dùng
+ * cho generateReferenceImage (chatAIImage.ts): CHARACTER/LOCATION/
+ * SCENE_SETTING gen qua ChatAI, và fallback khi pollo.ai gen ảnh lỗi (xem
+ * generateImage trong polloImage.ts). Xem config.chatAIImageStorageStatePath
+ * để biết lý do tách riêng — cùng lớp lý do đã tách getChatAIReviseBrowserContext
+ * (tránh 2 tab thao tác song song trên CÙNG 1 tài khoản khi
+ * generateReferenceImage chạy CÙNG LÚC với askChatAI, ở 2 hàng đợi độc lập).
+ */
+export const getChatAIImageBrowserContext = createBrowserContextManager(
+  config.chatAIImageStorageStatePath,
+  "chatAI-image-browser",
+  'Chạy "npm run login-chatai -- image" trước khi dùng tính năng tạo ảnh qua ChatAI.',
+  true,
+  ".oaiusercontent.com",
+  true,
+  false, // disableGpu=false — xem chú thích ở getChatAIBrowserContext.
 );
 
 /**

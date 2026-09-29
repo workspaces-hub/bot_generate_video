@@ -1,12 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { config } from "../config";
 import { generateReferenceImage } from "./chatAIImage";
 import { generateVideo, type GenerateVideoOptions } from "./aiVideo";
 import { generateImage } from "./aiVideoImage";
-import { reviseGenerationPrompt } from "./chatAI";
+import {
+  reviseGenerationPrompt,
+  verifyVideo,
+  type VerifyVideoRef,
+} from "./chatAI";
 import { generateVideo as generateVideoPollo } from "./pollo";
 import { generateImage as generateImagePollo } from "./polloImage";
+import { withPolloTaskSlot } from "./polloBrowser";
+import {
+  generateVideoComfyMiniMaxH3,
+  generateVideoComfyMiniMaxH3TextToVideo,
+  MAX_MINIMAX_H3_REFERENCE_IMAGES,
+} from "./comfyui";
 
 /**
  * Logic dùng CHUNG cho cả 2 nơi gọi: script CLI (scripts/generate-reference-images.ts,
@@ -26,12 +37,18 @@ export interface StoryboardEntry {
   ref?: StoryboardRefItem[];
   prompt?: string;
   duration?: number;
+  /** Tỉ lệ khung hình VIDEO ("9:16"/"16:9", xem format_output.txt) — chỉ có ở entry type VIDEO. */
+  aspectRatio?: string;
+  /** Số khung hình/giây (fps) của VIDEO, xem format_output.txt — chỉ có ở entry type VIDEO. */
+  frameRate?: number;
   /** true/false nếu đã từng generate (ảnh hoặc video) THÀNH CÔNG hay không — không có field này nghĩa là CHƯA TỪNG chạy. */
   success?: boolean;
   /** Id hội thoại ChatAI (phần "/c/<id>" trên URL) lúc gen ảnh cho entry này — chỉ có ở entry CHARACTER/LOCATION/SCENE_SETTING (dùng ChatAI), VIDEO không có (dùng AIVideo). */
   chatAISessionId?: string;
   /** Id nội bộ pollo.ai (phần "/v/<id>" trên URL, vd https://pollo.ai/create?target=text-to-image&videoId=<id>) của kết quả gen ảnh/video mới nhất qua Pollo cho entry này — theo yêu cầu người dùng, xem captureResultId trong pollo.ts. */
   polloResultId?: string;
+  /** prompt_id ComfyUI trả về (xem POST /prompt trong comfyui.ts) của lần gen video ComfyUI mới nhất cho entry này — cùng ý nghĩa/lý do lưu với polloResultId. */
+  comfyPromptId?: string;
   [key: string]: unknown;
 }
 
@@ -49,6 +66,118 @@ export function sanitizeId(id: string): string {
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 4 type asset (KHÔNG phải VIDEO) mà reconcileAssetLedgerAcrossFiles đối chiếu id xuyên file — xem docstring hàm đó. */
+const ASSET_LEDGER_TYPES = new Set(["CHARACTER", "LOCATION", "PROP", "OBJECT"]);
+
+export interface AssetLedgerReconcileResult {
+  /** Số item (CHARACTER/LOCATION/PROP/OBJECT) đã bị ghi đè type/prompt cho khớp bản canonical (id xuất hiện đầu tiên xuyên các file) — 0 nghĩa là mọi file đã nhất quán sẵn, không cần sửa gì. */
+  fixedCount: number;
+  /** Mô tả ngắn từng lần sửa/cảnh báo (id, tên file, khác biệt) — dùng để log console và báo lại cho user (xem processChatAIQueue trong queue.ts, nhánh job.type === "generateScript"). */
+  details: string[];
+}
+
+/**
+ * Hậu kiểm bằng CODE (theo yêu cầu người dùng) cho tính năng "Tạo kịch bản
+ * mới" (GENERATE_SCRIPT_BUTTON_LABEL, xem GenerateScriptJob/
+ * processChatAIQueue trong queue.ts, nhánh job.type === "generateScript"):
+ * khi ChatGPT trả về NHIỀU file JSON storyboard (mỗi file = 1 tập phim), master prompt
+ * (prompt_generate_script.txt, mục "ASSET LEDGER DÙNG CHUNG") CHỈ yêu cầu
+ * bằng TEXT rằng cùng một nhân vật/bối cảnh/đạo cụ/vật thể xuất hiện ở nhiều
+ * tập phải dùng cùng id + mô tả (prompt) giống hệt nhau ở mọi file — không
+ * có gì đảm bảo ChatGPT tuân thủ tuyệt đối 100%. Pipeline gen ảnh/video hiện
+ * tại (generateReferenceImagesForFileViaPollo, generateVideosForFileComfyUI...)
+ * đọc từng file JSON HOÀN TOÀN ĐỘC LẬP — VIDEO.ref chỉ resolve id TRONG CÙNG
+ * file — nên nếu 2 file mô tả "cùng" 1 nhân vật khác đi (dù cùng id), ảnh/
+ * video gen ra cho nhân vật đó ở 2 tập sẽ KHÔNG nhất quán.
+ *
+ * Hàm này ĐỌC LẠI toàn bộ file JSON vừa tạo (theo ĐÚNG thứ tự truyền vào —
+ * file xuất hiện TRƯỚC được coi là bản "canonical"/chuẩn cho mỗi id): với mỗi
+ * item CHARACTER/LOCATION/PROP/OBJECT, nếu 1 file sau đó có cùng id nhưng
+ * type hoặc prompt KHÁC bản canonical, GHI ĐÈ lại type/prompt của item đó cho
+ * khớp TUYỆT ĐỐI với bản canonical rồi lưu lại file đó — đảm bảo nhất quán
+ * 100% xuyên các tập, không phụ thuộc hoàn toàn vào việc ChatGPT có làm đúng
+ * hay không.
+ *
+ * KHÔNG tự sửa trường hợp NGƯỢC LẠI — 2 thực thể thực sự KHÁC NHAU vô tình
+ * bị ChatGPT đặt CHUNG 1 id (vi phạm "QUY TẮC 2" của Asset Ledger): không thể
+ * tự động phân biệt "khác vì đây là 2 thực thể khác nhau" với "khác vì
+ * ChatGPT viết lại mô tả không nhất quán" chỉ bằng cách so sánh text, và ép
+ * đồng bộ nhầm có thể phá hỏng continuity đã đúng ở 1 trong 2 file — CHỈ ghi
+ * lại cảnh báo trong `details` (kèm cả trường hợp type khác nhau, dấu hiệu rõ
+ * nhất của lỗi này) để người dùng tự kiểm tra thủ công nếu cần.
+ */
+export async function reconcileAssetLedgerAcrossFiles(
+  filePaths: string[],
+): Promise<AssetLedgerReconcileResult> {
+  const canonical = new Map<
+    string,
+    { type: string; prompt: string; sourceFile: string }
+  >();
+  const details: string[] = [];
+  let fixedCount = 0;
+
+  const parsedFiles: { filePath: string; entries: StoryboardEntry[] }[] = [];
+  for (const filePath of filePaths) {
+    if (path.extname(filePath).toLowerCase() !== ".json") continue;
+    let entries: unknown;
+    try {
+      const raw = await fs.promises.readFile(filePath, "utf-8");
+      entries = JSON.parse(raw);
+      if (!Array.isArray(entries)) throw new Error("không phải JSON array");
+    } catch (err) {
+      details.push(
+        `Bỏ qua "${path.basename(filePath)}" khi đối chiếu Asset Ledger — không đọc/parse được JSON (${err instanceof Error ? err.message : err}).`,
+      );
+      continue;
+    }
+    parsedFiles.push({ filePath, entries: entries as StoryboardEntry[] });
+  }
+
+  for (const { filePath, entries } of parsedFiles) {
+    let changed = false;
+    for (const entry of entries) {
+      if (!entry.id || !entry.type || !ASSET_LEDGER_TYPES.has(entry.type)) {
+        continue;
+      }
+      const existing = canonical.get(entry.id);
+      if (!existing) {
+        canonical.set(entry.id, {
+          type: entry.type,
+          prompt: entry.prompt ?? "",
+          sourceFile: path.basename(filePath),
+        });
+        continue;
+      }
+      const typeDiffers = entry.type !== existing.type;
+      const promptDiffers = (entry.prompt ?? "") !== existing.prompt;
+      if (!typeDiffers && !promptDiffers) continue;
+
+      if (typeDiffers) {
+        details.push(
+          `⚠️ id "${entry.id}" có type khác nhau giữa "${existing.sourceFile}" (${existing.type}) và "${path.basename(filePath)}" (${entry.type}) — đã đồng bộ về "${existing.type}"/mô tả của "${existing.sourceFile}". Kiểm tra lại thủ công nếu đây thực chất là 2 thực thể khác nhau bị trùng id.`,
+        );
+      } else {
+        details.push(
+          `Đã đồng bộ mô tả asset "${entry.id}" trong "${path.basename(filePath)}" cho khớp với bản xuất hiện đầu tiên (trong "${existing.sourceFile}").`,
+        );
+      }
+      entry.type = existing.type;
+      entry.prompt = existing.prompt;
+      fixedCount++;
+      changed = true;
+    }
+    if (changed) {
+      await fs.promises.writeFile(
+        filePath,
+        JSON.stringify(entries, null, 2),
+        "utf-8",
+      );
+    }
+  }
+
+  return { fixedCount, details };
 }
 
 /**
@@ -245,71 +374,190 @@ export function isStopStoryboardRequested(jsonPath: string): boolean {
  * chừng (vd hết credit, mất mạng ở entry sau) thì các entry ĐÃ generate trước
  * đó không bị mất field "success" đã cập nhật.
  */
+// Chuỗi promise nối đuôi — bảo đảm các lần gọi saveEntries() chồng lấp (nhiều
+// worker cùng lúc gọi khi generateVideosForFilePollo chạy song song, xem
+// POLLO_VIDEO_CONCURRENCY) ghi file TUẦN TỰ đúng thứ tự gọi, không bị 1 lần
+// ghi CHẬM hơn hoàn tất SAU rồi đè mất nội dung mới hơn của 1 lần ghi khác đã
+// xong trước đó (mỗi lần gọi serialize TOÀN BỘ mảng entries trong bộ nhớ tại
+// đúng thời điểm gọi, nhưng fs.writeFile là bất đồng bộ nên thứ tự HOÀN TẤT
+// trên đĩa có thể khác thứ tự GỌI nếu không khoá lại).
+let saveEntriesLockTail: Promise<void> = Promise.resolve();
+
 async function saveEntries(
   inputPath: string,
   entries: StoryboardEntry[],
 ): Promise<void> {
-  await fs.promises.writeFile(
-    inputPath,
-    JSON.stringify(entries, null, 2),
-    "utf-8",
+  const json = JSON.stringify(entries, null, 2);
+  const run = (): Promise<void> => fs.promises.writeFile(inputPath, json, "utf-8");
+  const result = saveEntriesLockTail.then(run, run);
+  saveEntriesLockTail = result.then(
+    () => {},
+    () => {},
   );
+  return result;
 }
 
 /**
- * Thư mục generated/<tên file input, bỏ đuôi> — DÙNG CHUNG giữa bước tạo ảnh
- * và tạo video của CÙNG 1 file input.
+ * Thư mục generated/ dùng để lưu ảnh/video VÀ để tra ảnh tham chiếu
+ * (resolveRefImagePath/findExistingImageById nhận thẳng kết quả hàm này làm
+ * "dir") của CÙNG 1 file input — DÙNG CHUNG giữa bước tạo ảnh và tạo video.
+ *
+ * SỬA (theo yêu cầu người dùng): nếu inputPath ĐÃ nằm SẴN bên trong
+ * storage/generated/ (bất kể lồng bao nhiêu cấp) — trả về ĐÚNG thư mục cha
+ * thật sự đang chứa file đó (path.dirname), KHÔNG suy luận lại tên folder từ
+ * basename như trước. Quy tắc "dùng dirname thật" này tự động đúng cho CẢ 2
+ * layout hiện có, không cần phân biệt tường minh:
+ * 1. Mỗi file JSON có 1 folder RIÊNG cùng tên (job "chatAI", xem
+ *    ensureGeneratedFolder): "storage/generated/<file>/<file>.json" →
+ *    dirname = "storage/generated/<file>" (khớp hệt kết quả suy từ basename
+ *    trước đây, không đổi hành vi cho case này).
+ * 2. NHIỀU file JSON (nhiều tập) dùng CHUNG 1 folder theo tên phim (job
+ *    "scriptReferenceVideo"/"generateScript", xem ensureGeneratedFolderForName
+ *    trong queue.ts): "storage/generated/<tên phim>/<file>.json" → dirname =
+ *    "storage/generated/<tên phim>". TRƯỚC ĐÂY hàm này tính SAI thành
+ *    "storage/generated/<file>" (suy từ basename, bỏ qua thư mục cha thật),
+ *    khiến ảnh/video VÀ ảnh tham chiếu của các tập bị tách ra NHIỀU folder
+ *    khác nhau (mỗi tập 1 folder riêng theo tên file) thay vì gộp đúng CHUNG
+ *    1 folder theo phim — phá mất mục đích chia sẻ ảnh nhân vật/bối cảnh
+ *    xuyên các tập.
+ *
+ * Nếu inputPath CHƯA nằm trong storage/generated/ (vd path gốc trong
+ * config.chatAIResultsDir lúc ensureGeneratedFolder đặt file vào generated/
+ * LẦN ĐẦU, hoặc chỉ 1 basename user gõ tay — xem tryReplaceGeneratedFile/
+ * continueFailedStoryboardJob), tính folder MẶC ĐỊNH MỚI theo tên file (hành
+ * vi gốc, giữ nguyên không đổi).
  *
  * Xác nhận qua báo cáo thật của người dùng: caption "6.0-test-TNCPA__CHAR_001_HO_VUONG"
- * (xem tryReplaceGeneratedFile trong handlers.ts, và jsonFileName do user gõ
- * tay trong continueFailedStoryboardJob ở queue.ts) ra folder SAI là
- * "storage/generated/6" thay vì "storage/generated/6.0-test-TNCPA" — 2 nơi
- * gọi này truyền vào 1 basename KHÔNG có đuôi file thật (không phải path.json
- * đầy đủ), nhưng path.extname("6.0-test-TNCPA") lại hiểu NHẦM dấu "." trong
- * "6.0" là bắt đầu phần đuôi, trả về ".0-test-TNCPA", khiến path.basename cắt
- * mất gần hết tên, chỉ còn lại "6". Chỉ cắt đuôi khi ĐÚNG LÀ ".json" ở cuối
- * chuỗi (không dùng path.extname() thô) — an toàn cho cả file path đầy đủ
- * (vd "cay_khe_full.json") lẫn basename không có đuôi chứa dấu "." nội bộ
- * (vd tên phiên bản "6.0-test-TNCPA").
+ * ra folder SAI là "storage/generated/6" thay vì "storage/generated/6.0-test-TNCPA"
+ * — basename user gõ tay KHÔNG có đuôi file thật (không phải path .json đầy
+ * đủ), nhưng path.extname("6.0-test-TNCPA") lại hiểu NHẦM dấu "." trong "6.0"
+ * là bắt đầu phần đuôi, trả về ".0-test-TNCPA", khiến path.basename cắt mất
+ * gần hết tên, chỉ còn lại "6". Chỉ cắt đuôi khi ĐÚNG LÀ ".json" ở cuối chuỗi
+ * (không dùng path.extname() thô) — an toàn cho cả file path đầy đủ (vd
+ * "cay_khe_full.json") lẫn basename không có đuôi chứa dấu "." nội bộ (vd
+ * tên phiên bản "6.0-test-TNCPA").
  */
 export function generatedDirFor(inputPath: string): string {
+  const generatedRoot = path.resolve("./storage/generated");
+  const resolvedInput = path.resolve(inputPath);
+  const relativeToGeneratedRoot = path.relative(generatedRoot, resolvedInput);
+  const alreadyInsideGeneratedRoot =
+    relativeToGeneratedRoot !== "" &&
+    !relativeToGeneratedRoot.startsWith("..") &&
+    !path.isAbsolute(relativeToGeneratedRoot);
+  if (alreadyInsideGeneratedRoot) {
+    return path.dirname(resolvedInput);
+  }
+
   const withoutJsonExt = /\.json$/i.test(inputPath)
     ? inputPath.slice(0, -".json".length)
     : inputPath;
   return path.resolve("./storage/generated", path.basename(withoutJsonExt));
 }
 
-/** Đuôi file coi là video kết quả — dùng cho archiveExistingVideos (xem ensureGeneratedFolder). */
+/**
+ * Thư mục ẢNH — theo yêu cầu người dùng: KHÁC thư mục VIDEO
+ * (generatedDirFor) khi nhiều file JSON (nhiều tập) dùng CHUNG 1 folder theo
+ * tên phim. Ảnh (CHARACTER/LOCATION/PROP/OBJECT/SCENE_SETTING) phải lưu/tra
+ * CHUNG ở cấp FILM để dùng lại được xuyên các tập, còn video thì lưu RIÊNG
+ * theo từng tập (xem generatedDirFor) — không được gộp video của các tập vào
+ * chung 1 chỗ.
+ *
+ * Layout thật trên đĩa (xem ensureGeneratedFolderForName +
+ * runStoryboardPipelinePollo trong queue.ts):
+ * - Job "chatAI" (không chia sẻ phim): storage/generated/<file>/<file>.json
+ *   — chỉ có 1 cấp folder, ảnh và video CÙNG lưu ở "storage/generated/<file>/".
+ * - Job "scriptReferenceVideo"/"generateScript" (nhiều tập CHUNG 1 phim):
+ *   storage/generated/<tên phim>/<file>/<file>.json — 2 cấp folder; ảnh lưu
+ *   ở "storage/generated/<tên phim>/" (CHUNG cho mọi tập), video lưu ở
+ *   "storage/generated/<tên phim>/<file>/" (RIÊNG từng tập).
+ *
+ * Cách tính: lấy segment ĐẦU TIÊN ngay dưới storage/generated/ trên đường
+ * dẫn tới inputPath — segment đó luôn đúng là folder phim (case 2 ở trên)
+ * hoặc trùng luôn với folder per-file (case 1, không có khái niệm phim —
+ * khi đó ảnh và video tự nhiên dùng CHUNG 1 folder, đúng hành vi gốc từ
+ * trước khi có tính năng nhiều tập).
+ */
+export function generatedImageDirFor(inputPath: string): string {
+  const generatedRoot = path.resolve("./storage/generated");
+  const resolvedInput = path.resolve(inputPath);
+  const relativeToGeneratedRoot = path.relative(generatedRoot, resolvedInput);
+  const alreadyInsideGeneratedRoot =
+    relativeToGeneratedRoot !== "" &&
+    !relativeToGeneratedRoot.startsWith("..") &&
+    !path.isAbsolute(relativeToGeneratedRoot);
+  if (!alreadyInsideGeneratedRoot) {
+    // Chưa nằm trong storage/generated/ (vd path gốc trong
+    // config.chatAIResultsDir) — không có khái niệm "folder phim" để tách,
+    // dùng chung logic với generatedDirFor (tạo folder mới theo tên file).
+    return generatedDirFor(inputPath);
+  }
+  const firstSegment = relativeToGeneratedRoot.split(path.sep)[0];
+  return path.join(generatedRoot, firstSegment);
+}
+
+/** Đuôi file coi là video kết quả — dùng cho archiveExistingGeneratedFiles (xem ensureGeneratedFolder). */
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov"]);
 
 /**
- * Copy các video ĐANG CÓ SẴN ở gốc outputDir (từ lần gen TRƯỚC, cùng tên
- * folder) vào 1 subfolder "vXX" mới — XX tăng dần theo subfolder "vXX" lớn
- * nhất đã có (bắt đầu "v01" nếu chưa có subfolder nào). Best-effort: lỗi đọc
- * folder hay copy 1 file không chặn cả job, chỉ cảnh báo.
+ * MOVE (không phải copy — tránh để lại bản trùng ở gốc outputDir) các video
+ * ĐANG CÓ SẴN ở gốc outputDir (từ lần gen TRƯỚC, cùng tên folder) vào 1
+ * subfolder "vXX" mới — XX tăng dần theo subfolder "vXX" lớn nhất đã có (bắt
+ * đầu "v01" nếu chưa có subfolder nào).
+ *
+ * SỬA (theo yêu cầu người dùng): MOVE THÊM CẢ file JSON storyboard CŨ (nếu có
+ * sẵn ở gốc outputDir từ lần gen trước) vào CÙNG subfolder "vXX" đó — trước
+ * đây chỉ move video, để lại JSON cũ ở gốc rồi bị chính copyFile ở
+ * ensureGeneratedFolder ghi đè mất, khiến folder "vXX" chỉ có video mà không
+ * có JSON gốc đã sinh ra chúng (không tra lại được prompt/ref của lần gen
+ * đó). Giờ mỗi "vXX" là 1 bản snapshot đầy đủ (JSON + video) của đúng lần gen
+ * trước.
+ *
+ * Best-effort: lỗi đọc folder hay move 1 file không chặn cả job, chỉ cảnh
+ * báo. Dùng rename trước (nhanh, đúng nghĩa move), fallback copy+xoá bản gốc
+ * nếu rename lỗi (vd khác partition/device — không thể rename xuyên device).
  */
-async function archiveExistingVideos(outputDir: string): Promise<void> {
+async function archiveExistingGeneratedFiles(outputDir: string): Promise<void> {
   const entries = await fs.promises
     .readdir(outputDir, { withFileTypes: true })
     .catch(() => []);
-  const videoFiles = entries
-    .filter((e) => e.isFile() && VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
+  const filesToArchive = entries
+    .filter(
+      (e) =>
+        e.isFile() &&
+        (VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()) ||
+          path.extname(e.name).toLowerCase() === ".json"),
+    )
     .map((e) => e.name);
-  if (videoFiles.length === 0) return;
+  if (filesToArchive.length === 0) return;
 
   const existingVersions = entries
     .filter((e) => e.isDirectory() && /^v\d+$/.test(e.name))
     .map((e) => Number.parseInt(e.name.slice(1), 10));
-  const nextVersion = (existingVersions.length > 0 ? Math.max(...existingVersions) : 0) + 1;
-  const versionDir = path.join(outputDir, `v${String(nextVersion).padStart(2, "0")}`);
+  const nextVersion =
+    (existingVersions.length > 0 ? Math.max(...existingVersions) : 0) + 1;
+  const versionDir = path.join(
+    outputDir,
+    `v${String(nextVersion).padStart(2, "0")}`,
+  );
 
   await fs.promises.mkdir(versionDir, { recursive: true });
-  for (const fileName of videoFiles) {
-    await fs.promises
-      .copyFile(path.join(outputDir, fileName), path.join(versionDir, fileName))
-      .catch((err) => {
-        console.warn(`[storyboardPipeline] Không copy được video "${fileName}" vào "${versionDir}":`, err);
-      });
+  for (const fileName of filesToArchive) {
+    const srcPath = path.join(outputDir, fileName);
+    const destPath = path.join(versionDir, fileName);
+    try {
+      await fs.promises.rename(srcPath, destPath);
+    } catch (err) {
+      try {
+        await fs.promises.copyFile(srcPath, destPath);
+        await fs.promises.unlink(srcPath);
+      } catch (copyErr) {
+        console.warn(
+          `[storyboardPipeline] Không move được file "${fileName}" vào "${versionDir}":`,
+          copyErr,
+        );
+      }
+    }
   }
 }
 
@@ -321,21 +569,46 @@ async function archiveExistingVideos(outputDir: string): Promise<void> {
  * chờ xác nhận (xem tryReplaceGeneratedFile trong handlers.ts).
  *
  * SỬA (theo yêu cầu người dùng): KHÔNG xoá folder cũ nữa (đã thử, không phù
- * hợp) — thay vào đó, nếu folder đã có sẵn video từ lần gen TRƯỚC (trùng tên
- * folder), copy các video đó vào 1 subfolder "vXX" (XX tăng dần mỗi lần gen)
- * để giữ lại lịch sử các lần gen trước, trước khi tiếp tục ghi đè bình
- * thường ở gốc folder cho lần gen MỚI.
+ * hợp) — thay vào đó, nếu folder đã có sẵn video/JSON từ lần gen TRƯỚC (trùng
+ * tên folder), move CẢ video LẪN file JSON storyboard cũ đó vào 1 subfolder
+ * "vXX" (XX tăng dần mỗi lần gen, xem archiveExistingGeneratedFiles) để giữ
+ * lại lịch sử ĐẦY ĐỦ (JSON + video) các lần gen trước, trước khi tiếp tục ghi
+ * đè bình thường ở gốc folder cho lần gen MỚI.
  */
 export async function ensureGeneratedFolder(
   inputPath: string,
 ): Promise<string> {
   const outputDir = generatedDirFor(inputPath);
-  await archiveExistingVideos(outputDir);
+  await archiveExistingGeneratedFiles(outputDir);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
     path.join(outputDir, path.basename(inputPath)),
   );
+  return outputDir;
+}
+
+/**
+ * GIỐNG ensureGeneratedFolder HỆT (archive nội dung CŨ vào "vXX" nếu folder
+ * đã tồn tại từ lần gen trước, rồi mkdir) nhưng nhận THẲNG tên folder
+ * (folderName) thay vì tự suy ra từ 1 file input, và KHÔNG tự copy file nào
+ * — dùng khi NHIỀU file JSON (vd nhiều tập phim của "Tạo kịch bản mới"/"Tham
+ * chiếu kịch bản") cùng chia sẻ CHUNG 1 folder generated/<tên phim>/ (xem
+ * job.generatedFolderName, runStoryboardPipelinePollo trong queue.ts). Caller
+ * PHẢI gọi hàm này ĐÚNG 1 LẦN cho cả batch nhiều file (không gọi lại cho
+ * từng file) — nếu không, lần gọi archive của file tập sau sẽ archive away
+ * luôn (các) file tập trước vừa copy vào TRONG CÙNG batch, rồi caller tự
+ * copyFile từng file JSON vào outputDir trả về.
+ */
+export async function ensureGeneratedFolderForName(
+  folderName: string,
+): Promise<string> {
+  const outputDir = path.resolve(
+    "./storage/generated",
+    sanitizeId(folderName),
+  );
+  await archiveExistingGeneratedFiles(outputDir);
+  await fs.promises.mkdir(outputDir, { recursive: true });
   return outputDir;
 }
 
@@ -384,11 +657,16 @@ export async function generateReferenceImagesForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -396,7 +674,7 @@ export async function generateReferenceImagesForFile(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
       // Chỉ gen khi "prompt" là string thật — entry thiếu id, hoặc prompt bị
       // sai kiểu (số/object/null từ JSON input lỗi) đều bỏ qua thay vì gọi
       // generateReferenceImage với giá trị không phải string.
@@ -492,11 +770,16 @@ export async function generateReferenceImagesForFileViaAIVideo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -504,7 +787,7 @@ export async function generateReferenceImagesForFileViaAIVideo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -585,7 +868,10 @@ export async function generateReferenceImagesForFileViaAIVideo(
       failed++;
       failedEntries.push({ id: entry.id, type: entry.type });
       if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {
+        await onEntryError(
+          entry.id,
+          err instanceof Error ? err.message : String(err),
+        ).catch((err) => {
           console.error(
             `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
             err,
@@ -628,11 +914,16 @@ export async function generateReferenceImagesForFileViaPollo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -640,7 +931,7 @@ export async function generateReferenceImagesForFileViaPollo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION") return false;
+      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -652,87 +943,108 @@ export async function generateReferenceImagesForFileViaPollo(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
-  for (const entry of targets) {
-    if (isStopStoryboardRequested(inputPath)) break;
-    if (entry?.success) continue;
 
-    const existingImagePath = await findExistingImageById(
-      outputDir,
-      sanitizeId(entry.id),
-    );
-    if (existingImagePath) {
-      entry.success = true;
-      succeeded++;
-      await saveEntries(inputPath, entries);
-      continue;
-    }
+  // CHARACTER/LOCATION không tham chiếu lẫn nhau (ref luôn rỗng, xem
+  // format_output.txt) nên hoàn toàn ĐỘC LẬP — an toàn chạy song song bằng
+  // worker-pool, cùng cơ chế "nextIndex" dùng chung với
+  // generateVideosForFilePollo (xem docstring ở đó). config.polloImageConcurrency
+  // CHỈ dùng ở đây — generateSceneImagesForFileViaPollo chạy TUẦN TỰ (theo
+  // yêu cầu người dùng, xem docstring ở đó: SCENE_SETTING_END của clip N ref
+  // tới ảnh của clip N-1 cùng shot, có dây chuyền phụ thuộc thật).
+  let nextIndex = 0;
 
-    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
-    console.log(
-      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (pollo)...`,
-    );
-    let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
-    try {
-      const { filePaths: imagePaths, polloResultId } = await generateWithContentViolationRetry(
-        entry,
-        jobId,
-        () => generateImagePollo(entry.prompt!, {}, jobId),
-      );
-      if (imagePaths.length === 0) {
-        throw new Error("Không tạo được ảnh nào");
-      }
-      // Lưu id kết quả pollo.ai (dạng "/v/<id>") NGAY VÀO entry trong file
-      // JSON storyboard gốc — theo yêu cầu người dùng, KHÔNG lưu file riêng.
-      if (polloResultId) {
-        entry.polloResultId = polloResultId;
-      }
-      const [firstImage, ...extraImages] = imagePaths;
-      destPath = path.join(
+  async function runWorker(): Promise<void> {
+    while (true) {
+      if (isStopStoryboardRequested(inputPath)) break;
+      const index = nextIndex++;
+      if (index >= targets.length) break;
+      const entry = targets[index];
+      if (entry?.success) continue;
+
+      const existingImagePath = await findExistingImageById(
         outputDir,
-        `${sanitizeId(entry.id)}${path.extname(firstImage)}`,
+        sanitizeId(entry.id),
       );
-      try {
-        await fs.promises.rename(firstImage, destPath);
-      } catch {
-        await fs.promises.copyFile(firstImage, destPath);
-        await fs.promises.unlink(firstImage).catch(() => {});
+      if (existingImagePath) {
+        entry.success = true;
+        succeeded++;
+        await saveEntries(inputPath, entries);
+        continue;
       }
-      for (const extra of extraImages) {
-        await fs.promises.unlink(extra).catch(() => {});
-      }
+
+      const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
       console.log(
-        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${destPath}`,
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (pollo)...`,
       );
-      entry.success = true;
-      succeeded++;
-      if (onEntryDone) {
-        await onEntryDone(destPath).catch((err) => {
-          console.error(
-            `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
-            err,
+      let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
+      try {
+        const { filePaths: imagePaths, polloResultId } =
+          await generateWithContentViolationRetry(entry, jobId, () =>
+            withPolloTaskSlot(() => generateImagePollo(entry.prompt!, {}, jobId)),
           );
-        });
+        if (imagePaths.length === 0) {
+          throw new Error("Không tạo được ảnh nào");
+        }
+        // Lưu id kết quả pollo.ai (dạng "/v/<id>") NGAY VÀO entry trong file
+        // JSON storyboard gốc — theo yêu cầu người dùng, KHÔNG lưu file riêng.
+        if (polloResultId) {
+          entry.polloResultId = polloResultId;
+        }
+        const [firstImage, ...extraImages] = imagePaths;
+        destPath = path.join(
+          outputDir,
+          `${sanitizeId(entry.id)}${path.extname(firstImage)}`,
+        );
+        try {
+          await fs.promises.rename(firstImage, destPath);
+        } catch {
+          await fs.promises.copyFile(firstImage, destPath);
+          await fs.promises.unlink(firstImage).catch(() => {});
+        }
+        for (const extra of extraImages) {
+          await fs.promises.unlink(extra).catch(() => {});
+        }
+        console.log(
+          `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${destPath}`,
+        );
+        entry.success = true;
+        succeeded++;
+        if (onEntryDone) {
+          await onEntryDone(destPath).catch((err) => {
+            console.error(
+              `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
+              err,
+            );
+          });
+        }
+      } catch (err) {
+        console.error(
+          `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
+          err instanceof Error ? err.message : err,
+        );
+        entry.success = false;
+        failed++;
+        failedEntries.push({ id: entry.id, type: entry.type });
+        if (onEntryError) {
+          await onEntryError(
+            entry.id,
+            err instanceof Error ? err.message : String(err),
+          ).catch((err) => {
+            console.error(
+              `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
+              err,
+            );
+          });
+          await sleep(1000);
+        }
       }
-    } catch (err) {
-      console.error(
-        `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
-        err instanceof Error ? err.message : err,
-      );
-      entry.success = false;
-      failed++;
-      failedEntries.push({ id: entry.id, type: entry.type });
-      if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {
-          console.error(
-            `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
-            err,
-          );
-        });
-        await sleep(1000);
-      }
+      await saveEntries(inputPath, entries);
     }
-    await saveEntries(inputPath, entries);
   }
+
+  await Promise.all(
+    Array.from({ length: config.polloImageConcurrency }, () => runWorker()),
+  );
 
   return {
     outputDir,
@@ -766,7 +1078,10 @@ async function findExistingImageById(
   return match ? path.join(dir, match) : null;
 }
 
-async function resolveRefImagePath(dir: string, id: string): Promise<string> {
+export async function resolveRefImagePath(
+  dir: string,
+  id: string,
+): Promise<string> {
   const found = await findExistingImageById(dir, id);
   if (found) return found;
 
@@ -813,8 +1128,8 @@ async function findVideoEntriesReadyAfterEnd(
 
   const readyIds: string[] = [];
   for (const entry of candidates) {
-    const refs = (entry.ref ?? []).filter((r): r is Required<StoryboardRefItem> =>
-      Boolean(r.id),
+    const refs = (entry.ref ?? []).filter(
+      (r): r is Required<StoryboardRefItem> => Boolean(r.id),
     );
     let allReady = true;
     for (const ref of refs) {
@@ -928,6 +1243,12 @@ export async function generateVideosForFile(
   }
 
   const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu (CHARACTER/LOCATION/SCENE_SETTING) có thể nằm ở folder
+  // KHÁC outputDir — khi nhiều tập dùng CHUNG 1 folder theo tên phim, ảnh lưu
+  // ở cấp phim còn video lưu RIÊNG theo từng tập (xem docstring
+  // generatedImageDirFor). Video vẫn lưu vào outputDir như cũ, CHỈ đổi nơi
+  // TRA ảnh tham chiếu.
+  const imageDir = generatedImageDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -975,16 +1296,20 @@ export async function generateVideosForFile(
 
       const refPaths: string[] = [];
       for (const ref of refs) {
-        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+        refPaths.push(await resolveRefImagePath(imageDir, sanitizeId(ref.id)));
       }
 
       // Field "duration" (giây) trong JSON storyboard — trước đây bị bỏ qua
       // hoàn toàn (chỉ log cảnh báo, đã comment sẵn). Giờ truyền thẳng vào
       // GenerateVideoOptions.duration (chuẩn hoá về "Ns", khớp nhãn chip
       // durationChipCandidates) để tự chọn đúng thời lượng trên AIVideo.
+      // SỬA (theo yêu cầu người dùng): làm tròn LÊN (Math.ceil, vd 2.1 → 3)
+      // thay vì làm tròn gần nhất (Math.round, vd 2.1 → 2) — chip thời lượng
+      // chỉ chọn được số nguyên giây, làm tròn xuống có thể cắt ngắn hơn ý
+      // storyboard yêu cầu.
       const duration =
         typeof entry.duration === "number" && entry.duration > 0
-          ? `${Math.round(entry.duration)}s`
+          ? `${Math.ceil(entry.duration)}s`
           : undefined;
 
       // Gắn type khai báo trong entry.ref theo ĐÚNG THỨ TỰ với refPaths —
@@ -1032,7 +1357,10 @@ export async function generateVideosForFile(
         err instanceof Error ? err.message : err,
       );
       if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {});
+        await onEntryError(
+          entry.id,
+          err instanceof Error ? err.message : String(err),
+        ).catch((err) => {});
         await sleep(1000);
       }
       entry.success = false;
@@ -1045,29 +1373,145 @@ export async function generateVideosForFile(
   return { outputDir, succeeded, failed, failedEntries };
 }
 
+export interface VerifyVideosResult {
+  outputDir: string;
+  total: number;
+  verified: number;
+  failed: number;
+  failedEntries: FailedEntry[];
+}
+
+/**
+ * Đọc 1 file JSON storyboard trong storage/generated/, duyệt từng entry
+ * "VIDEO" ĐÃ có file video thật trên đĩa (<sanitizeId(entry.id)>.mp4 trong
+ * outputDir — entry chưa gen video thì bỏ qua, không phải lỗi) rồi gọi
+ * verifyVideo (chatAI.ts) kiểm tra từng video — theo yêu cầu người dùng.
+ *
+ * refs resolve giống hệt generateVideosForFile (resolveRefImagePath theo
+ * entry.ref, ĐÚNG THỨ TỰ khai báo trong JSON).
+ *
+ * Best-effort theo từng entry — 1 video lỗi (thiếu ref trên đĩa, ChatAI lỗi
+ * phiên đăng nhập...) không chặn các video khác trong CÙNG file, chỉ tính
+ * vào failedEntries.
+ */
+/**
+ * Tách shot/clip của 1 entry VIDEO — ưu tiên field "shot"/"clip" (schema mới,
+ * xem format_output.txt), fallback parse từ id dạng SHOT_XX_CLIP_YY_VIDEO cho
+ * file JSON cũ chưa có 2 field này. Trả về null nếu không xác định được (id
+ * không đúng mẫu) — verifyVideos khi đó bỏ qua hẳn việc tìm PREVIOUS_VIDEO
+ * cho entry đó, không suy đoán mù.
+ */
+function parseShotClip(
+  entry: StoryboardEntry,
+): { shot: number; clip: number } | null {
+  if (typeof entry.shot === "number" && typeof entry.clip === "number") {
+    return { shot: entry.shot, clip: entry.clip };
+  }
+  const match = /^SHOT_(\d+)_CLIP_(\d+)_VIDEO$/i.exec(entry.id ?? "");
+  if (!match) return null;
+  return { shot: Number(match[1]), clip: Number(match[2]) };
+}
+
+export async function verifyVideos(
+  inputPath: string,
+): Promise<VerifyVideosResult> {
+  const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu có thể nằm ở folder KHÁC outputDir khi nhiều tập dùng
+  // CHUNG 1 folder theo tên phim (xem docstring generatedImageDirFor).
+  const imageDir = generatedImageDirFor(inputPath);
+  const entries: StoryboardEntry[] = JSON.parse(
+    await fs.promises.readFile(inputPath, "utf-8"),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "VIDEO") return false;
+      return Boolean(e.id) && typeof e.prompt === "string" && Boolean(e.prompt);
+    },
+  );
+
+  let verified = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  // Video liền trước ĐÃ XÁC NHẬN tồn tại trên đĩa cho từng SHOT — theo yêu
+  // cầu người dùng, dùng làm PREVIOUS_VIDEO khi verify clip kế tiếp CÙNG shot
+  // (clip số N-1). Cập nhật sau mỗi entry có file thật, bất kể verify entry
+  // đó thành công hay lỗi — chỉ cần file .mp4 tồn tại là đủ làm continuity
+  // reference cho clip sau.
+  const lastVideoPathByShot = new Map<number, { clip: number; path: string }>();
+
+  for (const entry of targets) {
+    const videoPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
+    if (!fs.existsSync(videoPath)) continue;
+
+    const shotClip = parseShotClip(entry);
+    let previousVideoPath: string | undefined;
+    if (shotClip) {
+      const prev = lastVideoPathByShot.get(shotClip.shot);
+      if (
+        prev &&
+        prev.clip === shotClip.clip - 1 &&
+        fs.existsSync(prev.path)
+      ) {
+        previousVideoPath = prev.path;
+      }
+    }
+
+    try {
+      const refs = (entry.ref ?? []).filter(
+        (r): r is Required<StoryboardRefItem> => Boolean(r.id),
+      );
+      const verifyRefs: VerifyVideoRef[] = [];
+      for (const ref of refs) {
+        const refId = sanitizeId(ref.id);
+        verifyRefs.push({
+          id: refId,
+          path: await resolveRefImagePath(imageDir, refId),
+        });
+      }
+
+      await verifyVideo(entry.prompt, verifyRefs, videoPath, previousVideoPath);
+      verified++;
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [VERIFY] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      failed++;
+      failedEntries.push({ id: entry.id, type: "VIDEO" });
+    }
+
+    if (shotClip) {
+      lastVideoPathByShot.set(shotClip.shot, {
+        clip: shotClip.clip,
+        path: videoPath,
+      });
+    }
+  }
+
+  return { outputDir, total: targets.length, verified, failed, failedEntries };
+}
+
 /**
  * GIỐNG generateVideosForFile (cùng đọc file, lọc entry "VIDEO", cùng quy
- * ước success/onEntryDone/onEntryError/resume/onlyEntryIds/duration) nhưng
+ * ước success/onEntryDone/onEntryError/resume/onlyEntryIds/duration, cùng
+ * dùng assignStartEndFrames để xác định start/end frame từ VIDEO.ref) nhưng
  * tạo video qua pollo.ai (generateVideo trong pollo.ts) THAY VÌ AIVideo —
  * provider SONG SONG, KHÔNG thay thế hàm trên.
  *
- * KHÁC BIỆT so với generateVideosForFile:
- * 1. KHÔNG dùng assignStartEndFrames/nhánh Omni Reference theo số ảnh ref
- *    (đặc thù AIVideo) — LUÔN đưa TẤT CẢ refPaths vào referenceImagePaths,
- *    dùng mode "Reference to Video" + model "MiniMax H3" cố định. Đây là lựa
- *    chọn CHỦ Ý theo yêu cầu người dùng (mode/model duy nhất đã test kỹ cho
- *    video storyboard qua pollo, xem docstring đầu pollo.ts) — không tái tạo
- *    phân nhánh 1-2-3+ ảnh của AIVideo vì pollo.ai xử lý số lượng ref khác
- *    hẳn (mention từng ảnh vào prompt, không có khái niệm "start/end frame"
- *    cố định cho mode này).
- * 2. CHỈ lấy ref type "CHARACTER"/"LOCATION" — KHÔNG lấy "SCENE_SETTING_START"/
- *    "SCENE_SETTING_END" như generateVideosForFile — theo yêu cầu người
- *    dùng: pipeline Pollo bỏ hẳn bước "Tạo ảnh scene" (xem
- *    generateSceneImagesForFileViaPollo đã bị xoá, processPolloImageQueue
- *    trong queue.ts giờ đi thẳng từ "Tạo ảnh" (CHARACTER/LOCATION) sang xác
- *    nhận "Tạo video"), nên ảnh SCENE_SETTING KHÔNG BAO GIỜ tồn tại trong
- *    outputDir cho các file dùng Pollo — resolveRefImagePath sẽ throw "Không
- *    tìm thấy file" nếu vẫn cố lấy ref loại này.
+ * SỬA (theo yêu cầu người dùng, khôi phục schema SCENE_SETTING_START/END —
+ * xem format_output.txt): VIDEO.ref giờ CHỈ chứa đúng 2 phần tử
+ * SCENE_SETTING_START/SCENE_SETTING_END (không còn CHARACTER/LOCATION trực
+ * tiếp) — dùng mode "Start/End Frame" pollo.ai (PolloGenerateVideoOptions.
+ * startFramePath/endFramePath, xem pollo.ts) THAY VÌ mode "Reference to
+ * Video" (referenceImagePaths) đã dùng trước đây. Ảnh SCENE_SETTING_START/END
+ * phải đã được tạo trước đó (xem generateSceneImagesForFileViaAIVideo, gọi
+ * trong processPolloImageQueue ngay sau bước "Tạo ảnh" CHARACTER/LOCATION —
+ * dùng LẠI hàm AIVideo hiện có, không viết bản riêng cho Pollo vì cùng là
+ * asset ảnh tĩnh, không phụ thuộc provider nào sẽ dùng nó để gen video).
  */
 export async function generateVideosForFilePollo(
   inputPath: string,
@@ -1082,6 +1526,197 @@ export async function generateVideosForFilePollo(
   }
 
   const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu có thể nằm ở folder KHÁC outputDir khi nhiều tập dùng
+  // CHUNG 1 folder theo tên phim (xem docstring generatedImageDirFor) — video
+  // vẫn lưu vào outputDir như cũ, CHỈ đổi nơi TRA ảnh tham chiếu.
+  const imageDir = generatedImageDirFor(inputPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(outputDir, path.basename(inputPath)),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "VIDEO") return false;
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        return false;
+      }
+      if (onlyEntryIds && !onlyEntryIds.includes(e.id)) return false;
+      return true;
+    },
+  );
+
+  let succeeded = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+
+  // Tài khoản pollo.ai cho phép tối đa 8 task gen song song (theo xác nhận
+  // của người dùng) — chạy nhiều worker song song (config.polloVideoConcurrency,
+  // mặc định 6, chừa biên an toàn cho job ảnh Pollo chạy chung tài khoản) thay
+  // vì tuần tự từng video một, tận dụng tối đa số task tài khoản cho phép mà
+  // vẫn không vượt quá. Đọc qua config (không hardcode) — QUAN TRỌNG khi 2
+  // MÁY KHÁC NHAU cùng dùng CHUNG 1 tài khoản pollo.ai: mỗi máy cấu hình
+  // POLLO_VIDEO_CONCURRENCY thành 1 phần cố định của tổng 6 (vd 3+3, xem
+  // .env.example) — 2 process độc lập không chia sẻ được biến đếm trong bộ
+  // nhớ với nhau nên phải tự chia tĩnh, không thể "mượn" slot rảnh của nhau.
+  // Mỗi worker tự lấy entry kế tiếp qua "nextIndex" dùng chung — an toàn dù
+  // chạy đồng thời vì JS đơn luồng, "nextIndex++" là 1 statement nguyên tử,
+  // không thể xen kẽ giữa các worker.
+  const POLLO_VIDEO_CONCURRENCY = config.polloVideoConcurrency;
+  let nextIndex = 0;
+
+  async function runWorker(): Promise<void> {
+    while (true) {
+      if (isStopStoryboardRequested(inputPath)) break;
+      const index = nextIndex++;
+      if (index >= targets.length) break;
+      const entry = targets[index];
+      if (entry?.success) continue;
+
+      const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
+      try {
+        const refs = (entry.ref ?? []).filter(
+          (r): r is Required<StoryboardRefItem> =>
+            Boolean(r.id) &&
+            (r.type === "SCENE_SETTING_START" ||
+              r.type === "SCENE_SETTING_END"),
+        );
+
+        const refPaths: string[] = [];
+        for (const ref of refs) {
+          refPaths.push(
+            await resolveRefImagePath(imageDir, sanitizeId(ref.id)),
+          );
+        }
+
+        const { startFramePath, endFramePath } = assignStartEndFrames(
+          refs.map((r, i) => ({ type: r.type, path: refPaths[i] })),
+        );
+        if (!startFramePath || !endFramePath) {
+          throw new Error(
+            `Pollo (Start/End Frame) cần đủ 2 ảnh start/end frame — entry này chỉ resolve được ${refPaths.length} ảnh.`,
+          );
+        }
+
+        // SỬA (theo yêu cầu người dùng): làm tròn LÊN (Math.ceil, vd 2.1 → 3)
+        // thay vì Math.round — cùng lý do với nhánh AIVideo ở trên.
+        const duration =
+          typeof entry.duration === "number" && entry.duration > 0
+            ? `${Math.ceil(entry.duration)}s`
+            : undefined;
+
+        if (isStopStoryboardRequested(inputPath)) break;
+
+        console.log(
+          `[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video (pollo)...`,
+        );
+        const { filePath: tempFilePath, polloResultId } =
+          await generateWithContentViolationRetry(entry, jobId, () =>
+            withPolloTaskSlot(() =>
+              generateVideoPollo(
+                entry.prompt!,
+                { startFramePath, endFramePath, model: "MiniMax H3", duration },
+                jobId,
+              ),
+            ),
+          );
+        // Lưu id kết quả pollo.ai (dạng "/v/<id>") NGAY VÀO entry trong file
+        // JSON storyboard gốc — theo yêu cầu người dùng, KHÔNG lưu file riêng.
+        if (polloResultId) {
+          entry.polloResultId = polloResultId;
+        }
+
+        const destPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
+        try {
+          await fs.promises.rename(tempFilePath, destPath);
+        } catch {
+          await fs.promises.copyFile(tempFilePath, destPath);
+          await fs.promises.unlink(tempFilePath).catch(() => {});
+        }
+
+        entry.success = true;
+        succeeded++;
+        if (onEntryDone) {
+          await onEntryDone(destPath).catch((err) => {});
+        }
+      } catch (err) {
+        console.error(
+          `[storyboardPipeline] [VIDEO] ${entry.id} — lỗi:`,
+          err instanceof Error ? err.message : err,
+        );
+        if (onEntryError) {
+          await onEntryError(
+            entry.id,
+            err instanceof Error ? err.message : String(err),
+          ).catch((err) => {});
+          await sleep(1000);
+        }
+        entry.success = false;
+        failed++;
+        failedEntries.push({ id: entry.id, type: "VIDEO" });
+      }
+      await saveEntries(inputPath, entries);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: POLLO_VIDEO_CONCURRENCY }, () => runWorker()),
+  );
+
+  return { outputDir, succeeded, failed, failedEntries };
+}
+
+/** Duration mặc định (giây) cho ComfyUI khi entry.duration thiếu/không hợp lệ — khớp giá trị mặc định trong template workflow (xem node "132" "Float (Duration)" trong comfyuiWorkflows/minimax-h3-reference-to-video.json). */
+const COMFYUI_DEFAULT_DURATION_SECONDS = 5;
+
+/**
+ * GIỐNG generateVideosForFile (cùng đọc file, lọc entry "VIDEO", cùng quy ước
+ * success/onEntryDone/onEntryError/resume/onlyEntryIds) nhưng tạo video qua
+ * ComfyUI dùng workflow MiniMax H3 "Reference to Video"
+ * (generateVideoComfyMiniMaxH3 trong comfyui.ts) THAY VÌ AIVideo — provider
+ * SONG SONG, KHÔNG thay thế 2 hàm generateVideosForFile/
+ * generateVideosForFilePollo ở trên.
+ *
+ * SỬA (theo yêu cầu người dùng, khớp lại đúng schema hiện tại của
+ * format_output.txt — VIDEO.ref chỉ chứa CHARACTER/LOCATION trực tiếp, KHÔNG
+ * còn SCENE_SETTING_START/END): đổi từ workflow LTX-2 (frame-interpolation,
+ * cần ĐÚNG 2 ảnh start/end frame) sang MiniMax H3 (Reference to Video, nhận
+ * 1-9 ẢNH THAM CHIẾU tự do — đúng khái niệm CHARACTER/LOCATION ref hiện tại,
+ * giống hệt cách generateVideosForFilePollo dùng referenceImagePaths cho
+ * pollo.ai).
+ *
+ * KHÁC BIỆT so với generateVideosForFile:
+ * 1. refPaths phải resolve được 1-MAX_MINIMAX_H3_REFERENCE_IMAGES (9) ảnh —
+ *    0 ảnh hoặc quá 9 ảnh coi là lỗi rõ ràng cho ĐÚNG entry đó (không chặn cả
+ *    file, xử lý entry khác bình thường) thay vì gọi ComfyUI với tham số sai.
+ * 2. entry.duration (giây) truyền THẲNG dạng số cho generateVideoComfyMiniMaxH3
+ *    (KHÔNG chuẩn hoá thành chuỗi "Ns" như AIVideo/Pollo) — thiếu/không hợp
+ *    lệ thì dùng COMFYUI_DEFAULT_DURATION_SECONDS.
+ * 3. Lưu lại "comfyPromptId" (prompt_id ComfyUI) vào entry — cùng lý do với
+ *    "polloResultId" ở generateVideosForFilePollo.
+ */
+export async function generateVideosForFileComfyUI(
+  inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
+  onEntryError?: (filePath: string, errorMessage: string) => Promise<void>,
+  onlyEntryIds?: string[],
+): Promise<GenerateVideosResult> {
+  const raw = await fs.promises.readFile(inputPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const outputDir = generatedDirFor(inputPath);
+  // Ảnh tham chiếu có thể nằm ở folder KHÁC outputDir khi nhiều tập dùng
+  // CHUNG 1 folder theo tên phim (xem docstring generatedImageDirFor) — video
+  // vẫn lưu vào outputDir như cũ, CHỈ đổi nơi TRA ảnh tham chiếu.
+  const imageDir = generatedImageDirFor(inputPath);
   await fs.promises.mkdir(outputDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
@@ -1112,44 +1747,83 @@ export async function generateVideosForFilePollo(
     if (entry?.success) continue;
     const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
     try {
-      // CHỈ lấy CHARACTER/LOCATION — xem docstring hàm này (KHÔNG có
-      // SCENE_SETTING_START/END nữa, pipeline Pollo bỏ hẳn bước "Tạo ảnh
-      // scene").
       const refs = (entry.ref ?? []).filter(
         (r): r is Required<StoryboardRefItem> =>
-          Boolean(r.id) && (r.type === "CHARACTER" || r.type === "LOCATION"),
+          Boolean(r.id) &&
+          (r.type === "CHARACTER" ||
+            r.type === "LOCATION" ||
+            r.type === "PROP" ||
+            r.type === "OBJECT"),
       );
+
+      if (refs.length > MAX_MINIMAX_H3_REFERENCE_IMAGES) {
+        throw new Error(
+          `ComfyUI (MiniMax H3 Reference to Video) chỉ nhận tối đa ${MAX_MINIMAX_H3_REFERENCE_IMAGES} ảnh tham chiếu — entry này có ${refs.length} ref.`,
+        );
+      }
 
       const refPaths: string[] = [];
       for (const ref of refs) {
-        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+        refPaths.push(await resolveRefImagePath(imageDir, sanitizeId(ref.id)));
       }
 
+      // SỬA (theo yêu cầu người dùng): làm tròn LÊN (Math.ceil, vd 2.1 → 3)
+      // — trước đây truyền thẳng số thập phân gốc, không làm tròn — cùng quy
+      // ước với nhánh AIVideo/Pollo ở trên (luôn làm tròn lên thành số
+      // nguyên giây khi gen video).
       const duration =
         typeof entry.duration === "number" && entry.duration > 0
-          ? `${Math.round(entry.duration)}s`
+          ? Math.ceil(entry.duration)
+          : COMFYUI_DEFAULT_DURATION_SECONDS;
+
+      // aspectRatio/frameRate — 2 field mới trong VIDEO entry (xem
+      // format_output.txt) — chỉ nhận đúng giá trị hợp lệ, sai/thiếu thì để
+      // generateVideoComfyMiniMaxH3/generateVideoComfyMiniMaxH3TextToVideo tự
+      // dùng default (16:9/24fps, xem comfyui.ts).
+      const aspectRatio =
+        entry.aspectRatio === "9:16" || entry.aspectRatio === "16:9"
+          ? entry.aspectRatio
+          : undefined;
+      const frameRate =
+        typeof entry.frameRate === "number" && entry.frameRate > 0
+          ? entry.frameRate
           : undefined;
 
       if (isStopStoryboardRequested(inputPath)) break;
 
       console.log(
-        `[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video (pollo)...`,
+        `[storyboardPipeline] [VIDEO] ${entry.id} — đang tạo video (ComfyUI)...`,
       );
-      const { filePath: tempFilePath, polloResultId } = await generateWithContentViolationRetry(
-        entry,
-        jobId,
-        () =>
-          generateVideoPollo(
-            entry.prompt!,
-            { referenceImagePaths: refPaths, model: "MiniMax H3", duration },
-            jobId,
-          ),
-      );
-      // Lưu id kết quả pollo.ai (dạng "/v/<id>") NGAY VÀO entry trong file
-      // JSON storyboard gốc — theo yêu cầu người dùng, KHÔNG lưu file riêng.
-      if (polloResultId) {
-        entry.polloResultId = polloResultId;
-      }
+      // SỬA (theo yêu cầu người dùng): entry KHÔNG resolve được ref nào
+      // (refPaths rỗng) thì chuyển sang workflow "Text to Video" (không cần
+      // ảnh đầu vào) THAY VÌ throw lỗi như trước — chỉ khi CÓ ref mới dùng
+      // "Reference to Video" (cần ít nhất 1 ảnh). Truyền undefined cho
+      // steps/megapixels (2 tham số giữa) để 2 hàm tự lấy default từ config —
+      // chỉ frameRate cần truyền tường minh ở vị trí cuối.
+      const { filePath: tempFilePath, promptId } =
+        await generateWithContentViolationRetry(entry, jobId, () =>
+          refPaths.length > 0
+            ? generateVideoComfyMiniMaxH3(
+                refPaths,
+                entry.prompt!,
+                duration,
+                jobId,
+                aspectRatio,
+                undefined,
+                undefined,
+                frameRate,
+              )
+            : generateVideoComfyMiniMaxH3TextToVideo(
+                entry.prompt!,
+                duration,
+                jobId,
+                aspectRatio,
+                undefined,
+                undefined,
+                frameRate,
+              ),
+        );
+      entry.comfyPromptId = promptId;
 
       const destPath = path.join(outputDir, `${sanitizeId(entry.id)}.mp4`);
       try {
@@ -1170,7 +1844,10 @@ export async function generateVideosForFilePollo(
         err instanceof Error ? err.message : err,
       );
       if (onEntryError) {
-        await onEntryError(entry.id, err instanceof Error ? err.message : String(err)).catch((err) => {});
+        await onEntryError(
+          entry.id,
+          err instanceof Error ? err.message : String(err),
+        ).catch((err) => {});
         await sleep(1000);
       }
       entry.success = false;
@@ -1213,11 +1890,16 @@ export async function generateSceneImagesForFile(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -1335,11 +2017,16 @@ export async function generateSceneImagesForFileViaAIVideo(
     throw new Error("File input phải là 1 JSON array");
   }
 
-  const outputDir = generatedDirFor(inputPath);
-  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
   await fs.promises.copyFile(
     inputPath,
-    path.join(outputDir, path.basename(inputPath)),
+    path.join(ownDir, path.basename(inputPath)),
   );
 
   const targets = entries.filter(
@@ -1496,3 +2183,204 @@ export async function generateSceneImagesForFileViaAIVideo(
   return { outputDir, succeeded, failed, failedEntries };
 }
 
+/**
+ * GIỐNG generateSceneImagesForFileViaAIVideo HỆT (cùng lọc SCENE_SETTING_START/
+ * SCENE_SETTING_END, cùng quy ước resolve ref CHARACTER/LOCATION/SCENE_SETTING,
+ * lưu file/success/onEntryDone/onEntryError/resume, cùng cơ chế
+ * onVideoEntriesReady/findVideoEntriesReadyAfterEnd) nhưng tạo ảnh qua
+ * pollo.ai (generateImage trong polloImage.ts, cùng cách
+ * generateReferenceImagesForFileViaPollo đã làm) THAY VÌ AIVideo — provider
+ * SONG SONG, KHÔNG thay thế hàm trên. Hàm RIÊNG, KHÔNG sửa
+ * generateSceneImagesForFileViaAIVideo.
+ *
+ * Ảnh ref (nếu có) truyền qua PolloGenerateImageOptions.referenceImagePaths.
+ * generateImage() của polloImage.ts LUÔN trả về mảng ĐÚNG 1 ảnh (không có
+ * khái niệm "imageCount" nhiều ảnh/lần như AIVideo) nên đoạn "ảnh đầu + xoá
+ * ảnh thừa" bên dưới gần như no-op — giữ nguyên cấu trúc để đồng nhất/dễ so
+ * sánh với hàm AIVideo, cùng lý do đã giải thích ở
+ * generateReferenceImagesForFileViaPollo.
+ *
+ * Lưu lại "polloResultId" (id nội bộ pollo.ai) vào entry — cùng lý do với
+ * generateReferenceImagesForFileViaPollo/generateVideosForFilePollo.
+ */
+export async function generateSceneImagesForFileViaPollo(
+  inputPath: string,
+  onEntryDone?: (filePath: string) => Promise<void>,
+  onEntryError?: (filePath: string) => Promise<void>,
+  onVideoEntriesReady?: (readyEntryIds: string[]) => Promise<void>,
+): Promise<GenerateImagesResult> {
+  const raw = await fs.promises.readFile(inputPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const outputDir = generatedImageDirFor(inputPath);
+  // File JSON gốc vẫn copy vào ĐÚNG thư mục của chính nó (generatedDirFor —
+  // "own dir", có thể KHÁC outputDir/ảnh khi nhiều tập dùng chung 1 folder
+  // theo tên phim, xem docstring generatedImageDirFor) — KHÔNG copy nhầm vào
+  // outputDir (ảnh), tránh để lại 1 bản JSON thừa ở gốc folder phim.
+  const ownDir = generatedDirFor(inputPath);
+  await fs.promises.mkdir(ownDir, { recursive: true });
+  await fs.promises.copyFile(
+    inputPath,
+    path.join(ownDir, path.basename(inputPath)),
+  );
+
+  const targets = entries.filter(
+    (
+      e,
+    ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
+      StoryboardEntry => {
+      if (e.type !== "SCENE_SETTING_START" && e.type !== "SCENE_SETTING_END")
+        return false;
+      if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
+        return false;
+      }
+      return true;
+    },
+  );
+
+  let succeeded = 0;
+  let failed = 0;
+  const failedEntries: FailedEntry[] = [];
+  const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+
+  // Cùng cơ chế/lý do với generateSceneImagesForFileViaAIVideo.
+  const notifyVideoEntriesReadyIfEnd = async (
+    doneEntry: StoryboardEntry,
+  ): Promise<void> => {
+    if (doneEntry.type !== "SCENE_SETTING_END" || !onVideoEntriesReady) return;
+    if (!doneEntry.id || doneEntry.success !== true) return;
+    try {
+      const readyEntryIds = await findVideoEntriesReadyAfterEnd(
+        entries,
+        outputDir,
+        doneEntry.id,
+      );
+      if (readyEntryIds.length > 0) {
+        await onVideoEntriesReady(readyEntryIds);
+      }
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] onVideoEntriesReady thất bại cho "${doneEntry.id}" (không tính là lỗi generate):`,
+        err,
+      );
+    }
+  };
+
+  // SỬA (theo yêu cầu người dùng): CHẠY TUẦN TỰ, KHÔNG song song — khác
+  // generateReferenceImagesForFileViaPollo (CHARACTER/LOCATION độc lập hoàn
+  // toàn, an toàn song song). SCENE_SETTING_END của clip N LUÔN ref tới
+  // boundary khởi đầu của chính clip N — vật lý chính là SCENE_SETTING_END
+  // của clip N-1 CÙNG SHOT (trừ clip 01, ref SCENE_SETTING_START) — xem mục 3
+  // format_output.txt. Ảnh của entry sau cần ảnh của entry ngay trước nó
+  // (cùng shot) ĐÃ tồn tại trên đĩa — giữ tuần tự đúng thứ tự khai báo trong
+  // file (đã đúng thứ tự phụ thuộc theo mục 5 format_output.txt) để tránh
+  // race condition, không cố song song hoá.
+  for (const entry of targets) {
+    if (isStopStoryboardRequested(inputPath)) break;
+    if (entry?.success) continue;
+
+    const existingImagePath = await findExistingImageById(
+      outputDir,
+      sanitizeId(entry.id),
+    );
+    if (existingImagePath) {
+      entry.success = true;
+      succeeded++;
+      await saveEntries(inputPath, entries);
+      await notifyVideoEntriesReadyIfEnd(entry);
+      continue;
+    }
+
+    const jobId = `${jsonBaseName}_${entry.id}_${new Date().toISOString()}`;
+    console.log(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — đang tạo ảnh (pollo)...`,
+    );
+    let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
+    try {
+      const refs = (entry.ref ?? []).filter(
+        (r): r is Required<StoryboardRefItem> =>
+          Boolean(r.id) &&
+          (r.type === "CHARACTER" ||
+            r.type === "LOCATION" ||
+            r.type === "SCENE_SETTING_START" ||
+            r.type === "SCENE_SETTING_END"),
+      );
+      const refPaths: string[] = [];
+      for (const ref of refs) {
+        refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
+      }
+
+      const { filePaths: imagePaths, polloResultId } =
+        await generateWithContentViolationRetry(entry, jobId, () =>
+          withPolloTaskSlot(() =>
+            generateImagePollo(
+              entry.prompt!,
+              { referenceImagePaths: refPaths },
+              jobId,
+            ),
+          ),
+        );
+      if (polloResultId) {
+        entry.polloResultId = polloResultId;
+      }
+      if (imagePaths.length === 0) {
+        throw new Error("Không tạo được ảnh nào");
+      }
+      const [firstImage, ...extraImages] = imagePaths;
+      destPath = path.join(
+        outputDir,
+        `${sanitizeId(entry.id)}${path.extname(firstImage)}`,
+      );
+      try {
+        await fs.promises.rename(firstImage, destPath);
+      } catch {
+        await fs.promises.copyFile(firstImage, destPath);
+        await fs.promises.unlink(firstImage).catch(() => {});
+      }
+      for (const extra of extraImages) {
+        await fs.promises.unlink(extra).catch(() => {});
+      }
+      console.log(
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — đã lưu: ${destPath}`,
+      );
+      entry.success = true;
+      succeeded++;
+      if (onEntryDone) {
+        await onEntryDone(destPath).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Gửi file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+      }
+    } catch (err) {
+      console.error(
+        `[storyboardPipeline] [${entry.type}] ${entry.id} — lỗi:`,
+        err instanceof Error ? err.message : err,
+      );
+      entry.success = false;
+      failed++;
+      failedEntries.push({ id: entry.id, type: entry.type });
+      if (onEntryError) {
+        await onEntryError(entry.id).catch((err) => {
+          console.error(
+            `[storyboardPipeline] Thông báo tạo file "${destPath}" thất bại (không tính là lỗi generate):`,
+            err,
+          );
+        });
+        await sleep(1000);
+      }
+    }
+    await saveEntries(inputPath, entries);
+    await notifyVideoEntriesReadyIfEnd(entry);
+  }
+
+  return { outputDir, succeeded, failed, failedEntries };
+}
+
+// verifyVideos("/Users/linhnt/workspaces/bot/generate_video/storage/generated/ep01_new_art/ep01_new_art.json")
+//   .then(console.log)
+//   .catch(console.error);

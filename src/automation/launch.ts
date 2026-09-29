@@ -78,6 +78,15 @@ export async function launchRealChrome(
   useProxy = true,
   proxyBypass?: string,
   disableHttp2AndQuic = true,
+  /**
+   * Nghi vấn (tương quan thời điểm, CHƯA xác nhận hẳn — xem docstring
+   * disableGpu trong browser.ts): tắt GPU có thể phá fingerprint WebGL/canvas
+   * khiến Cloudflare Turnstile của ChatAI chuyển sang chế độ non-interactive
+   * không có checkbox để bấm, không bao giờ tự pass. Mặc định true (giữ
+   * nguyên hành vi tiết kiệm CPU cũ cho AIVideo/Pollo, nơi không có
+   * Turnstile) — ChatAI truyền false để thử nghiệm.
+   */
+  disableGpu = true,
 ): Promise<Browser> {
   if (
     !config.headless &&
@@ -93,24 +102,6 @@ export async function launchRealChrome(
 
   const args = [
     "--disable-blink-features=AutomationControlled",
-    // VPS chạy qua Xvfb (X server ẢO, không có GPU thật) — mặc định Chrome
-    // vẫn tự bật 1 process "gpu-process" riêng dùng SwiftShader (giả lập
-    // GPU BẰNG CHÍNH CPU, xem --enable-unsafe-swiftshader/--use-angle=
-    // swiftshader-webgl trong command line thật) để render/composite, dù
-    // không hề có tăng tốc phần cứng nào — chỉ tốn thêm CPU cho lớp giả lập
-    // đó. Xác nhận qua htop THẬT (2026-09-09): riêng process này chiếm
-    // 68.2% CPU một mình, đúng lúc CPU cả máy 100% (vấn đề gốc từ đầu phiên
-    // làm việc). Tắt hẳn GPU — Chrome quay lại render bằng CPU trực tiếp
-    // trong chính renderer process (không qua lớp gpu-process/SwiftShader
-    // trung gian), tránh lãng phí thêm CPU cho giả lập vô ích trên máy vốn
-    // không có GPU. Rủi ro: trang web dùng WebGL thật sẽ không chạy được
-    // (hiện chưa có bằng chứng pollo.ai/ChatAI/AIVideo cần WebGL cho phần
-    // composer/generate — cần theo dõi sau khi bật cờ này).
-    "--disable-gpu",
-    // Đi kèm "--disable-gpu" — chặn luôn đường lùi software-rasterizer
-    // (Skia raster bằng CPU qua đường GPU-process) phòng khi "--disable-gpu"
-    // một mình không chặn hết được mọi fallback.
-    "--disable-software-rasterizer",
     // ĐÃ THỬ (theo yêu cầu người dùng lúc VPS 100% CPU khi gen ảnh+video
     // chạy song song) rồi REVERT: "--disable-features=IsolateOrigins,site-
     // per-process" + "--renderer-process-limit=1" từng được thêm để ép
@@ -127,6 +118,32 @@ export async function launchRealChrome(
     // lấy ổn định RAM, vì RAM mới là nút thắt thật (xem free -h/ps aux thu
     // thập lúc chẩn đoán: 1 browser đã dùng ~2GB RSS trên VPS chỉ có 3.8GB).
   ];
+  if (disableGpu) {
+    args.push(
+      // VPS chạy qua Xvfb (X server ẢO, không có GPU thật) — mặc định Chrome
+      // vẫn tự bật 1 process "gpu-process" riêng dùng SwiftShader (giả lập
+      // GPU BẰNG CHÍNH CPU, xem --enable-unsafe-swiftshader/--use-angle=
+      // swiftshader-webgl trong command line thật) để render/composite, dù
+      // không hề có tăng tốc phần cứng nào — chỉ tốn thêm CPU cho lớp giả lập
+      // đó. Xác nhận qua htop THẬT (2026-09-09): riêng process này chiếm
+      // 68.2% CPU một mình, đúng lúc CPU cả máy 100% (vấn đề gốc từ đầu phiên
+      // làm việc). Tắt hẳn GPU — Chrome quay lại render bằng CPU trực tiếp
+      // trong chính renderer process (không qua lớp gpu-process/SwiftShader
+      // trung gian), tránh lãng phí thêm CPU cho giả lập vô ích trên máy vốn
+      // không có GPU.
+      //
+      // SỬA (nghi vấn, xem docstring tham số disableGpu): tắt GPU có thể phá
+      // WebGL/canvas fingerprint mà Cloudflare Turnstile dùng để đánh giá độ
+      // tin cậy trình duyệt — ChatAI (site DUY NHẤT dùng Turnstile trong dự
+      // án) truyền disableGpu=false để loại trừ khả năng này, đổi lại chấp
+      // nhận tốn thêm CPU cho SwiftShader trên trang ChatGPT.
+      "--disable-gpu",
+      // Đi kèm "--disable-gpu" — chặn luôn đường lùi software-rasterizer
+      // (Skia raster bằng CPU qua đường GPU-process) phòng khi "--disable-gpu"
+      // một mình không chặn hết được mọi fallback.
+      "--disable-software-rasterizer",
+    );
+  }
   if (disableHttp2AndQuic) {
     args.push("--disable-quic", "--disable-http2");
   }

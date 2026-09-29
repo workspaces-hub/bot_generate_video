@@ -60,6 +60,8 @@ EXPECTED_EVENT_ORDER
 EXPECTED_CAUSE_AND_EFFECT
 EXPECTED_REVEAL_OR_REVERSAL
 EXPECTED_END_STATE
+EXPECTED_CHARACTER_ORIENTATION
+EXPECTED_ANATOMICAL_SIDE_IF_MATERIAL
 FORBIDDEN_EXTRA_EVENTS
 PREVIOUS_VIDEO_AVAILABLE
 PREVIOUS_END_STATE
@@ -398,6 +400,94 @@ Chỉ báo lỗi khi:
 
 ---
 
+## 5A. XÁC ĐỊNH TRÁI–PHẢI VÀ HƯỚNG CƠ THỂ NHÂN VẬT
+
+Khi đánh giá bất kỳ hành động, tư thế, thương tích, trang phục, phụ kiện hoặc tương tác nào liên quan đến trái–phải, phải xác định phía giải phẫu của chính nhân vật, không được suy ra trực tiếp từ vị trí trên khung hình.
+
+Phải phân biệt:
+
+* `SCREEN_LEFT` và `SCREEN_RIGHT`: phía trái–phải theo góc nhìn của người xem.
+* `CHARACTER_LEFT` và `CHARACTER_RIGHT`: phía trái–phải giải phẫu của nhân vật.
+* `OBJECT_LEFT` và `OBJECT_RIGHT`: phía trái–phải riêng của vật thể nếu vật có hướng xác định.
+* `WORLD_POSITION`: vị trí thực tế trong không gian cảnh.
+
+Vị trí trên màn hình không tự động tương ứng với phía cơ thể của nhân vật.
+
+Phải xác định hướng của nhân vật:
+
+* Quay mặt về camera.
+* Quay lưng về camera.
+* Quay nghiêng.
+* Xoay một phần thân hoặc đầu.
+* Nằm, cúi, quỳ hoặc ở tư thế làm thay đổi hướng quan sát.
+* Xuất hiện qua gương hoặc bề mặt phản chiếu.
+* Có khả năng hình ảnh đã bị lật ngang.
+
+Khi nhân vật quay mặt về camera, phía trái khung hình thường tương ứng với phía phải của nhân vật và ngược lại.
+
+Khi nhân vật quay lưng về camera, phía trái–phải trên khung hình thường cùng chiều với phía trái–phải của nhân vật.
+
+Đây chỉ là quy tắc định hướng ban đầu, không được dùng làm bằng chứng duy nhất.
+
+Trước khi kết luận sai tay, sai chân, sai tai, sai mắt hoặc sai phía cơ thể, phải đối chiếu nhiều dấu hiệu:
+
+* Hướng đầu, mặt, ngực, vai, hông và bàn chân.
+* Cánh tay hoặc chân đang nối với phía nào của cơ thể.
+* Vị trí và hướng của ngón cái, lòng bàn tay và mu bàn tay.
+* Quan hệ giữa bộ phận cơ thể với quần áo, phụ kiện hoặc landmark giải phẫu.
+* Hướng actor đang đối diện.
+* Góc quan sát trước mặt, phía sau hoặc nghiêng.
+* Sự tồn tại của gương, kính, màn hình hoặc bề mặt phản chiếu.
+* Tính nhất quán qua nhiều frame liên tiếp.
+* Trạng thái trước và sau hành động.
+* Reference và yêu cầu trái–phải được khóa rõ trong `ORIGINAL_PROMPT`.
+
+Quy tắc này áp dụng cho mọi trường hợp, bao gồm:
+
+* Tay hoặc chân thực hiện hành động.
+* Tai hoặc mắt được tương tác.
+* Phía nhân vật bị chạm, giữ, đánh, kéo hoặc bị thương.
+* Phía đeo nhẫn, đồng hồ, vòng tay hoặc phụ kiện.
+* Phía cầm, trao, nhận hoặc sử dụng đạo cụ.
+* Hướng quay đầu hoặc cơ thể.
+* Vị trí của vết thương, vết bẩn, máu, nước mắt hoặc đặc điểm nhận dạng.
+* Quan hệ trái–phải giữa nhiều nhân vật.
+* Vị trí của nhân vật hoặc vật thể trong không gian cảnh.
+* Continuity của các chi tiết trái–phải giữa những frame hoặc video liên tiếp.
+
+Không được báo lỗi chỉ vì:
+
+* Một bộ phận nằm bên trái hoặc bên phải khung hình.
+* Camera đổi phía hoặc vượt qua trục.
+* Nhân vật xoay người làm vị trí trên màn hình thay đổi.
+* Góc quan sát khiến tay hoặc chân trông như đổi bên.
+* Hình ảnh được quan sát qua gương hoặc bề mặt phản chiếu.
+* Framing hoặc perspective làm quan hệ trái–phải khó nhận biết.
+* Một phần cơ thể bị che khuất.
+* Không đủ bằng chứng để xác định phía giải phẫu.
+
+Không được sử dụng quy tắc đơn giản:
+
+```text
+SCREEN_LEFT = CHARACTER_LEFT
+SCREEN_RIGHT = CHARACTER_RIGHT
+```
+
+Phải chuyển vị trí trên màn hình về hệ tọa độ của nhân vật trước khi so sánh với prompt hoặc reference.
+
+Chỉ tạo issue sai trái–phải khi:
+
+* `ORIGINAL_PROMPT` hoặc continuity khóa rõ phía cơ thể;
+* Có đủ bằng chứng xác định hướng của nhân vật;
+* Có thể xác định chắc chắn bộ phận hoặc phía giải phẫu thực tế;
+* Trạng thái quan sát được thực sự mâu thuẫn với yêu cầu.
+
+Nếu không thể xác định chắc chắn vì góc quan sát, che khuất, phản chiếu, chuyển động, biến dạng hoặc thiếu landmark, sử dụng `NOT_VERIFIABLE`; không tạo issue.
+
+Nếu nhiều frame cho kết quả khác nhau, phải kiểm tra xem nhân vật đã xoay người, camera đã đổi phía hoặc cảnh được phản chiếu hay chưa trước khi kết luận có continuity error.
+
+---
+
 ## 6. GENERATED_VIDEO
 
 ```text
@@ -684,3 +774,57 @@ Trước khi trả kết quả:
 11. Không suy đoán time skip hoặc hành động ngoài màn hình khi prompt yêu cầu direct continuation.
 12. Đã kiểm tra prompt hiện tại có tự mâu thuẫn với end state trước hay không.
 13. Không tạo nhiều issue trùng nhau cho cùng một lỗi nối clip.
+
+---
+
+## 13. KIỂM TRA CUỐI CHO TRÁI–PHẢI VÀ HƯỚNG CƠ THỂ
+
+Trước khi báo lỗi liên quan đến trái–phải:
+
+1. Đã xác định hướng cơ thể của nhân vật.
+2. Đã phân biệt screen side với character side.
+3. Đã kiểm tra góc quan sát trước, sau hoặc nghiêng.
+4. Đã kiểm tra nhân vật có xoay người hay không.
+5. Đã kiểm tra gương, phản chiếu hoặc khả năng hình ảnh bị lật ngang.
+6. Đã dùng landmark giải phẫu thay vì chỉ dùng vị trí trên khung hình.
+7. Đã kiểm tra nhiều frame liên tiếp nếu có thể.
+8. Đã đối chiếu với yêu cầu thực sự được khóa trong prompt hoặc continuity.
+9. Nếu chưa đủ bằng chứng, đã dùng `NOT_VERIFIABLE`.
+
+---
+
+## 14. XÁC ĐỊNH HƯỚNG CHỨC NĂNG CỦA ĐẠO CỤ VÀ ĐỐI TƯỢNG
+
+Với mọi đạo cụ có hướng sử dụng, phải kiểm tra vật thể có được xoay và đặt đúng hướng đối với người đang sử dụng hay không.
+
+Phải xác định:
+
+* Mặt trước, mặt sau, đầu trên, đầu dưới và cạnh mở của vật.
+* Hướng đọc của chữ, biểu mẫu, màn hình, nhãn hoặc ký hiệu.
+* Vị trí của actor so với vật thể.
+* Phía mà vật thể đang hướng tới.
+* Target hoặc người sử dụng có thể nhìn, đọc, cầm hoặc thao tác vật theo cách tự nhiên hay không.
+* Hướng của vật trước, trong và sau khi được trao hoặc sử dụng.
+
+Quy tắc này áp dụng chung cho:
+
+* Tài liệu, hợp đồng, thư, ảnh, bản đồ và biểu mẫu.
+* Điện thoại, máy tính bảng, laptop và màn hình.
+* Sách, hộp, túi, khay, chìa khóa, thẻ và công cụ.
+* Vũ khí, thiết bị điều khiển, phương tiện và mọi vật có đầu hoặc mặt sử dụng xác định.
+* Mọi hành động đưa, nhận, đọc, ký, trình bày, mở, đóng, cắm, lắp hoặc sử dụng vật thể.
+
+Ví dụ với tài liệu:
+
+* Không chỉ kiểm tra đúng người ký, đúng tay và đúng dòng ký.
+* Phải kiểm tra tài liệu có hướng thuận với người ký hay không.
+* Chữ và dòng ký phải có thể đọc tự nhiên từ vị trí của người ký.
+* Không được coi là đúng nếu tài liệu hướng thuận về phía người đưa hoặc camera nhưng quay ngược 180 độ đối với người ký.
+
+Chỉ tạo `PROP_ERROR` hoặc `WRONG_OBJECT_ORIENTATION` khi:
+
+* Vật thể có hướng chức năng xác định;
+* Actor và hướng của vật quan sát được đủ rõ;
+* Hướng thực tế khiến hành động phi logic, bất tiện rõ rệt hoặc không thể thực hiện đúng chức năng.
+
+Nếu chữ hoặc landmark trên vật không đủ rõ để xác định hướng, sử dụng `NOT_VERIFIABLE`.

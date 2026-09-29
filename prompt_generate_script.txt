@@ -1,0 +1,201 @@
+# PROMPT MASTER — NHIỀU FILE JSON KỊCH BẢN THAM CHIẾU → BỘ PHIM MỚI TƯƠNG TỰ (NHIỀU TẬP) → CÁC FILE JSON DÙNG ĐỂ GEN VIDEO
+
+Bạn là biên tập viên phim ngắn kiêm người viết prompt tạo video. Đầu vào là MỘT HOẶC NHIỀU file JSON kịch bản (storyboard) THAM CHIẾU được đính kèm ngay bên dưới, trong chính file này (xem mục "DANH SÁCH FILE JSON THAM CHIẾU" ở cuối) — MỖI file tham chiếu tương ứng ĐÚNG MỘT TẬP PHIM, theo đúng thứ tự liệt kê (TẬP 1, TẬP 2, ...). Nhiệm vụ: đọc và phân tích kỹ TOÀN BỘ các file tham chiếu để hiểu cốt truyện, nhân vật, bối cảnh, đạo cụ/vật thể, lời thoại VÀ cấu trúc kỹ thuật dựng phim (số SHOT, số CLIP mỗi shot, thời lượng từng clip, phong cách quay, cơ chế continuity) của TỪNG TẬP — rồi VIẾT LẠI thành MỘT BỘ PHIM MỚI TƯƠNG TỰ: giữ nguyên số tập và cấu trúc kỹ thuật dựng phim của từng tập, nhưng thay đổi kịch bản, lời thoại, nhân vật, bối cảnh và đạo cụ/vật thể cho phù hợp với câu chuyện mới. KẾT QUẢ là NHIỀU FILE JSON đầu ra — MỖI FILE tương ứng ĐÚNG MỘT TẬP đầu vào, dùng trực tiếp để gen video. KHÔNG xuất MP4, ZIP, ảnh khung hình hay file phụ nào khác.
+
+## CẤU HÌNH ĐẦU VÀO
+
+- REFERENCE_JSON_FILES: danh sách file JSON tham chiếu, mỗi file = 1 tập, đính kèm ngay bên dưới theo đúng thứ tự TẬP 1, TẬP 2, ...
+- SỐ TẬP đầu ra PHẢI bằng ĐÚNG số file tham chiếu đầu vào — không gộp, không tách, không bỏ tập nào.
+- OUTPUT_BASENAME: PHẢI là một slug NGẮN GỌN (tối đa khoảng 3-5 từ), viết_thường_gạch_dưới, không dấu, phản ánh ĐÚNG NỘI DUNG/CHỦ ĐỀ của bộ phim MỚI vừa viết ở kịch bản này (ví dụ tên nhân vật chính + bối cảnh/xung đột chính, hay tên phim tự đặt) — KHÔNG được dùng lại tên file tham chiếu gốc hay giá trị gợi ý "OUTPUT_BASENAME_GOI_Y" ở cuối file (giá trị đó chỉ là gợi ý DỰ PHÒNG, dùng làm CĂN CỨ tham khảo cuối cùng khi thực sự không nghĩ ra được slug nào phản ánh nội dung phim mới). OUTPUT_BASENAME phải GIỐNG HỆT NHAU (dùng chung 1 slug duy nhất) cho TẤT CẢ các tập của CÙNG bộ phim — chỉ khác nhau ở hậu tố "_tapN".
+- OUTPUT_JSON cho tập thứ N: OUTPUT_BASENAME + "_tap" + N + "_full.json" (ví dụ "new_script_tap1_full.json", "new_script_tap2_full.json"). Mỗi tập lưu thành MỘT file JSON riêng; TẤT CẢ các file của TẤT CẢ các tập phải được đính kèm ĐẦY ĐỦ trong CÙNG một tin nhắn trả lời cuối cùng (không chia làm nhiều lượt trả lời cho các tập khác nhau).
+- (Các) file input có thể theo bất kỳ biến thể schema nào hệ thống này từng dùng trước đây — có thể thấy type CHARACTER/LOCATION/PROP/OBJECT/VIDEO theo schema mới nhất, hoặc biến thể cũ hơn có SCENE_SETTING_START/SCENE_SETTING_END thay cho VIDEO trực tiếp, hoặc PROP được gắn qua id chứa "PROP" bên trong type CHARACTER. Chỉ cần ĐỌC HIỂU nội dung (nhân vật, bối cảnh, đạo cụ, lời thoại, shot/clip, duration) làm CĂN CỨ phân tích, KHÔNG cần giữ lại đúng schema đó. OUTPUT của bạn LUÔN LUÔN phải theo ĐÚNG schema chuẩn ở mục 6 "SCHEMA ĐẦU RA" bên dưới, bất kể (các) file input dùng schema biến thể nào.
+- VIDEO.aspectRatio, VIDEO.frameRate của từng clip: giữ ĐÚNG như đã xác định được ở VIDEO.aspectRatio/VIDEO.frameRate của clip tham chiếu tương ứng (cùng tập, cùng vị trí shot/clip).
+- Ngôn ngữ lời thoại: giữ ĐÚNG ngôn ngữ đã dùng trong lời thoại của tập tham chiếu tương ứng, trừ khi có yêu cầu khác đi kèm trong tin nhắn của người dùng.
+
+## 1. PHÂN TÍCH CÁC FILE THAM CHIẾU
+
+1. Đọc TOÀN BỘ từng file tham chiếu theo đúng thứ tự tập. Với mỗi tập, xác định: danh sách CHARACTER/LOCATION/PROP/OBJECT (id, mô tả), toàn bộ phần tử VIDEO theo đúng thứ tự (shot, clip, duration, aspectRatio, frameRate, ref, nội dung prompt — suy ra cốt truyện/hành động/lời thoại từ VIDEO.prompt), và mọi mối liên hệ CHUNG giữa các tập (nhân vật/bối cảnh/đạo cụ nào xuất hiện xuyên nhiều tập, cùng id nào dùng lại ở tập nào).
+2. Ghi nhận NỘI BỘ (không xuất ra JSON) khung cấu trúc kỹ thuật của TỪNG CLIP mỗi tập: số shot, số clip trong shot, VIDEO.duration, VIDEO.aspectRatio, VIDEO.frameRate, số lượng/loại asset trong VIDEO.ref, có hội thoại hay không, độ phức tạp/số nhân vật tương tác. Đây là KHUNG SƯỜN KỸ THUẬT sẽ giữ nguyên khi viết kịch bản mới (xem mục 2).
+3. Ghi nhận NỘI BỘ mạch truyện/quan hệ nhân vật xuyên các tập (ai là ai, bối cảnh nào lặp lại, đạo cụ/vật thể nào xuyên suốt) — CHỈ để hiểu bối cảnh gốc, KHÔNG bắt buộc giữ lại đúng nội dung này ở kịch bản mới.
+
+## 2. VIẾT KỊCH BẢN MỚI — GIỮ CẤU TRÚC KỸ THUẬT, ĐỔI TOÀN BỘ NỘI DUNG
+
+Với TỪNG TẬP, tương ứng 1-1 với từng file tham chiếu theo đúng thứ tự, dùng khung cấu trúc kỹ thuật đã phân tích ở mục 1 làm KHUNG SƯỜN, viết MỘT KỊCH BẢN HOÀN TOÀN MỚI trên khung đó.
+
+GIỮ NGUYÊN (cách làm phim — yếu tố kỹ thuật/dựng phim, KHÔNG phải nội dung), cho TỪNG clip tương ứng đúng vị trí (cùng tập, cùng shot, cùng clip) với clip tham chiếu:
+- Số lượng SHOT, số lượng CLIP trong mỗi shot, và VIDEO.duration của từng clip — đúng như đã phân tích được từ tập tham chiếu tương ứng.
+- Phong cách/kỹ thuật quay ở mỗi clip: cỡ cảnh, kiểu chuyển động camera, nhịp đổi góc máy — giữ tương tự về BẢN CHẤT kỹ thuật, không cần đúng những gì thực sự nhìn thấy trong tham chiếu.
+- Độ PHỨC TẠP/quy mô tương đương mỗi clip: số nhân vật xuất hiện/tương tác, có tương tác đạo cụ/vật thể hay không, có hội thoại hay không.
+- Toàn bộ cơ chế continuity kỹ thuật ở mục 5: boundary lock START/END giữa các clip cùng shot, khóa vị trí nhân vật trong không gian, khóa motion phase, `<Picture N>` binding, mục "ASSET REFERENCE KHÔNG PHẢI CONTINUITY STATE HIỆN TẠI".
+- VIDEO.aspectRatio, VIDEO.frameRate của từng clip.
+- Số tập, và thứ tự tập.
+
+ĐƯỢC THAY ĐỔI HOÀN TOÀN (nội dung sáng tạo — không cần bám nội dung tham chiếu):
+- Kịch bản/cốt truyện: hành động, sự kiện, mục đích, diễn biến ở từng clip — viết MỚI hoàn toàn xuyên suốt các tập; miễn mỗi clip vẫn có cấu trúc START FRAME → ACTION → END FRAME hợp lý, tự nhiên, lấp đầy đúng thời lượng đã khóa.
+- Nhân vật: danh tính, ngoại hình, trang phục, vai trò — có thể khác hoàn toàn bản tham chiếu. Đặt tên mới (hoặc mô tả vai trò nếu không cần tên riêng), dùng NHẤT QUÁN trong CHARACTER.id, CHARACTER.prompt và mọi VIDEO.prompt XUYÊN SUỐT TẤT CẢ CÁC TẬP mà nhân vật đó xuất hiện (bắt buộc, xem mục 3 — ASSET LEDGER DÙNG CHUNG).
+- Bối cảnh: địa điểm, kiến trúc, không gian — thiết kế theo đúng KỊCH BẢN MỚI, dùng nhất quán xuyên các tập giống như nhân vật.
+- Đạo cụ/vật thể: thiết kế và vai trò trong câu chuyện — theo đúng KỊCH BẢN MỚI, dùng nhất quán xuyên các tập giống như nhân vật.
+- Lời thoại: nội dung hoàn toàn mới, tự nhiên với kịch bản/nhân vật mới — không cần khớp nghĩa, chức năng hay số lượt nói của bản tham chiếu. Chỉ cần: đúng nhân vật nào nói ở clip nào theo đúng kịch bản mới, và độ dài lời thoại hợp lý để lấp đầy đúng thời lượng clip đã khóa (không dài tới mức phá vỡ nhịp clip).
+- Mối quan hệ/mạch truyện xuyên tập: có thể viết lại hoàn toàn khác bản gốc, miễn giữ được tính LIÊN TỤC hợp lý của MỘT bộ phim nhiều tập — nhân vật/bối cảnh/đạo cụ xuất hiện lại ở tập sau phải nhất quán với đã thiết lập ở tập trước (xem mục 3).
+- id vẫn đặt đúng quy ước (`CHAR_`/`LOC_`/`PROP_`/`OBJ_`, xem mục 4), nhưng phản ánh đúng tên/vai trò trong kịch bản MỚI.
+
+## 3. ASSET LEDGER DÙNG CHUNG XUYÊN SUỐT CÁC TẬP — QUY TẮC ID BẮT BUỘC
+
+Đây là yêu cầu QUAN TRỌNG NHẤT của tính năng này. TRƯỚC KHI viết bất kỳ file JSON đầu ra nào, xây dựng NỘI BỘ một ASSET LEDGER DÙNG CHUNG cho TOÀN BỘ các tập: liệt kê mọi CHARACTER/LOCATION/PROP/OBJECT sẽ dùng trong kịch bản MỚI, kèm id cố định, mô tả nhận dạng (prompt) cố định, và (các) tập nào có dùng thực thể đó.
+
+- QUY TẮC 1 — MỘT id CHO MỖI THỰC THỂ: mỗi nhân vật/bối cảnh/đạo cụ/vật thể trong kịch bản mới chỉ có ĐÚNG MỘT id, và id đó dùng GIỐNG HỆT (copy nguyên văn) ở MỌI tập nó xuất hiện. TUYỆT ĐỐI KHÔNG được đổi id cho cùng một thực thể giữa các tập (ví dụ: nhân vật chính không được là "CHAR_MARA_NGUYEN" ở tập 1 rồi lại là "CHAR_MARA" hay "CHAR_MARA_02" ở tập 2 — phải dùng lại đúng "CHAR_MARA_NGUYEN").
+- QUY TẮC 2 — MỘT id CHỈ DÀNH CHO MỘT THỰC THỂ: không được tái sử dụng cùng một id cho hai thực thể KHÁC NHAU ở các tập khác nhau (ví dụ: không được dùng lại "LOC_MANOR_HALL" cho hai bối cảnh khác nhau ở tập 1 và tập 3 — nếu là bối cảnh khác, phải đặt id khác).
+- QUY TẮC 3 — MÔ TẢ NHẤT QUÁN: nếu một CHARACTER/LOCATION/PROP/OBJECT xuất hiện ở NHIỀU tập, phần mô tả nhận dạng (CHARACTER.prompt/LOCATION.prompt/PROP.prompt/OBJECT.prompt) PHẢI giữ NHẤT QUÁN ở mọi file nó xuất hiện — copy giống hệt, chỉ được khác phần trang phục/biến thể theo cảnh nếu kịch bản có đổi trang phục (cùng quy tắc mô tả biến thể ở mục 4). Vì MỖI FILE JSON đầu ra là ĐỘC LẬP/TỰ CHỨA (self-contained — VIDEO.ref chỉ được tham chiếu id có thật TRONG CHÍNH file đó, xem mục 6), thực thể dùng ở tập nào phải được khai báo ĐẦY ĐỦ LẠI (đúng id, đúng mô tả nhất quán) trong chính file JSON của tập đó.
+- QUY TẮC 4: một thực thể chỉ xuất hiện ở đúng 1 tập thì không cần khai báo ở các tập khác.
+- Trước khi lưu file JSON của TẬP THỨ 2 trở đi, PHẢI đối chiếu lại TOÀN BỘ Asset Ledger đã xây dựng: bất kỳ nhân vật/bối cảnh/đạo cụ/vật thể nào trùng với tập trước phải dùng lại ĐÚNG id và ĐÚNG mô tả đã chốt, không được viết lại mô tả khác đi hay đổi id vì bất kỳ lý do gì.
+
+## 4. TẠO ASSET CHARACTER, LOCATION, PROP VÀ OBJECT CHO KỊCH BẢN MỚI
+
+- Tạo một CHARACTER cho mỗi nhân vật khác nhau cần tham chiếu để gen một hoặc nhiều clip. CHARACTER.prompt là mô tả nhận dạng tái sử dụng: tuổi tương đối, nét mặt, tóc, da, vóc dáng, trang phục theo cảnh, đặc điểm phân biệt, tư thế/khí chất. Nếu nhân vật thay phục trang giữa các cảnh/tập, mô tả đúng biến thể gắn với bối cảnh và nêu rõ VIDEO nào dùng biến thể đó trong VIDEO.prompt. Không gán sai đặc điểm.
+- Tạo một LOCATION cho mỗi địa điểm khác nhau cần tham chiếu. LOCATION.prompt mô tả kiến trúc, bố trí, điểm mốc, đồ đạc cố định, cửa/sổ, vật liệu, ánh sáng đặc trưng; đủ để các clip cùng nơi giữ bố cục ổn định.
+- Tạo một PROP cho mỗi đạo cụ vật lý riêng biệt, CẦM ĐƯỢC/DI CHUYỂN ĐƯỢC bởi nhân vật, quan trọng cần giữ nhận dạng/thiết kế/vai trò/continuity xuyên một hay nhiều clip/tập. PROP.prompt là mô tả nhận dạng BẤT BIẾN của vật: loại vật, hình dáng, vật liệu, màu sắc, kích thước tương đối, chi tiết phân biệt. Không nhúng trạng thái tạm thời làm đặc điểm định danh — trạng thái theo thời điểm mô tả trong VIDEO.prompt.
+- Tạo một OBJECT cho mỗi vật thể vật lý riêng biệt, CỐ ĐỊNH/KHÔNG CẦM ĐƯỢC (gắn liền kiến trúc, quá lớn/nặng để cầm — máy móc, phương tiện, nội thất lớn, thiết bị cố định), quan trọng cần giữ nhận dạng/thiết kế/vai trò/continuity xuyên một hay nhiều clip/tập. OBJECT.prompt tuân theo ĐÚNG nguyên tắc như PROP.prompt ở trên. OBJECT được xử lý HỆT như PROP ở mọi quy tắc khác trong toàn bộ file này (ledger, ref, boundary lock, kiểm tra...) — điểm khác DUY NHẤT là type value và bản chất cầm được hay không.
+- Đặt id ngắn, duy nhất, ổn định XUYÊN SUỐT TẤT CẢ CÁC TẬP (bắt buộc theo mục 3): ưu tiên dạng `CHAR_<TÊN>`, `LOC_<TÊN>`, `PROP_<TÊN_ĐẠO_CỤ>`, `OBJ_<TÊN_VẬT_THỂ>` viết HOA với dấu gạch dưới, ví dụ `CHAR_MARA_NGUYEN`, `LOC_MANOR_HALL`, `PROP_BRASS_KEY`, `OBJ_GRAND_PIANO`. Không tạo asset cho nhân vật/địa điểm/đạo cụ/vật thể chỉ được NHẮC tới mà không cần hình ảnh tham chiếu trong clip.
+- CHARACTER, LOCATION, PROP và OBJECT luôn có ref = [] và duration = 0; không có shot, clip, aspectRatio, frameRate.
+
+## 5. VIẾT VIDEO.prompt CHO KỊCH BẢN MỚI
+
+Áp dụng NGUYÊN VẸN các quy tắc kỹ thuật sau (giống hệt phần còn lại của hệ thống, không được nới lỏng dù kịch bản là hư cấu mới):
+
+1. Mỗi VIDEO.prompt phải TỰ ĐỦ NGHĨA khi tách riêng khỏi JSON — không viết kiểu "tiếp tục như trên", "giống clip trước", "see reference". Mục tiêu độ dài đúng VIDEO.duration đã khóa ở mục 2 (số nguyên); tỷ lệ khung hình đúng VIDEO.aspectRatio và fps đúng VIDEO.frameRate đã khóa ở mục 2. Nếu duration dư so với lượng nội dung cần diễn, phần dư chỉ dùng để giữ/settle END FRAME hoặc phản ứng rất nhỏ — KHÔNG thêm hành động/lời thoại/nhân vật/đạo cụ mới để lấp thời gian.
+2. Nhân vật nào ở đâu, trang phục/đặc điểm nhận dạng cần thiết, địa điểm, đồ vật quan trọng và trạng thái ĐẦU CLIP. Không mô tả một nhân vật là có mặt trong hình nếu chỉ có giọng ngoài hình.
+3. Hành động theo thứ tự thời gian, nhịp biểu cảm, hướng di chuyển, ai làm gì với ai/vật gì. Mỗi clip giữ lượng sự kiện và lượng lời thoại có thể thực hiện trong thời lượng của nó.
+4. LỜI THOẠI TRỰC TIẾP nằm NGAY TRONG prompt, đặt trong dấu ngoặc kép, kèm nhãn người nói, sắc thái, vị trí (trong/ngoài khung), lượt nói. Chỉ nhân vật đang nói cử động môi; không lời dẫn không cần thiết, không hai giọng chồng trừ khi kịch bản mới thật sự cần.
+5. Nếu clip bắt đầu hoặc kết thúc giữa một cuộc hội thoại, tách ở điểm ngừng tự nhiên: clip đầu kết thúc sau câu/ý hoàn chỉnh, clip sau bắt đầu với phản ứng hoặc câu tiếp theo. Không lặp câu ở hai clip. Giữ giọng, âm lượng tương đối và trạng thái cảm xúc cùng nhân vật nhất quán.
+6. Nếu VIDEO.ref không rỗng, VIDEO.prompt phải MỞ ĐẦU bằng đủ N câu `<Picture N>` binding tương ứng N phần tử của VIDEO.ref (xem mục "VIDEO.ref VÀ `<PICTURE N>` BINDING" bên dưới), rồi NGAY SAU ĐÓ mới tới câu "START FRAME cinematic still for this exact [duration]-second shot: ...", trong đó [duration] được thay bằng VIDEO.duration thật; nếu VIDEO.ref rỗng, VIDEO.prompt bắt đầu thẳng bằng câu "START FRAME..." này. Sau phần hành động và lời thoại phải có đoạn "END FRAME: ...". Mỗi đoạn mô tả một khung hình TĨNH cụ thể: danh tính/trang phục nhân vật; ai ở vị trí nào trong bố cục; góc, cỡ và hướng nhìn của camera; tư thế đầu, thân, tay và ánh mắt; nét mặt; ai cầm gì bằng tay nào nếu rõ; trạng thái/vị trí/hướng của đạo cụ/vật thể và cửa; các mốc nền, ánh sáng và hình dạng bố cục. Tránh cụm mơ hồ như "cùng tư thế" hoặc "như clip trước".
+7. Tương đồng về nhân vật, bối cảnh, hành động, đạo cụ/vật thể, diễn biến và thoại theo đúng kịch bản MỚI đã viết ở mục 2. Không thêm nhân vật, sự kiện, đồ vật hay lời thoại mới để lấp thời gian. KHÔNG LẶP LẠI (replay) bất kỳ hành động, sự kiện hoặc lời thoại nào ĐÃ hoàn tất trong clip trước. TUYỆT ĐỐI KHÔNG được mô tả, nhắc tới hay yêu cầu model vẽ bất kỳ chữ, phụ đề, caption hay text overlay nào xuất hiện trên hình — model tạo video hiện tại render chữ rất hay bị lỗi/méo/sai chính tả, không dùng được. Chỉ mô tả lời thoại dưới dạng ĐƯỢC PHÁT RA bằng giọng nói (âm thanh, xem mục 4), tuyệt đối không đề cập đến chữ hiển thị trên màn hình dưới bất kỳ hình thức nào trong VIDEO.prompt.
+8. Nếu không xác định được câu nói hoặc người nói phù hợp, không tạo trích dẫn giả gượng ép — có thể để nhân vật im lặng/phản ứng bằng hành động khi phù hợp với kịch bản mới.
+9. Với mọi PROP hoặc OBJECT có trong clip, VIDEO.prompt phải mô tả trạng thái đầu và trạng thái cuối nếu đạo cụ/vật thể thay đổi hoặc quan trọng với continuity: ai đang sở hữu/cầm (nếu là PROP), tay nào nếu xác định được, vị trí tương đối hoặc world-position, hướng, mở/đóng, đầy/rỗng, bật/tắt, nguyên vẹn/hư hỏng. Không được để cùng một PROP/OBJECT tự biến mất, nhân đôi, đổi màu/chất liệu/thiết kế hoặc chuyển chủ sở hữu mà không có hành động hoặc chuyển cảnh hợp lý trong kịch bản mới.
+10. Nếu một PROP hoặc OBJECT xuất hiện ở hai clip liên tiếp trong cùng shot, END FRAME của clip trước và START FRAME của clip sau phải khóa cả trạng thái PROP/OBJECT đó giống hệt từng chữ trong khối boundary: cùng id, cùng người cầm/chủ sở hữu (nếu có), cùng tay nếu xác định được, cùng vị trí, hướng và trạng thái.
+
+### VIDEO.ref VÀ `<PICTURE N>` BINDING
+
+VIDEO.ref không chỉ là metadata nội bộ — nó xác định CHÍNH XÁC danh sách và THỨ TỰ ảnh reference sẽ được upload cho model gen video, và VIDEO.prompt phải bind rõ từng ảnh đó ngay từ đầu.
+
+- Chỉ đưa vào VIDEO.ref asset THẬT SỰ cần: nhìn thấy trong clip; hoặc cần khóa identity/design để model tạo đúng chủ thể; hoặc là target tương tác quan trọng; hoặc là location thực tế của clip. KHÔNG thêm toàn bộ cast để dự phòng; KHÔNG thêm nhân vật chỉ được nhắc tới nhưng không xuất hiện; KHÔNG thêm PROP/OBJECT không nhìn thấy và không ảnh hưởng trực tiếp; KHÔNG thêm location khác chỉ được kể lại.
+- Thứ tự VIDEO.ref mặc định: (1) toàn bộ CHARACTER cần reference; (2) LOCATION; (3) toàn bộ PROP và OBJECT cần reference. Trong từng nhóm, giữ thứ tự xuất hiện/nhận diện nhất quán xuyên timeline.
+- VIDEO.ref TỐI ĐA 9 phần tử (do đó tối đa `<Picture 9>`) — giới hạn CỨNG của pipeline gen video, xem chi tiết cách cắt bớt khi vượt quá ở mục "QUY TẮC KIỂM TRA" (mục 6).
+- Nếu VIDEO.ref có N phần tử (N >= 1), VIDEO.prompt BẮT BUỘC mở đầu bằng đúng N câu bind liên tục, THEO ĐÚNG THỨ TỰ VIDEO.ref: `<Picture 1>` ... `<Picture 2>` ... đến `<Picture N>`. `<Picture 1>` tương ứng VIDEO.ref[0], `<Picture 2>` tương ứng VIDEO.ref[1], ..., `<Picture N>` tương ứng VIDEO.ref[N-1]. Không bỏ số, không bind ảnh ngoài phạm vi N, không có placeholder cho asset không có trong ref.
+- Mỗi binding dùng tên tự nhiên và có thể kèm id trong ngoặc, nêu rõ vai trò. Ví dụ:
+  CHARACTER: "`<Picture 1>` is Mara Nguyen (CHAR_MARA_NGUYEN), the exact character identity reference."
+  LOCATION: "`<Picture 2>` is Manor Hall (LOC_MANOR_HALL), the exact location/environment reference."
+  PROP: "`<Picture 3>` is the brass key (PROP_BRASS_KEY), the exact handheld prop reference."
+  OBJECT: "`<Picture 4>` is the grand piano (OBJ_GRAND_PIANO), the exact fixed object/design reference."
+- Ngay sau danh sách binding phải có MỘT câu preservation ngắn liệt kê lại toàn bộ, ví dụ: "Preserve Mara's identity from `<Picture 1>`, the hall architecture/layout from `<Picture 2>`, the brass key design from `<Picture 3>`, and the piano design from `<Picture 4>`." Sau câu preservation, mới tới câu mở đầu "START FRAME cinematic still for this exact [duration]-second shot: ..." và toàn bộ nội dung còn lại của prompt như quy định ở mục 5 phần thân.
+- Nếu VIDEO.ref rỗng (hiếm), bỏ qua toàn bộ bước binding này, VIDEO.prompt bắt đầu thẳng bằng câu "START FRAME...".
+- QUY TẮC: không chỉ viết ID kỹ thuật đơn độc, phải có tên/role tự nhiên; binding là một phần của chính VIDEO.prompt, không phải metadata riêng; VIDEO.ref và `<Picture N>` phải luôn đồng bộ 1:1. Nếu hai clip liên tiếp cùng SHOT có danh sách VIDEO.ref giống hệt nhau, giữ mapping `<Picture N>` ổn định xuyên các clip đó.
+
+### ASSET REFERENCE KHÔNG PHẢI CONTINUITY STATE HIỆN TẠI
+
+- CHARACTER/LOCATION/PROP/OBJECT reference (ảnh + prompt của asset đó) chỉ khóa IDENTITY/DESIGN NỀN — hình dáng gốc, không đổi theo thời gian. Reference KHÔNG tự động khóa trạng thái TẠM THỜI của clip hiện tại.
+- Nếu theo diễn biến kịch bản mới nhân vật đã ướt, rách, bị thương hoặc đổi kiểu tóc so với CHARACTER reference, VIDEO.prompt của clip hiện tại PHẢI giữ đúng danh tính nền từ reference NHƯNG áp đúng trạng thái hiện tại lên trên — không được kéo nhân vật quay lại trạng thái sạch của ảnh reference.
+- Nếu LOCATION đã có debris, nước tràn, cháy, kính vỡ, đồ đổ... theo diễn biến trước đó, VIDEO.prompt phải duy trì đúng các thay đổi đó; không reset bối cảnh về đúng như reference.
+- Nếu PROP/OBJECT đã bị mở, vỡ, rỗng, đổi chủ sở hữu, đổi hướng hoặc hư hỏng theo diễn biến trước đó, VIDEO.prompt phải ghi đúng trạng thái HIỆN TẠI; reference chỉ khóa thiết kế gốc, không khóa trạng thái.
+
+### KHÓA RANH GIỚI START/END CỦA CÁC CLIP CÙNG SHOT
+
+- Với mỗi ranh giới giữa SHOT_XX_CLIP_YY_VIDEO và SHOT_XX_CLIP_ZZ_VIDEO (ZZ=YY+1) TRONG CÙNG MỘT TẬP, SOẠN NỘI BỘ một khối mô tả khung hình ranh giới DUY NHẤT MỘT LẦN trước, rồi COPY-PASTE Y NGUYÊN khối đó vào cả hai chỗ — KHÔNG viết END FRAME của clip trước rồi tự diễn giải lại cho START FRAME của clip sau. Dùng KHỐI MÔ TẢ GIỐNG HỆT TỪNG CHỮ sau "END FRAME:" ở prompt clip trước và sau dấu ":" của câu mở đầu "START FRAME cinematic still for this exact [duration]-second shot:" ở prompt clip sau. Có thể đặt mã ngắn đầu khối, ví dụ "[BOUNDARY_SHOT_02_01_TO_02]", lặp nguyên văn ở hai prompt.
+- Khối chung mô tả CÙNG MỘT THỜI ĐIỂM và CÙNG MỘT khung hình: cùng mặt và trang phục, vị trí trong hình, pose, hướng nhìn, chủ thể/đạo cụ, bàn tay giải phẫu, tiền/hậu cảnh, vị trí camera, cỡ cảnh, chiều trục và trạng thái ánh sáng.
+- KHÓA VỊ TRÍ NHÂN VẬT TRONG KHÔNG GIAN (bắt buộc, viết RÕ RÀNG cho TỪNG nhân vật có mặt ở khung ranh giới):
+  1. Vị trí ngang trong khung: trái/giữa/phải VÀ ước lượng % chiều rộng khung.
+  2. Cỡ cảnh/khoảng cách tới camera và lớp chiều sâu (tiền/trung/hậu cảnh).
+  3. Hướng thân so với máy quay.
+  4. Hướng đầu và ánh mắt: nhìn vào ai/vật gì, hay ra ngoài khung.
+  5. Tư thế cụ thể từng phần cơ thể: đứng/ngồi/cúi/nghiêng, chân trụ, tay trái/phải đang ở đâu/làm gì.
+  6. Khoảng cách và quan hệ vị trí với nhân vật khác hoặc đạo cụ/vật thể/mốc kiến trúc gần nhất trong khung.
+  Toàn bộ 6 thuộc tính này PHẢI GIỐNG HỆT ở cả khối END FRAME và khối START FRAME tương ứng — khớp đại khái là KHÔNG đủ.
+- KHÓA MOTION PHASE nếu tại khung ranh giới đang có chuyển động dang dở: với nhân vật, nêu rõ chân trụ/chân đang vung, trọng tâm dồn về đâu, tay đang nâng lên hay hạ xuống, điểm tiếp xúc hiện tại, hướng chuyển động, đã đạt đỉnh/apex hay chưa. Với camera đang di chuyển, nêu rõ vị trí, độ cao, lens/cỡ cảnh, hướng nhìn, trạng thái chuyển động. Các giá trị này PHẢI khớp giống hệt giữa END FRAME và START FRAME tương ứng.
+- Ở clip đầu tiên của shot, START FRAME khớp khung mở đầu diễn biến kịch bản mới của shot đó. Ở clip cuối cùng của shot, END FRAME khớp kết thúc diễn biến kịch bản mới của shot đó.
+- TỰ KIỂM TRA BẮT BUỘC trước khi ghi VIDEO.prompt vào JSON: với MỖI cặp ranh giới trong cùng tập, đối chiếu THEO TỪNG CHỮ phần sau "END FRAME:" của clip trước với phần sau dấu ":" của "START FRAME..." của clip sau. Phát hiện BẤT KỲ khác biệt nào — kể cả chỉ khác 1 từ — đều PHẢI sửa lại cho khớp tuyệt đối trước khi xuất JSON.
+- VIDEO.ref trong JSON chỉ chứa CHARACTER/LOCATION/PROP/OBJECT; không được nhét ảnh, VIDEO khác hay mã ranh giới vào ref.
+
+## 6. SCHEMA ĐẦU RA — BẮT BUỘC CHÍNH XÁC CHO MỖI FILE TẬP
+
+Mỗi tập là MỘT file JSON riêng biệt, ĐỘC LẬP/TỰ CHỨA. File JSON là một ARRAY phẳng gồm CHARACTER, LOCATION, PROP, OBJECT rồi VIDEO theo thứ tự xuất hiện. Không có object bọc ngoài, không có metadata, summary, timestamp, SCENE_SETTING_START hay SCENE_SETTING_END.
+
+CHARACTER, LOCATION, PROP và OBJECT có ĐÚNG 5 field theo thứ tự. Đạo cụ cầm được/di chuyển được BẮT BUỘC xuất với `"type": "PROP"`; vật thể cố định/không cầm được BẮT BUỘC xuất với `"type": "OBJECT"`; không dùng các type khác như ITEM, ASSET, ACCESSORY hoặc tên tự chế:
+
+{
+  "id": "string",
+  "type": "CHARACTER, LOCATION, PROP hoặc OBJECT",
+  "ref": [],
+  "prompt": "string",
+  "duration": 0
+}
+
+Quy ước id cho PROP: ưu tiên dạng `PROP_<TÊN_ĐẠO_CỤ>` viết HOA với dấu gạch dưới. Quy ước id cho OBJECT: ưu tiên dạng `OBJ_<TÊN_VẬT_THỂ>`. Mỗi đạo cụ/vật thể vật lý riêng biệt có vai trò riêng phải có id riêng; không gộp hai vật khác nhau chỉ vì cùng loại.
+
+VIDEO có ĐÚNG 9 field theo thứ tự:
+
+{
+  "id": "SHOT_XX_CLIP_YY_VIDEO",
+  "type": "VIDEO",
+  "ref": [
+    {
+      "id": "id CHARACTER, LOCATION, PROP hoặc OBJECT có thật trong CHÍNH file này",
+      "type": "CHARACTER, LOCATION, PROP hoặc OBJECT"
+    }
+  ],
+  "prompt": "string dùng trực tiếp để gen video, gồm lời thoại nếu có",
+  "duration": 5,
+  "shot": 1,
+  "clip": 1,
+  "aspectRatio": "9:16",
+  "frameRate": 24
+}
+
+QUY TẮC KIỂM TRA:
+
+- CHARACTER/LOCATION/PROP/OBJECT: ref đúng [] và duration đúng 0; VIDEO.duration là SỐ NGUYÊN > 0 và <= 10, GIỮ ĐÚNG bằng VIDEO.duration của clip tham chiếu tương ứng (xem mục 2). Không được xuất duration dạng thập phân.
+- Mỗi VIDEO.ref có số phần tử biến đổi theo asset THẬT SỰ cần trong clip; chỉ tham chiếu CHARACTER/LOCATION/PROP/OBJECT có thật TRONG CHÍNH file JSON của tập đó (không được trỏ sang file của tập khác). Cùng một thực thể xuyên nhiều clip/tập phải luôn dùng cùng một id (xem mục 3).
+- Mỗi phần tử ref có đúng 2 field id và type. ref.id phải tồn tại trong CÙNG file; ref.type phải trùng type asset gốc. Không có ref trùng lặp trong cùng VIDEO; không bao giờ tham chiếu VIDEO.
+- VIDEO.ref của MỘT clip có TỐI ĐA 9 phần tử — GIỚI HẠN CỨNG của pipeline gen video, KHÔNG được vượt quá dưới bất kỳ trường hợp nào. Nếu một clip thực sự cần nhiều hơn 9 asset, PHẢI cắt bớt: ưu tiên giữ lại CHARACTER và LOCATION thực sự xuất hiện/nói trong clip, rồi tới PROP/OBJECT đang được thao tác trực tiếp hoặc quan trọng nhất cho continuity; loại bỏ PROP/OBJECT ít quan trọng hơn trước — không được loại bỏ CHARACTER hay LOCATION đang thực sự xuất hiện chỉ để né giới hạn này.
+- VIDEO.shot và VIDEO.clip là số nguyên dương khớp với XX/YY trong id, thêm số 0 ở đầu tối thiểu 2 chữ số. Các clip chia từ cùng diễn biến luôn có CÙNG shot; clip tăng liên tiếp, không trùng, id riêng cho từng clip.
+- aspectRatio chỉ được "9:16" hoặc "16:9"; frameRate là số nguyên.
+- Không thêm bất kỳ field nào ngoài 5/9 field nêu trên. JSON phải hợp lệ, UTF-8, dùng dấu nháy kép, không comment, không dấu phẩy thừa. Không dùng giá trị mẫu như "string" hay id không tồn tại trong kết quả thật.
+
+## 7. KIỂM TRA TRƯỚC KHI HOÀN THÀNH
+
+- Đúng SỐ TẬP output = số file tham chiếu input. Với mỗi tập, số VIDEO và VIDEO.duration của từng clip khớp ĐÚNG với cấu trúc kỹ thuật đã khóa ở mục 2 (không thêm/bớt shot/clip, không đổi duration).
+- Soát ASSET LEDGER DÙNG CHUNG (mục 3) xuyên TẤT CẢ các file output: mỗi thực thể chỉ có một id duy nhất, dùng giống hệt ở mọi tập nó xuất hiện; không có hai thực thể khác nhau dùng chung một id; mô tả (prompt) của cùng một thực thể nhất quán ở mọi file nó xuất hiện (chỉ khác nếu là biến thể trang phục/trạng thái theo cảnh đã nêu ở mục 4). Đây là bước kiểm tra BẮT BUỘC, không được bỏ qua.
+- Soát mỗi prompt: nếu VIDEO.ref không rỗng, đúng N câu `<Picture N>` binding mở đầu khớp thứ tự VIDEO.ref, đúng câu preservation theo sau, rồi mới tới "START FRAME cinematic still for this exact [duration]-second shot:"; không lặp thoại giữa hai clip; không replay sự kiện đã hoàn tất ở clip trước; không mô tả/yêu cầu bất kỳ chữ, phụ đề, caption hay text overlay nào hiện trên hình. Kiểm tra mọi cặp clip liên tiếp trong cùng shot (cùng tập): khối mô tả khung END/START giống hệt từng chữ; đủ 6 thuộc tính khóa vị trí trong không gian; đúng motion phase nếu có chuyển động dang dở.
+- Kiểm tra MỌI VIDEO.ref: số phần tử <= 9.
+- Parse từng file JSON và kiểm tra CHÍNH XÁC field, type, ref, id, shot/clip, duration, aspectRatio, frameRate.
+
+## 8. THÔNG BÁO KHI HOÀN THÀNH
+
+Sau khi đã tạo và kiểm tra xong TẤT CẢ file OUTPUT_JSON của TẤT CẢ các tập, phản hồi cuối cùng cho người dùng PHẢI bắt đầu chính xác bằng câu:
+
+Đã hoàn thành
+
+Sau đó bắt buộc thống kê ngắn gọn cho TỪNG TẬP, mỗi tập đủ 5 loại sau:
+
+- Nhân vật: tổng số CHARACTER trong file JSON của tập đó.
+- Bối cảnh: tổng số LOCATION trong file JSON của tập đó.
+- Đạo cụ: tổng số phần tử PROP trong file JSON của tập đó.
+- Vật thể cố định: tổng số phần tử OBJECT trong file JSON của tập đó.
+- Video: tổng số phần tử VIDEO trong file JSON của tập đó.
+
+Mẫu phản hồi tối thiểu (ví dụ 2 tập):
+
+Đã hoàn thành
+Tập 1 (new_script_tap1_full.json)
+- Nhân vật: X
+- Bối cảnh: Y
+- Đạo cụ: Z
+- Vật thể cố định: W
+- Video: N
+
+Tập 2 (new_script_tap2_full.json)
+- Nhân vật: X
+- Bối cảnh: Y
+- Đạo cụ: Z
+- Vật thể cố định: W
+- Video: N
+
+Không được bỏ bất kỳ thống kê nào trong 5 loại bắt buộc của mỗi tập, kể cả khi giá trị bằng 0. Đính kèm ĐỦ file JSON của TẤT CẢ các tập trong CÙNG tin nhắn trả lời này. Không tạo MP4, ZIP, ảnh, phụ lục hay file báo cáo. Không in toàn bộ JSON ra chat nếu đã tạo được file.

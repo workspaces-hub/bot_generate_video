@@ -28,14 +28,34 @@ export const promptTextareaCandidates = (page: Page): Array<() => Locator> => [
 ];
 
 /**
- * Toggle "Trò chuyện" (Chat) / "Công việc" (Work) — DOM thật xác nhận: 1 cặp
- * `<button role="radio" data-tpp-toggle-value="chatgpt|work">` (radio group,
- * `aria-checked="true"` trên nút đang chọn). Nhận diện qua attribute
- * `data-tpp-toggle-value="work"` (ổn định, không phụ thuộc ngôn ngữ hiển thị
- * — tiếng Việt là "Công việc", tiếng Anh là "Work").
+ * Toggle "Trò chuyện" (Chat) / "Công việc" (Work) — SỬA (xác nhận qua debug
+ * thật, job 57dec179-f6f1-4cdf-b695-437aded7364d): ChatGPT đã đổi hẳn cấu
+ * trúc — KHÔNG còn `role="radio"`/`data-tpp-toggle-value` nào cả (grep xác
+ * nhận 0 khớp trong HTML thật), khiến workToggle.click() cũ chờ mãi rồi
+ * timeout 15s (đúng lỗi đã gặp: "Không chọn được mode 'Work'..."). Cấu trúc
+ * MỚI: `<div role="group" aria-label="Composer mode">` bọc 2
+ * `<button type="button" aria-pressed="true|false">Chat</button>`/`Work`
+ * (không còn radio, chỉ còn text hiển thị + aria-pressed để biết nút nào
+ * đang chọn). Scope theo group "Composer mode" TRƯỚC khi tìm theo tên nút —
+ * tránh khớp nhầm chữ "Work" xuất hiện RIÊNG Ở NƠI KHÁC trên trang (vd tag
+ * nhỏ "Work" cạnh tên hội thoại trong sidebar, xác nhận có thật trong cùng
+ * trang debug này).
  */
+const composerModeToggleGroupLocator = (page: Page): Locator =>
+  page.getByRole("group", { name: "Composer mode" });
+
 export const workModeToggleLocator = (page: Page): Locator =>
-  page.locator('button[role="radio"][data-tpp-toggle-value="work"]');
+  composerModeToggleGroupLocator(page).getByRole("button", {
+    name: "Work",
+    exact: true,
+  });
+
+/** Cùng group "Composer mode" với workModeToggleLocator ở trên, giá trị còn lại ("Trò chuyện"/"Chat"). */
+export const chatModeToggleLocator = (page: Page): Locator =>
+  composerModeToggleGroupLocator(page).getByRole("button", {
+    name: "Chat",
+    exact: true,
+  });
 
 /**
  * CHƯA có DOM thật xác nhận (tính năng upload ảnh tham chiếu mới, chưa chạy
@@ -50,8 +70,21 @@ export const workModeToggleLocator = (page: Page): Locator =>
 export const fileUploadInputLocator = (page: Page): Locator =>
   page.locator('input[type="file"]').first();
 
-/** Nút gửi prompt (icon mũi tên) cạnh ô nhập. */
+/**
+ * Nút gửi prompt (icon mũi tên) cạnh ô nhập.
+ *
+ * SỬA (xác nhận qua debug thật, job 5de37345-716d-47e6-8041-07c165ef0524):
+ * ChatGPT đã đổi hẳn nút này — KHÔNG còn `data-testid="send-button"` (thuộc
+ * tính này biến mất khỏi DOM hoàn toàn) VÀ `aria-label` đổi từ "Send prompt"
+ * thành ĐÚNG "Send" (không còn chữ "prompt"), khiến CẢ 2 candidate cũ đều
+ * không khớp được nữa — DOM thật xác nhận:
+ * `<button type="submit" class="... bg-composer-primary ..." aria-label="Send">`.
+ * Thêm candidate mới khớp CHÍNH XÁC (exact, tránh khớp nhầm các nút khác có
+ * chữ "Send" là 1 phần tên, vd "Send to...") lên đầu; giữ 2 candidate cũ
+ * phía sau làm dự phòng (phòng site đổi lại/A-B test khác tài khoản).
+ */
 export const sendButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.getByRole("button", { name: "Send", exact: true }),
   () => page.locator('button[data-testid="send-button"]'),
   () => page.getByRole("button", { name: /send prompt/i }),
 ];
@@ -87,12 +120,29 @@ export const workingIndicatorLocator = (page: Page): Locator =>
  * 0 phần tử dù ảnh đã tạo xong thật. Cấu trúc CHUNG cho MỌI lượt trả lời của
  * ChatAI (cả text lẫn ảnh) là `<section data-testid="conversation-turn-N">`
  * chứa 1 descendant mang class "agent-turn" — dùng cấu trúc này thay vì
- * attribute data-message-author-role để không bỏ sót trường hợp ảnh.
+ * attribute data-message-author-role để không bỏ sót trường hợp ảnh. Nhánh
+ * này áp dụng cho chế độ "Chat" (chatModeToggleLocator).
+ *
+ * BỔ SUNG nhánh RIÊNG cho chế độ "Work"/"Công việc" (workModeToggleLocator)
+ * — xác nhận qua debug thật (job 9ff64b1a-886f-4aec-97f4-af6f877a5cea VÀ
+ * 7c2ddec9-8148-4855-969d-edde0c12fa83, cả 2 đều lặp vô hạn trong
+ * sendMessage dù ChatAI đã trả lời XONG THẬT — "Analyzed" + đầy đủ nội dung
+ * + link file JSON hiện rõ trên trang): ở mode Work, DOM KHÔNG hề có
+ * `conversation-turn`/`.agent-turn`/`data-message-author-role` (0 phần tử,
+ * đã grep toàn bộ HTML xác nhận) — cấu trúc THẬT SỰ dùng là
+ * `<div data-content-search-unit-key="fallback-turn-N:M:assistant" ...>`
+ * (attribute LUÔN kết thúc bằng ":assistant" cho lượt trả lời của ChatAI,
+ * xác nhận cả 2 job trên đều khớp) bọc ngoài `<h4 data-conversation-role=
+ * "assistant">` (sr-only) và nội dung markdown thật. Vì mode Work không có
+ * `.agent-turn` nên nhánh Chat ở trên khớp 0 phần tử — phải OR thêm nhánh
+ * này, không thay thế, để hasAssistantTurn/readLatestAssistantMessage nhận
+ * đúng lượt trả lời ở CẢ HAI mode thay vì treo vô hạn (xem sendMessage).
  */
 export const assistantMessageLocator = (page: Page): Locator =>
   page
     .locator('section[data-testid^="conversation-turn-"]')
-    .filter({ has: page.locator(".agent-turn") });
+    .filter({ has: page.locator(".agent-turn") })
+    .or(page.locator('[data-content-search-unit-key$=":assistant"]'));
 
 /**
  * File ChatAI tạo ra và đính kèm trong 1 tin nhắn trả lời (vd qua code
@@ -111,7 +161,13 @@ export const assistantMessageLocator = (page: Page): Locator =>
  *    JSON có thật, ChatAI báo đã tạo, nhưng bot không tải được gì cả):
  *    `<button aria-label="📄 Tải file pip_mouse_..._full.json" class="behavior-btn ... entity-underline ...">📄 Tải file ..._full.json</button>`
  *    — nhận diện qua aria-label KẾT THÚC bằng ".json" (xem inlineFileLinkLocator).
- * fileAttachmentLocator gộp cả 3 — dùng để CHECK "đã có file xuất hiện chưa"
+ * 4. Chế độ "Work" (xem docstring assistantMessageLocator) — DOM HOÀN TOÀN
+ *    KHÁC, không phải `<button>` mà là `<span role="button">`, xác nhận qua
+ *    debug thật (job 9ff64b1a-886f-4aec-97f4-af6f877a5cea):
+ *    `<span data-file-reference="true" data-markdown-copy-text="X.json"
+ *    role="button" aria-label="Open preview of X.json">` — nhận diện qua
+ *    attribute `data-file-reference="true"` (xem workModeFileReferenceLocator).
+ * fileAttachmentLocator gộp cả 4 — dùng để CHECK "đã có file xuất hiện chưa"
  * (vd sendMessage coi đây là dấu hiệu ChatAI trả lời xong); còn lúc THỰC SỰ bấm
  * tải (downloadAttachedFiles trong chatAI.ts) phải ưu tiên
  * downloadFileLinkLocator/inlineFileLinkLocator trước, không bấm nhiều nút
@@ -123,7 +179,58 @@ export const fileAttachmentLocator = (message: Locator): Locator =>
       'button[aria-label^="Download "]',
       'button[class*="group/open-file"]',
       'button[aria-label$=".json"]',
+      '[data-file-reference="true"]',
+      '[class*="group/resource-row"]',
     ].join(", "),
+  );
+
+/**
+ * Chế độ "Work" — file tham chiếu render dạng `<span role="button"
+ * data-file-reference="true" data-markdown-copy-text="<filename>"
+ * aria-label="Open preview of <filename>">` NGAY TRONG đoạn markdown, KHÔNG
+ * PHẢI `<button>` như mọi biến thể "Chat" khác (xem fileAttachmentLocator
+ * mục 4) — xác nhận qua debug thật (job 9ff64b1a-886f-4aec-97f4-af6f877a5cea
+ * VÀ 7c2ddec9-8148-4855-969d-edde0c12fa83).
+ *
+ * SỬA (xác nhận qua debug thật, job ec31faa8-2a40-48ae-904a-26e6a7002b5d):
+ * bấm span này KHÔNG mở được panel xem trước nào ("screen-threadFlyOut"
+ * count=0 trong HTML chụp lại NGAY SAU khi bấm) — nghi đây chỉ là 1 trích
+ * dẫn/tham chiếu trong văn bản (giống citation), không phải nút tương tác
+ * thật. Hạ xuống làm phương án CUỐI CÙNG (sau
+ * workModeResourceCardDownloadButtonLocator, xem docstring đó — có bằng
+ * chứng thật đáng tin cậy hơn hẳn), chỉ dùng khi resource card không tồn
+ * tại vì lý do nào đó.
+ */
+export const workModeFileReferenceLocator = (message: Locator): Locator =>
+  message.locator('[data-file-reference="true"]');
+
+/**
+ * Chế độ "Work" — "resource card" hiện SAU đoạn trả lời (KHÁC hẳn span
+ * trích dẫn NGAY TRONG văn bản ở workModeFileReferenceLocator) — xác nhận
+ * qua debug thật (job ec31faa8-2a40-48ae-904a-26e6a7002b5d, ĐÚNG lúc
+ * workModeFileReferenceLocator bấm không ăn thua): DOM có sẵn 1 khối
+ * `<span class="group/resource-row ...">` (cùng quy ước đặt tên
+ * "group/..." với "group/open-file" đã dùng cho fileCardLocator) chứa 2 nút
+ * RIÊNG — 1 nút phủ toàn bộ card `aria-label="Open preview of <filename>"`,
+ * và 1 nút icon CHỈ hiện khi hover `aria-label="Download file"` (generic,
+ * KHÔNG có tên file — khác hẳn quy ước aria-label="Download <filename>" của
+ * downloadFileLinkLocator). Nút "Download file" này mới là nút tải THẬT
+ * (mục đích rõ ràng qua icon + nhãn, không mơ hồ như span trích dẫn).
+ *
+ * QUAN TRỌNG: vì aria-label CHUNG CHUNG (không có tên file), KHÔNG dùng để
+ * dedupe/đặt tên file khi có NHIỀU file cùng lượt — downloadAttachedFiles
+ * phải tự tra thêm attribute `title` (tên file thật) trên phần tử hiển thị
+ * tên trong CÙNG resource-row này (workModeResourceCardRowLocator) làm nhãn
+ * thay thế.
+ */
+export const workModeResourceCardRowLocator = (message: Locator): Locator =>
+  message.locator('[class*="group/resource-row"]');
+
+export const workModeResourceCardDownloadButtonLocator = (
+  message: Locator,
+): Locator =>
+  workModeResourceCardRowLocator(message).locator(
+    'button[aria-label="Download file"]',
   );
 
 /**
@@ -159,10 +266,22 @@ export const downloadFileLinkLocator = (message: Locator): Locator =>
  * hẳn biến thể CÓ emoji "📄 Tải file" (job 4c746641, xác nhận tải được thật).
  * Vì độ tin cậy không chắc chắn, dùng làm phương án CUỐI CÙNG, sau
  * fileCardLocator (xem thứ tự ưu tiên trong downloadAttachedFiles).
+ *
+ * SỬA (xác nhận qua debug thật, job 14dae602-71eb-4d36-93bb-01439ee0252e —
+ * job "Tạo kịch bản mới" nhiều tập): thêm biến thể THỨ BA, KHÔNG kèm emoji
+ * VÀ aria-label KHÔNG kết thúc bằng ".json" — mỗi tập có 1 nút RIÊNG dạng
+ * `<button aria-label="Tải file JSON Tập 1" class="behavior-btn ...
+ * entity-underline ...">` (icon + text "Tải file JSON Tập 1" là nội dung
+ * HIỂN THỊ thật, không phải chỉ aria-label) — trước đây hoàn toàn KHÔNG khớp
+ * locator nào (không ".json" ở cuối, không "group/open-file", không
+ * "Download "), khiến cả 3 locator trong downloadAttachedFiles đều
+ * count()=0 và bỏ sót file dù ChatAI đã thật sự đính kèm. Thêm điều kiện
+ * OR khớp aria-label BẮT ĐẦU bằng "Tải file" (cụm ChatAI luôn dùng cho mọi
+ * nút tải file tiếng Việt, có hoặc không có emoji/tên file ở cuối).
  */
 export const inlineFileLinkLocator = (message: Locator): Locator =>
   message.locator(
-    'button[aria-label$=".json"]:not([class*="group/open-file"])',
+    'button[aria-label$=".json"]:not([class*="group/open-file"]), button[aria-label^="Tải file"]:not([class*="group/open-file"])',
   );
 
 /**
@@ -194,11 +313,47 @@ export const regenerateErrorButtonCandidates = (page: Page): Array<() => Locator
   () => page.getByRole("button", { name: /^thử lại$/i }),
 ];
 
+/**
+ * ChatGPT báo đang xử lý CHẬM HƠN bình thường (thường do quá tải hạ tầng
+ * phía ChatGPT) — nguyên văn: "Our systems are thinking a bit more about
+ * this request before responding." Theo yêu cầu người dùng: gặp trạng thái
+ * này thì reload lại trang thay vì tiếp tục chờ (xem sendMessage) — cùng
+ * cách xử lý "Something went wrong"/Retry ở trên, khác ở chỗ trạng thái này
+ * KHÔNG có nút bấm nào, chỉ hiện text, nên hành động khắc phục duy nhất là
+ * tự reload.
+ */
+export const thinkingLongerIndicatorLocator = (page: Page): Locator =>
+  page.getByText(
+    "Our systems are thinking a bit more about this request before responding.",
+  );
+
 /** Dấu hiệu CHƯA đăng nhập (trang ChatAI hiện màn hình đăng nhập). */
 export const signInIndicatorCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByText(/^log in$/i),
   () => page.getByRole("button", { name: /^log in$/i }),
 ];
+
+/**
+ * Nút mở menu tài khoản (góc dưới-trái sidebar) — DOM thật xác nhận:
+ * `<button aria-label="Open profile menu">` chứa tên tài khoản (vd "Mr An")
+ * và tên gói (vd "Plus"/"Pro"/"Free") ở 2 <span> con. Theo yêu cầu người
+ * dùng: dùng để log lại xem 2 lần chạy (vd VPS vs local) có đang đăng nhập
+ * CÙNG tài khoản/gói hay không — dự án có sẵn NHIỀU session riêng
+ * (chatai-session.json/_L/_Y, xem config.ts), khác tài khoản/gói có thể
+ * khiến ChatGPT cấp quyền dùng tool (Python/ffmpeg/Code Interpreter) khác
+ * hẳn nhau, dẫn tới chênh lệch chất lượng kết quả phân tích RẤT lớn giữa 2
+ * lần chạy dù cùng 1 prompt.
+ *
+ * SỬA (xác nhận qua debug thật, job 2670e114-86ee-4f67-a0d8-d0f15dc8b151):
+ * trang có ĐÚNG 2 phần tử khớp `[aria-label="Open profile menu"]` cùng lúc —
+ * 1 bản "sidebar thu gọn" (`aria-busy="true"` MÃI MÃI, chỉ có text
+ * sr-only "Loading profile", KHÔNG BAO GIỜ có dữ liệu thật vì không hiển
+ * thị nên ChatGPT không buồn tải) và 1 bản "sidebar đầy đủ" (có avatar +
+ * tên + gói thật, ĐANG HIỂN THỊ). `.first()` trước đây luôn khớp đúng bản
+ * ẩn/kẹt loading — thêm `:visible` để chỉ khớp bản đang hiển thị thật.
+ */
+export const accountMenuButtonLocator = (page: Page): Locator =>
+  page.locator('button[aria-label="Open profile menu"]:visible');
 
 /**
  * Nút chọn mức "reasoning effort" hiện ở toolbar cạnh ô nhập. CHỈ LÀ NHÃN
@@ -253,6 +408,51 @@ export const effortSliderControlLocator = (page: Page): Locator =>
 /** Proxy hiển thị giá trị hiện tại của thanh trượt mức hỗ trợ — chỉ đọc attribute, không thao tác trực tiếp lên đây. */
 export const effortSliderThumbLocator = (page: Page): Locator =>
   page.locator('span[role="slider"]');
+
+/**
+ * Nhãn TÊN THẬT (vd "Light"/"Medium"/"High"/"Max") của nấc thanh trượt Power
+ * ĐANG chọn, đọc được NGAY CẢ KHI popup thanh trượt đang mở — xác nhận qua
+ * lỗi thật (script test-chatai-select-model.ts): effortLabelLocator (span
+ * có data-max-effort) chỉ tồn tại ở trạng thái nút toolbar ĐÃ ĐÓNG (hiện
+ * dạng rút gọn "GPT-6 Astra | High") — biến mất HOÀN TOÀN (0 phần tử) khi
+ * popup đang mở, nên KHÔNG dùng được để dò từng nấc lúc đang thao tác trên
+ * thanh trượt (khác effortLabelLocator — hàm đó chỉ đáng tin lúc CHƯA mở
+ * popup, xem selectMaxReasoningEffort). Vùng thông báo trợ năng (aria-live,
+ * class chứa "KeyboardAnnouncement" — hash CSS-module đổi được nên chỉ khớp
+ * theo substring) LUÔN cập nhật đúng tên nấc + vị trí dạng "Light, 1 of 5."
+ * mỗi khi bấm ArrowLeft/ArrowRight, kể cả lúc popup đang mở — lọc thêm bằng
+ * text pattern ", N of M" để phân biệt với span thông báo hướng dẫn chung
+ * ("Use Left and Right arrow keys...") cũng dùng chung class.
+ */
+export const effortSliderAnnouncementLocator = (page: Page): Locator =>
+  page
+    .locator('[class*="KeyboardAnnouncement"]')
+    .filter({ hasText: /,\s*\d+\s+of\s+\d+/i });
+
+/**
+ * Item "Select model" (có mũi tên chevron) trong popup mở ra từ
+ * modelSelectorButtonCandidates — bấm vào đây để chuyển từ "simple view"
+ * (chỉ có thanh trượt Power) sang "advanced view" (danh sách ĐẦY ĐỦ tên
+ * model, xem modelOptionLocator bên dưới) — DOM thật xác nhận
+ * (storage/debug/inspect-chatai-model-picker*.html, mode "Work"):
+ * `<div role="menuitem" aria-label="Select model" ...><span>...<span
+ * data-max-effort="false">GPT-5.6 Sol</span></span><svg .../chevron-right...
+ * /></div>`. CHỈ hiện danh sách model đầy đủ (GPT-6 Astra, GPT-5.6
+ * Sol/Terra/Luna, GPT-5.5...) ở mode "Work" (xem workModeToggleLocator) —
+ * mode "Chat" chỉ có 2 lựa chọn (GPT-5.6 Sol, GPT-5.5).
+ */
+export const modelPickerSelectModelToggleLocator = (page: Page): Locator =>
+  page.locator('[role="menuitem"][aria-label="Select model"]');
+
+/**
+ * 1 model cụ thể trong "advanced view" (menuitemradio) — khớp theo
+ * substring tên hiển thị (đủ để phân biệt, không trùng tên nào khác, vd
+ * "GPT-6 Astra" không phải substring của "GPT-5.6 Sol/Terra/Luna" hay
+ * ngược lại). Chỉ tồn tại/thấy được SAU khi đã bấm
+ * modelPickerSelectModelToggleLocator để vào advanced view.
+ */
+export const modelPickerOptionLocator = (page: Page, modelName: string): Locator =>
+  page.locator('[role="menuitemradio"]').filter({ hasText: modelName });
 
 /**
  * Tin nhắn trả lời TEXT thường (KHÔNG dùng cho phản hồi tạo ảnh — xem

@@ -9,9 +9,11 @@ import {
 } from "../automation/aiVideo";
 import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
 import { SCRIPT_SECTION_MARKER } from "../automation/chatAI";
+import { downloadTelegramMediaViaMTProto } from "../automation/telegramMTProto";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import {
   generatedDirFor,
+  generatedImageDirFor,
   sanitizeId,
   type StoryboardEntry,
 } from "../automation/storyboardPipeline";
@@ -20,9 +22,10 @@ import {
   confirmImageGeneration,
   confirmImageGenerationPollo,
   confirmSceneGeneration,
+  confirmSceneGenerationPollo,
   confirmVideoGeneration,
+  confirmVideoGenerationComfy,
   confirmVideoGenerationPollo,
-  continueFailedStoryboardImages,
   enqueueJob,
   isStoryboardJobQueued,
   stopAll,
@@ -33,11 +36,16 @@ import {
   CHATAI_CHECK_BUTTON_LABEL,
   CONTINUE_SCENE_FRAME_BUTTON_LABEL,
   CONTINUE_VIDEO_BUTTON_LABEL,
+  GENERATE_SCRIPT_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
+  SCRIPT_REFERENCE_BUTTON_LABEL,
   STOP_ALL_BUTTON_LABEL,
+  UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL,
+  UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL,
   VIDEO_REF_BUTTON_LABEL,
+  VIDEO_REFERENCE_BUTTON_LABEL,
   promptMenu,
 } from "./keyboard";
 
@@ -49,8 +57,13 @@ type PendingMode =
   | "omniRef"
   | "chatAI"
   | "chatAICheck"
+  | "scriptReference"
+  | "videoReference"
+  | "generateScript"
   | "continueVideo"
-  | "continueSceneFrame";
+  | "continueSceneFrame"
+  | "updateGenerateScriptPrompt"
+  | "updateVideoReferencePrompt";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -170,6 +183,20 @@ async function downloadTelegramPhoto(
   return imagePath;
 }
 
+/**
+ * Telegram Bot API (api.telegram.org) CHỈ cho bot TẢI file <= 20MB qua
+ * getFile/getFileLink — giới hạn CỐ ĐỊNH của chính Bot API (khác hẳn giới
+ * hạn UPLOAD, có thể tới 2GB), không phải lỗi mạng tạm thời nên retry vô
+ * ích. Dùng để nhận diện lỗi này rồi fallback sang MTProto (xem
+ * downloadTelegramVideoRobust) thay vì báo lỗi chung chung.
+ */
+function isTelegramFileTooBigError(err: unknown): boolean {
+  return err instanceof Error && /file is too big/i.test(err.message);
+}
+
+const TELEGRAM_FILE_TOO_BIG_REPLY =
+  "❌ File vượt quá 20MB — giới hạn CỐ ĐỊNH của Telegram Bot API khi bot tải file (khác giới hạn upload, không do bot lỗi). Nén/cắt nhỏ file xuống dưới 20MB rồi gửi lại.";
+
 /** Tải 1 file Telegram bất kỳ (ảnh/video/audio, dùng cho "omniRef") về local. */
 async function downloadTelegramFile(
   ctx: Context,
@@ -191,12 +218,127 @@ async function downloadTelegramFile(
 }
 
 /**
+ * Dùng cho video "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL) —
+ * video này thường vượt 20MB (giới hạn getFile của Bot API, xem
+ * isTelegramFileTooBigError), khác các luồng ảnh/omniRef khác thường nhỏ.
+ * Thử downloadTelegramFile (Bot API) TRƯỚC — nhanh/đơn giản, đủ dùng cho
+ * file <20MB; CHỈ khi dính đúng lỗi "file is too big" mới fallback sang
+ * MTProto (downloadTelegramMediaViaMTProto, xem telegramMTProto.ts) — tải
+ * trực tiếp qua giao thức gốc, không bị chặn ở mốc 20MB.
+ */
+async function downloadTelegramVideoRobust(
+  ctx: Context,
+  fileId: string,
+  chatId: number,
+  messageId: number,
+  ext: string,
+): Promise<string> {
+  try {
+    return await downloadTelegramFile(ctx, fileId, ext);
+  } catch (err) {
+    if (!isTelegramFileTooBigError(err)) throw err;
+    console.warn(
+      `[bot] Video vượt 20MB (Bot API) — fallback tải qua MTProto (chat ${chatId}, message ${messageId}).`,
+    );
+    await fs.mkdir(config.uploadsDir, { recursive: true });
+    const filePath = path.join(config.uploadsDir, `${randomUUID()}${ext}`);
+    await downloadTelegramMediaViaMTProto(chatId, messageId, filePath);
+    return filePath;
+  }
+}
+
+/**
+ * Dùng chung cho cả 4 nơi nhận video "Tham chiếu kịch bản"/"Tham chiếu
+ * video" (qua message("video") lẫn message("document")) — tải video rồi
+ * enqueue job "scriptReferenceVideo" (xem submitScriptReferenceVideoJob).
+ *
+ * QUAN TRỌNG: tải video KHÔNG await trong handler nữa — chạy ở NỀN (IIFE
+ * "void (async () => {...})()"). Xác nhận qua lỗi thật (2026-09-29):
+ * "TimeoutError: Promise timed out after 90000 milliseconds" — handlerTimeout
+ * của Telegraf (đã nới lên 10 phút ở index.ts, xem đó) là 1 giá trị CỐ ĐỊNH,
+ * trong khi video "Tham chiếu kịch bản" có thể dài tới hàng chục phút/1
+ * tiếng — không có con số cố định nào chắc chắn đủ cho MỌI video, kể cả 10
+ * phút. Tải ở nền loại bỏ hẳn việc phải đoán 1 con số timeout "đủ lớn": thời
+ * gian tải KHÔNG còn tính vào handlerTimeout nữa (handler trả lời NGAY rồi
+ * kết thúc), chỉ còn bị giới hạn bởi timeout nội bộ của chính MTProto/retry
+ * (xem telegramMTProto.ts), vốn nên là nơi kiểm soát việc này thay vì
+ * Telegraf. Trả lời ngay 1 tin nhắn trạng thái "Đang tải" để user biết đã
+ * nhận — xoá đi khi xong (thành công thì submitScriptReferenceVideoJob tự
+ * gửi trạng thái "Đang xử lý" riêng, thất bại thì báo lỗi thay vào đó).
+ */
+async function handleScriptReferenceVideoUpload(
+  ctx: Context,
+  fileId: string,
+  chatId: number,
+  messageId: number,
+  videoFileName: string,
+  extraInstruction: string | undefined,
+  options?: { masterPromptPath?: string; skipImageConfirmation?: boolean },
+): Promise<void> {
+  const userId = ctx.from!.id;
+  const ext = path.extname(videoFileName) || ".mp4";
+
+  const downloadingMessage = await ctx.reply("⏳ Đang tải video từ Telegram...", {
+    reply_parameters: { message_id: messageId },
+  });
+
+  void (async () => {
+    let videoPath: string;
+    try {
+      videoPath = await downloadTelegramVideoRobust(
+        ctx,
+        fileId,
+        chatId,
+        messageId,
+        ext,
+      );
+    } catch (err) {
+      console.error("[bot] Tải video Telegram thất bại:", err);
+      await ctx.telegram
+        .deleteMessage(chatId, downloadingMessage.message_id)
+        .catch(() => {});
+      await ctx.reply(
+        isTelegramFileTooBigError(err)
+          ? TELEGRAM_FILE_TOO_BIG_REPLY
+          : `Không tải được video từ Telegram, đã huỷ.${err instanceof Error ? ` (${err.message})` : ""}`,
+        promptMenu,
+      );
+      return;
+    }
+
+    await ctx.telegram
+      .deleteMessage(chatId, downloadingMessage.message_id)
+      .catch(() => {});
+    await submitScriptReferenceVideoJob({
+      ctx,
+      groupChatId: chatId,
+      promptMessageId: messageId,
+      userId,
+      videoPath,
+      videoFileName,
+      extraInstruction,
+      masterPromptPath: options?.masterPromptPath,
+      skipImageConfirmation: options?.skipImageConfirmation,
+    });
+  })().catch((err) => {
+    console.error(
+      "[bot] Lỗi không mong đợi khi tải/enqueue video tham chiếu (nền):",
+      err,
+    );
+  });
+}
+
+/**
  * Prompt cố định gửi kèm khi user đưa yêu cầu qua file (.txt/.md) thay vì gõ
  * trực tiếp — file được UPLOAD thẳng lên ChatAI (xem askChatAI,
  * downloadTelegramFile + submitChatAIJob), ChatAI tự đọc nội dung file, không cần
  * dán nguyên văn bản file làm prompt text nữa (tránh dán prompt siêu dài).
  */
 const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file sau";
+
+/** Cùng vai trò với CHATAI_FILE_ATTACHMENT_PROMPT nhưng dùng cho nút "Tạo kịch bản mới" (GENERATE_SCRIPT_BUTTON_LABEL) — file đính kèm lúc này gồm CẢ master prompt (prompt_generate_script.txt) LẪN nội dung (các) file JSON tham chiếu, xem handleGenerateScriptRequest. */
+const GENERATE_SCRIPT_ATTACHMENT_PROMPT =
+  "Hãy đọc kỹ và thực hiện đúng yêu cầu trong file đính kèm sau (bao gồm cả các file JSON tham chiếu được ghép kèm theo trong đó)";
 
 /**
  * Tên file dạng "<tên file json>__<tên file ảnh/video>.<đuôi>" — ĐÚNG format
@@ -206,7 +348,21 @@ const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file 
  * ĐƠN, không có "__", nên phần còn lại sau "__" đầu tiên chắc chắn là tên
  * file gốc (kèm đuôi). Dùng cho fileName (tên file THẬT — luôn có đuôi).
  */
-const REPLACEMENT_FILENAME_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
+// SỬA (xác nhận qua lỗi thật: caption
+// "2.0-tập_2-_nghĩa_trang_only_test_-___CHAR_PROP_ADRIAN_LUXURY_SEDAN" — tên
+// file gốc "2.0-tập_2-_nghĩa_trang_only_test_-_" (đúng ra phải giữ nguyên
+// dấu "_" cuối) TỰ NHIÊN kết thúc bằng "_" ngay sát dấu phân cách "__", tạo
+// thành 1 dải 3 dấu "_" liên tiếp ("_" cuối tên file + "__" phân cách). Nhóm
+// 1 dùng "(.+?)" (LAZY — khớp ÍT ký tự nhất có thể) nên bắt luôn "__" ĐẦU
+// TIÊN tìm thấy trong dải 3 dấu "_" đó — cắt tên file THIẾU mất đúng 1 dấu
+// "_" cuối (nhóm 1 ra "...test_-" thay vì "...test_-_"), phần dư 1 dấu "_"
+// bị dính NHẦM vào đầu nhóm 2 (id). Đổi "(.+?)" (lazy) thành "(.+)" (GREEDY)
+// — greedy bắt "__" CUỐI CÙNG tìm được trong chuỗi (khớp nhiều ký tự nhất có
+// thể trước khi phải lùi lại) — đúng ý muốn vì id (CHAR_XXX/LOC_XXX...) theo
+// quy ước KHÔNG BAO GIỜ chứa "__" (chỉ có "_" đơn), nên "__" cuối cùng trong
+// toàn chuỗi luôn chính là dấu phân cách thật, dù tên file có tận cùng bằng
+// bao nhiêu dấu "_" đi nữa.
+const REPLACEMENT_FILENAME_PATTERN = /^(.+)__([^/\\]+\.[A-Za-z0-9]+)$/;
 
 /**
  * GIỐNG REPLACEMENT_FILENAME_PATTERN nhưng KHÔNG bắt buộc đuôi file — dùng
@@ -214,7 +370,7 @@ const REPLACEMENT_FILENAME_PATTERN = /^(.+?)__([^/\\]+\.[A-Za-z0-9]+)$/;
  * gõ) vẫn nằm nguyên trong nhóm 2; tryReplaceGeneratedFile tự kiểm tra bằng
  * path.extname() và mặc định ".png" khi nhóm 2 không có đuôi nào.
  */
-const REPLACEMENT_CAPTION_PATTERN = /^(.+?)__([^/\\]+)$/;
+const REPLACEMENT_CAPTION_PATTERN = /^(.+)__([^/\\]+)$/;
 
 /**
  * Tìm số version kế tiếp cho backup "<name>_vXX<ext>" trong dir — quét các
@@ -238,6 +394,77 @@ async function nextBackupVersion(
     }
   }
   return maxVersion + 1;
+}
+
+/**
+ * DÙNG CHUNG cho MỌI nút "Cập nhật prompt ..." (UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL,
+ * UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL, ...) — CHỈ khác nhau ở
+ * targetPath (đường dẫn master prompt cần ghi đè), không phải khác PROVIDER/
+ * business logic nên tham số hoá thay vì clone (quy ước clone-theo-provider
+ * dành cho khác API/job/hàng đợi, không áp dụng cho thao tác thuần "tải +
+ * sao lưu + ghi đè 1 file text" giống nhau tuyệt đối ở đây). THEO YÊU CẦU
+ * NGƯỜI DÙNG: KHÔNG giới hạn admin — bất kỳ ai trong nhóm được phép dùng bot
+ * (isAllowedGroup, đã check ở bot.hears) đều cập nhật được. Bản CŨ (nếu có)
+ * được sao lưu thành "<targetPath không đuôi>_vXX.<đuôi>" (XX tăng dần, xem
+ * nextBackupVersion) TRƯỚC khi ghi đè — không mất bản trước nếu cần khôi
+ * phục lại.
+ */
+async function handleUpdateMasterPromptUpload(
+  ctx: Context,
+  fileId: string,
+  fileName: string | undefined,
+  promptMessageId: number,
+  targetPath: string,
+): Promise<void> {
+  if (path.extname(fileName ?? "").toLowerCase() !== ".txt") {
+    await ctx.reply(
+      "Chỉ nhận file .txt cho master prompt. Đã huỷ.",
+      promptMenu,
+    );
+    return;
+  }
+  try {
+    const fileUrl = await ctx.telegram.getFileLink(fileId);
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      throw new Error(`Tải file từ Telegram thất bại: HTTP ${response.status}`);
+    }
+    const newContent = await response.text();
+    if (!newContent.trim()) {
+      await ctx.reply("File rỗng, đã huỷ (không ghi đè).", promptMenu);
+      return;
+    }
+
+    const parsed = path.parse(targetPath);
+    const dir = parsed.dir || ".";
+
+    let backupNote = "";
+    const targetExists = await fs
+      .access(targetPath)
+      .then(() => true)
+      .catch(() => false);
+    if (targetExists) {
+      const version = await nextBackupVersion(dir, parsed.name, parsed.ext);
+      const backupFileName = `${parsed.name}_v${String(version).padStart(2, "0")}${parsed.ext}`;
+      await fs.copyFile(targetPath, path.join(dir, backupFileName));
+      backupNote = ` (đã sao lưu bản cũ thành "${backupFileName}")`;
+    }
+
+    await fs.writeFile(targetPath, newContent, "utf-8");
+    await ctx.reply(
+      `✅ Đã cập nhật "${targetPath}"`,
+      {
+        reply_parameters: { message_id: promptMessageId },
+        ...promptMenu,
+      },
+    );
+  } catch (err) {
+    console.error(`[bot] Cập nhật "${targetPath}" thất bại:`, err);
+    await ctx.reply(
+      `❌ Cập nhật thất bại: ${err instanceof Error ? err.message : String(err)}`,
+      promptMenu,
+    );
+  }
 }
 
 /**
@@ -269,12 +496,13 @@ async function markStoryboardEntrySuccess(
 function storyboardJobTypeForEntryType(
   entryType: string | undefined,
 ):
-  | "storyboardImagesAIVideo"
+  | "storyboardImagesPollo"
   | "storyboardSceneImagesAIVideo"
-  | "storyboardVideo"
+  | "storyboardVideoPollo"
+  | "storyboardVideoComfy"
   | null {
   if (entryType === "CHARACTER" || entryType === "LOCATION") {
-    return "storyboardImagesAIVideo";
+    return "storyboardImagesPollo";
   }
   if (
     entryType === "SCENE_SETTING_START" ||
@@ -283,7 +511,8 @@ function storyboardJobTypeForEntryType(
     return "storyboardSceneImagesAIVideo";
   }
   if (entryType === "VIDEO") {
-    return "storyboardVideo";
+    // return "storyboardVideoPollo";
+    return "storyboardVideoComfy";
   }
   return null;
 }
@@ -301,6 +530,63 @@ function storyboardJobTypeForEntryType(
  * (xem storyboardPipeline.ts), nên job đang có sẵn sẽ tự nhặt luôn entry vừa
  * đánh dấu lại ở đây khi tới lượt — thêm job thứ 2 chỉ tổ chạy trùng lặp.
  */
+
+/**
+ * Chuẩn hoá tên file json user gõ tay: trim, gộp khoảng trắng → "_" (cùng
+ * quy ước với tên thư mục thật trong generated/, xem originalFileName/
+ * tryHandleReferenceJsonUpload), và bỏ đuôi ".json" nếu user lỡ gõ kèm (vd
+ * gõ cả "abc.json" thay vì chỉ "abc") — generatedDirFor/đường dẫn file thật
+ * đều tự thêm lại ".json" nên gõ kèm đuôi sẽ tạo sai path.
+ */
+function normalizeTypedJsonFileName(text: string): string {
+  return text
+    .trim()
+    .replace(/ +/g, "_")
+    .replace(/\.json$/i, "");
+}
+
+/**
+ * Chuyển caption tự do (user gõ kèm video) thành 1 slug an toàn để đặt tên
+ * file — bỏ ký tự không an toàn cho tên file/thư mục (vd "/" dễ bị hiểu
+ * nhầm thành phân cách đường dẫn), gộp khoảng trắng thành "_", giới hạn độ
+ * dài (tránh vượt giới hạn tên file của OS nếu caption quá dài). Trả về
+ * chuỗi RỖNG nếu sau khi làm sạch không còn ký tự nào hữu ích (vd caption
+ * toàn ký tự đặc biệt/emoji) — caller tự fallback sang tên khác.
+ */
+function sanitizeCaptionForFileName(caption: string): string {
+  return caption
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80)
+    .replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Theo yêu cầu người dùng: tên file JSON (kết quả ChatAI trả về, xem
+ * downloadAttachedFiles trong chatAI.ts) cho "Tham chiếu kịch bản"/"Tham
+ * chiếu video" ưu tiên lấy theo TÊN FILE VIDEO gốc — nhưng Telegram thường
+ * KHÔNG kèm "file_name" cho video gửi qua nút camera/thư viện (chỉ có khi
+ * gửi qua nút đính kèm 📎 dạng document), khiến tên rơi về fallback generic
+ * "video-<messageId>.mp4" không có ý nghĩa gì. Ưu tiên: (1) tên file video
+ * thật (nếu Telegram có gửi kèm); (2) nếu không, dùng CAPTION user gõ kèm
+ * video (nếu có và làm sạch được, xem sanitizeCaptionForFileName) — thường
+ * là tên/mô tả ngắn user tự đặt, ý nghĩa hơn hẳn tên generic; (3) cuối cùng
+ * mới rơi về "video-<messageId>.mp4".
+ */
+function resolveVideoFileName(
+  telegramFileName: string | undefined,
+  caption: string | undefined,
+  messageId: number,
+): string {
+  const captionSlug = caption ? sanitizeCaptionForFileName(caption) : "";
+  const fileName =
+    telegramFileName ||
+    (captionSlug ? `${captionSlug}.mp4` : "") ||
+    `video-${messageId}.mp4`;
+  return fileName.replace(/ +/g, "_");
+}
+
 async function regenerateStoryboardItemLine(
   ctx: Context,
   line: string,
@@ -309,11 +595,14 @@ async function regenerateStoryboardItemLine(
   const match = line.match(REPLACEMENT_CAPTION_PATTERN);
   if (!match) return null;
 
-  const fileBaseName = match[1].trim().replace(/ +/g, "_");
+  const fileBaseName = normalizeTypedJsonFileName(match[1]);
   const targetId = match[2].trim();
 
-  const jsonPath = path.join(
-    generatedDirFor(fileBaseName),
+  // Theo yêu cầu người dùng: file JSON này có thể đang nằm theo 1 trong 2
+  // layout storage/generated/ khác nhau (xem docstring
+  // resolveExistingGeneratedJsonPath) — dò đúng rule đang thực sự chứa file
+  // thay vì luôn giả định layout "storage/generated/<file>/<file>.json".
+  const jsonPath = await resolveExistingGeneratedJsonPath(
     `${fileBaseName}.json`,
   );
   const exists = await fs
@@ -336,10 +625,17 @@ async function regenerateStoryboardItemLine(
   await fs.writeFile(jsonPath, JSON.stringify(entries, null, 2), "utf-8");
 
   // Xoá file kết quả cũ (ảnh/video) của entry này trước khi generate lại —
-  // tên file luôn "<id>.<đuôi>" trong CHÍNH folder generated này (xem
+  // tên file luôn "<id>.<đuôi>" trong folder generated tương ứng (xem
   // storyboardPipeline.ts) — không xoá thì file cũ vẫn còn lẫn sau khi
-  // generate lại xong.
-  const outputDir = path.dirname(jsonPath);
+  // generate lại xong. Entry ẢNH (CHARACTER/LOCATION/SCENE_SETTING_START/
+  // SCENE_SETTING_END) và entry VIDEO có thể nằm ở 2 folder KHÁC nhau khi
+  // nhiều tập dùng CHUNG 1 folder theo tên phim (xem
+  // generatedImageDirFor/generatedDirFor trong storyboardPipeline.ts) — phải
+  // chọn đúng theo entry.type, không được luôn dùng path.dirname(jsonPath).
+  const outputDir =
+    entry.type === "VIDEO"
+      ? generatedDirFor(jsonPath)
+      : generatedImageDirFor(jsonPath);
   const filesInDir = await fs.readdir(outputDir).catch(() => [] as string[]);
   const idFilePrefix = `${targetId}.`;
   for (const fileName of filesInDir) {
@@ -528,18 +824,77 @@ function mergeStoryboardSuccess(
 }
 
 /**
+ * Theo yêu cầu người dùng: 1 file JSON storyboard (nhận diện qua tên file,
+ * vd "duke_of_shadows_tap1_full.json") có thể đang nằm ở 1 trong 2 layout
+ * storage/generated/ khác nhau (xem docstring generatedImageDirFor trong
+ * storyboardPipeline.ts) — PHẢI dò ra ĐÚNG layout đang thực sự chứa file đó
+ * trước khi thao tác, không được mặc định luôn theo 1 rule cố định:
+ * 1. storage/generated/<file>/<file>.json — job "chatAI" (không chia sẻ
+ *    phim với tập khác).
+ * 2. storage/generated/<tên phim>/<file>/<file>.json — job
+ *    "scriptReferenceVideo"/"generateScript" (nhiều tập CHUNG 1 folder phim).
+ *
+ * Dò rule 1 TRƯỚC (khớp trực tiếp, không cần quét thư mục); KHÔNG thấy mới
+ * quét các folder con CẤP 1 của storage/generated/ tìm rule 2 (folder phim
+ * BẤT KỲ có chứa đúng "<file>/<file>.json"). KHÔNG thấy ở CẢ HAI (file JSON
+ * này chưa từng tồn tại trong generated/) thì mặc định dùng đường dẫn rule 1
+ * — đây cũng chính là đường dẫn SẼ được tạo mới.
+ */
+async function resolveExistingGeneratedJsonPath(
+  normalizedFileName: string,
+): Promise<string> {
+  const directPath = path.join(
+    generatedDirFor(normalizedFileName),
+    normalizedFileName,
+  );
+  const directExists = await fs
+    .access(directPath)
+    .then(() => true)
+    .catch(() => false);
+  if (directExists) return directPath;
+
+  const generatedRoot = path.resolve("./storage/generated");
+  const topLevelDirs = await fs
+    .readdir(generatedRoot, { withFileTypes: true })
+    .then((entries) =>
+      entries.filter((e) => e.isDirectory()).map((e) => e.name),
+    )
+    .catch(() => [] as string[]);
+  const fileBaseName = path.basename(
+    normalizedFileName,
+    path.extname(normalizedFileName),
+  );
+  for (const filmDirName of topLevelDirs) {
+    const nestedPath = path.join(
+      generatedRoot,
+      filmDirName,
+      fileBaseName,
+      normalizedFileName,
+    );
+    const nestedExists = await fs
+      .access(nestedPath)
+      .then(() => true)
+      .catch(() => false);
+    if (nestedExists) return nestedPath;
+  }
+
+  return directPath;
+}
+
+/**
  * User upload TRỰC TIẾP 1 file .json (KHÔNG cần caption đặc biệt như
  * tryReplaceGeneratedFile) — coi đây là kịch bản storyboard cho folder
- * generated/<tên file json>/ (cùng quy ước tên với
- * generatedDirFor). Nếu folder CHƯA có (lần đầu upload json này): tạo
- * folder + copy file vào làm kịch bản chính. Nếu folder đã có SẴN 1 file json
- * chính rồi: backup file cũ thành "<tên>_vXX.json" (XX tăng dần, xem
- * nextBackupVersion), rồi COPY "success" từ các entry cũ sang entry mới
- * khớp id (xem mergeStoryboardSuccess) trước khi ghi file MỚI vào thay thế
- * (giữ nguyên tên gốc) — GIỐNG cơ chế tryReplaceGeneratedFile, dùng chung
- * nextBackupVersion. Trả về true nếu ĐÃ xử lý (đuôi .json) — handler gọi hàm
- * này phải dừng lại ngay, không rơi xuống luồng upload prompt file (.txt/.md)
- * hay ảnh/video tham chiếu thường.
+ * generated/<tên file json>/ ĐANG THỰC SỰ chứa file này (xem
+ * resolveExistingGeneratedJsonPath — có thể là folder riêng, hoặc folder con
+ * bên trong 1 folder phim, tuỳ layout đang dùng). Nếu file CHƯA từng có (lần
+ * đầu upload json này): tạo folder + copy file vào làm kịch bản chính. Nếu
+ * đã có SẴN 1 file json chính rồi: backup file cũ thành "<tên>_vXX.json" (XX
+ * tăng dần, xem nextBackupVersion), rồi COPY "success" từ các entry cũ sang
+ * entry mới khớp id (xem mergeStoryboardSuccess) trước khi ghi file MỚI vào
+ * thay thế (giữ nguyên tên gốc) — GIỐNG cơ chế tryReplaceGeneratedFile, dùng
+ * chung nextBackupVersion. Trả về true nếu ĐÃ xử lý (đuôi .json) — handler
+ * gọi hàm này phải dừng lại ngay, không rơi xuống luồng upload prompt file
+ * (.txt/.md) hay ảnh/video tham chiếu thường.
  */
 async function tryHandleReferenceJsonUpload(
   ctx: Context,
@@ -553,8 +908,8 @@ async function tryHandleReferenceJsonUpload(
   // Gộp nhiều khoảng trắng liên tiếp thành 1, rồi thay bằng "_" — cùng quy
   // ước với originalFileName ở luồng upload prompt file (.txt/.md) bên dưới.
   const normalizedFileName = fileName.replace(/ +/g, "_");
-  const dir = generatedDirFor(normalizedFileName);
-  const targetPath = path.join(dir, normalizedFileName);
+  const targetPath = await resolveExistingGeneratedJsonPath(normalizedFileName);
+  const dir = path.dirname(targetPath);
 
   try {
     await fs.mkdir(dir, { recursive: true });
@@ -772,9 +1127,10 @@ async function submitChatAIJob({
     return;
   }
 
-  const statusMessage = await ctx.reply("⏳ Đang xử lý", {
-    reply_parameters: { message_id: promptMessageId },
-  });
+  const statusMessage = await ctx.reply("⏳ Đang xử lý", { 
+      reply_parameters: { message_id: promptMessageId }, 
+      ...promptMenu, 
+     });
 
   enqueueJob({
     type: "chatAI",
@@ -785,6 +1141,171 @@ async function submitChatAIJob({
     statusMessageId: statusMessage.message_id,
     promptFileName,
     promptAttachmentPath,
+  });
+}
+
+interface SubmitScriptReferenceVideoParams {
+  groupChatId: number;
+  promptMessageId: number;
+  userId: number;
+  videoPath: string;
+  videoFileName: string;
+  /** Caption user gõ kèm khi gửi video — TRANSFORM_MODE mặc định ON (xem master prompt), caption dùng để TẮT (vd "giữ nguyên như video gốc") hoặc tuỳ chỉnh thêm. Nối thêm vào master prompt trước khi gửi ChatAI, xem askChatAIAboutReferenceVideo. */
+  extraInstruction?: string;
+  /** Path master prompt (mặc định config.promptSplitVideo nếu không truyền) — VIDEO_REFERENCE_BUTTON_LABEL truyền config.promptVideoReference. */
+  masterPromptPath?: string;
+  /** true = job CHỈ gửi lại JSON rồi dừng, không gửi nút xác nhận "Tạo ảnh" — VIDEO_REFERENCE_BUTTON_LABEL truyền true (theo yêu cầu người dùng). */
+  skipImageConfirmation?: boolean;
+  ctx: Context;
+}
+
+/** Dùng chung cho cả nút "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL) và "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) — user upload 1 video, đẩy job "scriptReferenceVideo" (xem processChatAIQueue trong queue.ts): hỏi ChatAI, gửi lại JSON — kèm nút xác nhận "Tạo ảnh (Pollo)" trừ khi skipImageConfirmation=true. Master prompt dùng khác nhau theo masterPromptPath. */
+async function submitScriptReferenceVideoJob({
+  ctx,
+  groupChatId,
+  promptMessageId,
+  userId,
+  videoPath,
+  videoFileName,
+  extraInstruction,
+  masterPromptPath,
+  skipImageConfirmation,
+}: SubmitScriptReferenceVideoParams): Promise<void> {
+  const statusMessage = await ctx.reply(
+    "⏳ Đang xử lý...",
+    { 
+      reply_parameters: { message_id: promptMessageId }, 
+      ...promptMenu, 
+    },
+  );
+
+  enqueueJob({
+    type: "scriptReferenceVideo",
+    chatId: groupChatId,
+    userId,
+    prompt: "",
+    promptMessageId,
+    statusMessageId: statusMessage.message_id,
+    videoPath,
+    videoFileName,
+    extraInstruction,
+    masterPromptPath,
+    skipImageConfirmation,
+  });
+}
+
+/**
+ * Nút "Tạo kịch bản mới" (GENERATE_SCRIPT_BUTTON_LABEL) — user gõ tên (hoặc 1
+ * phần tên) file JSON kịch bản ĐÃ CÓ SẴN trong config.chatAIResultsDir (thư
+ * mục ChatAI lưu kết quả các lần chạy trước, xem downloadAttachedFiles trong
+ * chatAI.ts). Tìm TẤT CẢ file .json có tên CHỨA chuỗi đã gõ (không phân biệt
+ * hoa/thường) — có thể khớp nhiều file, mỗi file coi là 1 TẬP PHIM. Ghép nội
+ * dung các file đó + master prompt config.promptGenerateScript thành 1 file
+ * .txt tạm DUY NHẤT, upload lên ChatAI làm attachment — đẩy job type
+ * "generateScript" vào CHUNG hàng đợi với ChatAIJob (xem enqueueJob,
+ * processChatAIQueue trong queue.ts) — cùng cơ chế "1 file đính kèm chứa cả
+ * instruction lẫn nội dung" như submitChatAIJob (CHATAI_BUTTON_LABEL).
+ */
+async function handleGenerateScriptRequest(
+  ctx: Context,
+  typedText: string,
+  promptMessageId: number,
+): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId || !ctx.chat) return;
+
+  const searchTerm = normalizeTypedJsonFileName(typedText);
+  if (!searchTerm) {
+    await ctx.reply("Tên file trống, đã huỷ.", promptMenu);
+    return;
+  }
+
+  const allFiles = await fs
+    .readdir(config.chatAIResultsDir)
+    .catch(() => [] as string[]);
+  const matches = allFiles
+    .filter(
+      (f) =>
+        f.toLowerCase().endsWith(".json") &&
+        f.toLowerCase().includes(searchTerm.toLowerCase()),
+    )
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  if (matches.length === 0) {
+    await ctx.reply(
+      `❌ Không tìm thấy file JSON nào có tên chứa "${searchTerm}" trong storage/chatai-results. Không thể tiếp tục.`,
+      { reply_parameters: { message_id: promptMessageId } },
+    );
+    return;
+  }
+
+  const masterPrompt = await fs
+    .readFile(config.promptGenerateScript, "utf-8")
+    .catch((err) => {
+      console.error(
+        `[bot] Không đọc được master prompt "${config.promptGenerateScript}":`,
+        err,
+      );
+      return null;
+    });
+  if (masterPrompt === null) {
+    await ctx.reply(
+      "❌ Không đọc được master prompt cho tính năng này, đã huỷ.",
+      { reply_parameters: { message_id: promptMessageId } },
+    );
+    return;
+  }
+
+  const sections: string[] = [
+    masterPrompt,
+    `\n\n## OUTPUT_BASENAME_GOI_Y\n${searchTerm}`,
+    `\n\n## DANH SÁCH FILE JSON THAM CHIẾU (${matches.length} tập)`,
+  ];
+  for (let i = 0; i < matches.length; i++) {
+    const fileName = matches[i];
+    const content = await fs
+      .readFile(path.join(config.chatAIResultsDir, fileName), "utf-8")
+      .catch((err) => {
+        console.error(
+          `[bot] Không đọc được file tham chiếu "${fileName}":`,
+          err,
+        );
+        return null;
+      });
+    if (content === null) {
+      await ctx.reply(
+        `❌ Không đọc được file "${fileName}", đã huỷ.`,
+        { reply_parameters: { message_id: promptMessageId } },
+      );
+      return;
+    }
+    sections.push(`\n\n### TẬP ${i + 1}: ${fileName}\n\`\`\`json\n${content}\n\`\`\``);
+  }
+
+  await fs.mkdir(config.uploadsDir, { recursive: true });
+  const combinedAttachmentPath = path.join(
+    config.uploadsDir,
+    `${randomUUID()}-generate-script.txt`,
+  );
+  await fs.writeFile(combinedAttachmentPath, sections.join(""), "utf-8");
+
+  const statusMessage = await ctx.reply(
+    `⏳ Đang xử lý (${matches.length} tập tham chiếu: ${matches.join(", ")})...`,
+    { 
+      reply_parameters: { message_id: promptMessageId }, 
+      ...promptMenu, 
+     },
+  );
+
+  enqueueJob({
+    type: "generateScript",
+    chatId: ctx.chat.id,
+    userId,
+    prompt: GENERATE_SCRIPT_ATTACHMENT_PROMPT,
+    promptMessageId,
+    statusMessageId: statusMessage.message_id,
+    referenceFileNames: matches,
+    promptAttachmentPath: combinedAttachmentPath,
   });
 }
 
@@ -979,7 +1500,12 @@ async function handleOmniRefBuffer(
     }
   } catch (err) {
     console.error("[bot] Tải file Telegram thất bại:", err);
-    await ctx.reply("Không tải được file từ Telegram, đã huỷ.", promptMenu);
+    await ctx.reply(
+      isTelegramFileTooBigError(err)
+        ? TELEGRAM_FILE_TOO_BIG_REPLY
+        : "Không tải được file từ Telegram, đã huỷ.",
+      promptMenu,
+    );
     for (const p of omniReferencePaths) await fs.unlink(p).catch(() => {});
     return;
   }
@@ -1071,6 +1597,51 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(SCRIPT_REFERENCE_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "scriptReference");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu`,
+    );
+  });
+
+  bot.hears(VIDEO_REFERENCE_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "videoReference");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu — bot sẽ phân tích nhân vật/bối cảnh/đạo cụ rồi trả về JSON gồm các đoạn video ngắn nối tiếp (mỗi đoạn tối đa 15s, ranh giới cắt theo lời thoại hợp lý) dùng để gen lại toàn bộ video.`,
+    );
+  });
+
+  bot.hears(GENERATE_SCRIPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "generateScript");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên (hoặc 1 phần tên) file JSON kịch bản đã có trong storage/chatai-results — bot sẽ tìm mọi file JSON có tên chứa chuỗi đó (nhiều file = nhiều tập phim) rồi tạo 1 bộ phim mới tương tự.`,
+    );
+  });
+
+  bot.hears(UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "updateGenerateScriptPrompt");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptGenerateScript}"`,
+    );
+  });
+
+  bot.hears(UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "updateVideoReferencePrompt");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptVideoReference}"`,
+    );
+  });
+
   bot.hears(STOP_ALL_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     stopAll(ctx.from.id);
@@ -1087,6 +1658,7 @@ export function registerHandlers(bot: Telegraf): void {
   });
 
   bot.hears(CONTINUE_SCENE_FRAME_BUTTON_LABEL, async (ctx) => {
+    return
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "continueSceneFrame");
@@ -1106,8 +1678,13 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === OMNI_REF_BUTTON_LABEL ||
       ctx.message.text === CHATAI_BUTTON_LABEL ||
       ctx.message.text === CHATAI_CHECK_BUTTON_LABEL ||
+      ctx.message.text === SCRIPT_REFERENCE_BUTTON_LABEL ||
+      ctx.message.text === VIDEO_REFERENCE_BUTTON_LABEL ||
+      ctx.message.text === GENERATE_SCRIPT_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL ||
-      ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL
+      ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL ||
+      ctx.message.text === UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL ||
+      ctx.message.text === UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL
     ) {
       return next();
     }
@@ -1177,21 +1754,46 @@ export function registerHandlers(bot: Telegraf): void {
         userId,
         rawText: ctx.message.text,
       });
+    } else if (mode === "scriptReference") {
+      // Bắt buộc phải gửi video — gõ text không kèm video nào thì từ chối,
+      // giữ nguyên mode để user thử gửi lại video (khác các mode khác vốn
+      // chấp nhận text đơn thuần).
+      await ctx.reply(
+        "Chế độ Tham chiếu kịch bản bắt buộc phải gửi 1 video, không nhận text.",
+      );
+    } else if (mode === "videoReference") {
+      // Cùng lý do với "scriptReference" ở trên — bắt buộc gửi video.
+      await ctx.reply(
+        "Chế độ Tham chiếu video bắt buộc phải gửi 1 video, không nhận text.",
+      );
+    } else if (mode === "generateScript") {
+      await handleGenerateScriptRequest(
+        ctx,
+        ctx.message.text,
+        ctx.message.message_id,
+      );
     } else if (mode === "continueVideo") {
       // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
       // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
-      const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
+      const jsonFileName = normalizeTypedJsonFileName(ctx.message.text);
       // SỬA theo yêu cầu user: KHÔNG còn tra failedStoryboardJobs/
-      // failedStoryboardJobsPollo (bắt buộc phải TỪNG lỗi mới cho tiếp tục —
-      // chặn cả trường hợp file chưa từng gen video lần nào, hoặc job cũ đã
-      // bị dọn khỏi danh sách lỗi vì lý do khác). Giờ chỉ cần file JSON khớp
-      // tên tồn tại trong generated/ là đẩy thẳng 1 job "storyboardVideoPollo"
-      // MỚI vào hàng đợi — không kèm entryIds nghĩa là generateVideosForFilePollo
-      // tự xử lý hết entry VIDEO chưa "success", giống hệt luồng xác nhận
-      // bình thường (xem confirmVideoGenerationPollo).
-      const jsonPath = path.join(
-        generatedDirFor(jsonFileName),
+      // failedStoryboardJobsPollo/failedStoryboardJobsComfy (bắt buộc phải
+      // TỪNG lỗi mới cho tiếp tục — chặn cả trường hợp file chưa từng gen
+      // video lần nào, hoặc job cũ đã bị dọn khỏi danh sách lỗi vì lý do
+      // khác). Giờ chỉ cần file JSON khớp tên tồn tại trong generated/ là đẩy
+      // thẳng 1 job "storyboardVideoComfy" MỚI vào hàng đợi — không kèm
+      // entryIds nghĩa là generateVideosForFileComfyUI tự xử lý hết entry
+      // VIDEO chưa "success", giống hệt luồng xác nhận bình thường (xem
+      // confirmVideoGenerationComfy). Đổi từ "storyboardVideoPollo" sang
+      // "storyboardVideoComfy" theo yêu cầu người dùng.
+      //
+      // SỬA (theo yêu cầu người dùng): dùng resolveExistingGeneratedJsonPath
+      // (rule path JSON mới, xem docstring) thay vì chỉ generatedDirFor —
+      // file JSON có thể nằm ở rule-2 (nested, phim nhiều tập) chứ không chỉ
+      // rule-1 (flat) như trước, tránh báo "không tìm thấy" oan cho job
+      // thuộc rule-2.
+      const jsonPath = await resolveExistingGeneratedJsonPath(
         `${jsonFileName}.json`,
       );
       const fileExists = await fs
@@ -1200,7 +1802,7 @@ export function registerHandlers(bot: Telegraf): void {
         .catch(() => false);
       if (fileExists) {
         enqueueJob({
-          type: "storyboardVideoPollo",
+          type: "storyboardVideoComfy",
           chatId: ctx.chat.id,
           userId,
           prompt: "",
@@ -1218,22 +1820,57 @@ export function registerHandlers(bot: Telegraf): void {
         );
       }
     } else if (mode === "continueSceneFrame") {
+      // SỬA (theo yêu cầu người dùng): đẩy job "storyboardScenePollo"
+      // (pollo.ai) THAY VÌ "storyboardImagesAIVideo" — cùng cách đơn giản
+      // hoá đã áp dụng cho "continueVideo" (xem comment ở đó): KHÔNG cần tra
+      // failedStoryboardJobsPollo (bắt buộc phải TỪNG lỗi mới cho tiếp tục),
+      // chỉ cần file JSON khớp tên tồn tại trong generated/ là đẩy thẳng 1
+      // job "storyboardScenePollo" MỚI vào hàng đợi ảnh Pollo.
+      //
       // Cùng quy ước gộp khoảng trắng → "_" với các luồng upload file khác
       // (xem originalFileName/tryHandleReferenceJsonUpload) — user gõ tay tên
       // file dễ lẫn khoảng trắng so với tên thư mục thật (đã normalize sẵn).
-      const jsonFileName = ctx.message.text.trim().replace(/ +/g, "_");
-      const ok = continueFailedStoryboardImages(jsonFileName);
-      if (ok) {
+      const jsonFileName = normalizeTypedJsonFileName(ctx.message.text);
+      // SỬA (theo yêu cầu người dùng, cùng lý do với "continueVideo" ở
+      // trên): dùng resolveExistingGeneratedJsonPath thay vì chỉ
+      // generatedDirFor — file JSON có thể nằm ở rule-2 (nested, phim nhiều
+      // tập).
+      const jsonPath = await resolveExistingGeneratedJsonPath(
+        `${jsonFileName}.json`,
+      );
+      const fileExists = await fs
+        .access(jsonPath)
+        .then(() => true)
+        .catch(() => false);
+      if (fileExists) {
+        enqueueJob({
+          type: "storyboardScenePollo",
+          chatId: ctx.chat.id,
+          userId,
+          prompt: "",
+          promptMessageId: ctx.message.message_id,
+          jsonPath,
+        });
         await ctx.reply(
           `✅ Đã đưa "${jsonFileName}" vào hàng đợi gen scene frame, đợi xử lý.`,
           { reply_parameters: { message_id: ctx.message.message_id } },
         );
       } else {
         await ctx.reply(
-          `❌ File "${jsonFileName}" chưa được xử lý (chưa có trong generated/ hoặc không có job nào lỗi khớp tên). Không thể tiếp tục.`,
+          `❌ Không tìm thấy file "${jsonFileName}" trong generated. Không thể tiếp tục.`,
           { reply_parameters: { message_id: ctx.message.message_id } },
         );
       }
+    } else if (
+      mode === "updateGenerateScriptPrompt" ||
+      mode === "updateVideoReferencePrompt"
+    ) {
+      // Bắt buộc phải gửi file .txt (xem nhánh xử lý trong
+      // bot.on(message("document"))) — gõ text không kèm file thì từ chối,
+      // cùng cách với "scriptReference"/"videoReference" ở trên.
+      await ctx.reply(
+        "Chế độ cập nhật prompt bắt buộc phải gửi 1 file .txt, không nhận text.",
+      );
     } else {
       await submitImageJob({
         ctx,
@@ -1342,6 +1979,60 @@ export function registerHandlers(bot: Telegraf): void {
     // }
 
     const userId = ctx.from.id;
+
+    // Chế độ "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL) — video
+    // Telegram nén sẵn (không qua nút đính kèm 📎, khác nhánh document bên
+    // dưới) được nhận diện qua message("video") này. Tải về rồi đẩy job
+    // "scriptReferenceVideo" NGAY, không cần chờ prompt nào thêm (khác mode
+    // "video"/"videoRef" — video ở đây là input chính, không phải ảnh tham
+    // chiếu phụ). TRANSFORM_MODE mặc định ON (xem prompt_split_video.txt) —
+    // caption (nếu có, vd "giữ nguyên như video gốc") dùng để TẮT hoặc tuỳ
+    // chỉnh thêm, nối vào master prompt — xem extraInstruction trong
+    // submitScriptReferenceVideoJob.
+    if (waitingMode.get(userId) === "scriptReference") {
+      waitingMode.delete(userId);
+      const videoFileName = resolveVideoFileName(
+        ctx.message.video.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
+      await handleScriptReferenceVideoUpload(
+        ctx,
+        ctx.message.video.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
+        videoFileName,
+        ctx.message.caption?.trim() || undefined,
+      );
+      return;
+    }
+
+    // Chế độ "Tham chiếu video" (VIDEO_REFERENCE_BUTTON_LABEL) — GIỐNG HỆT
+    // nhánh "scriptReference" ở trên, chỉ khác masterPromptPath truyền cho
+    // submitScriptReferenceVideoJob (config.promptVideoReference thay vì mặc
+    // định config.promptSplitVideo) — JSON trả về chia thành các đoạn VIDEO
+    // ngắn nối tiếp (tối đa 15s/đoạn, ranh giới theo lời thoại — xem mục 3B
+    // trong prompt_video_reference.txt) thay vì chia theo diễn biến/cảnh
+    // như prompt_split_video.txt.
+    if (waitingMode.get(userId) === "videoReference") {
+      waitingMode.delete(userId);
+      const videoFileName = resolveVideoFileName(
+        ctx.message.video.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
+      await handleScriptReferenceVideoUpload(
+        ctx,
+        ctx.message.video.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
+        videoFileName,
+        ctx.message.caption?.trim() || undefined,
+        { masterPromptPath: config.promptVideoReference, skipImageConfirmation: true },
+      );
+      return;
+    }
+
     if (
       !pendingOmniRefBuffers.has(userId) &&
       waitingMode.get(userId) !== "omniRef"
@@ -1420,6 +2111,33 @@ export function registerHandlers(bot: Telegraf): void {
 
     const userId = ctx.from.id;
 
+    // Chế độ "Cập nhật prompt ..." (UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL/
+    // UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL) — user upload 1 file .txt
+    // để GHI ĐÈ đúng master prompt tương ứng, xem
+    // handleUpdateMasterPromptUpload (tự sao lưu bản cũ trước).
+    if (waitingMode.get(userId) === "updateGenerateScriptPrompt") {
+      waitingMode.delete(userId);
+      await handleUpdateMasterPromptUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.message.document.file_name,
+        ctx.message.message_id,
+        config.promptGenerateScript,
+      );
+      return;
+    }
+    if (waitingMode.get(userId) === "updateVideoReferencePrompt") {
+      waitingMode.delete(userId);
+      await handleUpdateMasterPromptUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.message.document.file_name,
+        ctx.message.message_id,
+        config.promptVideoReference,
+      );
+      return;
+    }
+
     // Chế độ "ChatAI"/"Check prompt kịch bản": user gửi yêu cầu qua file (.txt/.md)
     // thay vì gõ trực tiếp (dùng khi prompt quá dài) — tải file về đĩa rồi
     // UPLOAD thẳng lên ChatAI (xem askChatAI), prompt chỉ là 1 câu ngắn
@@ -1482,7 +2200,9 @@ export function registerHandlers(bot: Telegraf): void {
       } catch (err) {
         console.error("[bot] Tải file prompt ChatAI thất bại:", err);
         await ctx.reply(
-          "Không tải được file prompt từ Telegram, đã huỷ.",
+          isTelegramFileTooBigError(err)
+            ? TELEGRAM_FILE_TOO_BIG_REPLY
+            : "Không tải được file prompt từ Telegram, đã huỷ.",
           promptMenu,
         );
         return;
@@ -1496,6 +2216,64 @@ export function registerHandlers(bot: Telegraf): void {
         promptFileName: originalFileName,
         promptAttachmentPath: promptFilePath,
       });
+      return;
+    }
+
+    // Chế độ "Tham chiếu kịch bản" — video gửi qua nút đính kèm 📎 (Telegram
+    // xếp vào "document", KHÔNG khớp message("video") ở trên) nhận diện qua
+    // mime_type. Cùng cách xử lý với nhánh message("video") — tải về rồi đẩy
+    // job "scriptReferenceVideo" ngay, không chờ prompt gì thêm. Caption (nếu
+    // có) dùng làm yêu cầu bổ sung, cùng cách với nhánh message("video").
+    if (waitingMode.get(userId) === "scriptReference") {
+      const documentMimeType = ctx.message.document.mime_type ?? "";
+      if (!documentMimeType.startsWith("video/")) {
+        await ctx.reply(
+          "Chế độ Tham chiếu kịch bản chỉ nhận file video. Gửi đúng 1 video.",
+        );
+        return;
+      }
+      waitingMode.delete(userId);
+      const videoFileName = resolveVideoFileName(
+        ctx.message.document.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
+      await handleScriptReferenceVideoUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
+        videoFileName,
+        ctx.message.caption?.trim() || undefined,
+      );
+      return;
+    }
+
+    // Chế độ "Tham chiếu video" — video gửi qua nút đính kèm 📎, cùng cách
+    // xử lý với nhánh "scriptReference" ở trên, chỉ khác masterPromptPath.
+    if (waitingMode.get(userId) === "videoReference") {
+      const documentMimeType = ctx.message.document.mime_type ?? "";
+      if (!documentMimeType.startsWith("video/")) {
+        await ctx.reply(
+          "Chế độ Tham chiếu video chỉ nhận file video. Gửi đúng 1 video.",
+        );
+        return;
+      }
+      waitingMode.delete(userId);
+      const videoFileName = resolveVideoFileName(
+        ctx.message.document.file_name,
+        ctx.message.caption,
+        ctx.message.message_id,
+      );
+      await handleScriptReferenceVideoUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.chat.id,
+        ctx.message.message_id,
+        videoFileName,
+        ctx.message.caption?.trim() || undefined,
+        { masterPromptPath: config.promptVideoReference, skipImageConfirmation: true },
+      );
       return;
     }
 
@@ -1592,6 +2370,26 @@ export function registerHandlers(bot: Telegraf): void {
       .catch(() => {});
   });
 
+  // GIỐNG confirmScene HỆT nhưng đẩy job dùng pollo.ai (xem
+  // confirmSceneGenerationPollo/StoryboardSceneImagesPolloJob trong queue.ts)
+  // — nút "Tạo ảnh scene" được gửi ngay sau khi ảnh CHARACTER/LOCATION (Pollo)
+  // xong (xem processPolloImageQueue).
+  bot.action(/^confirmScenePollo:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmSceneGenerationPollo(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo ảnh scene.");
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo ảnh scene.")
+      .catch(() => {});
+  });
+
   // Nút "Tạo video" trong tin nhắn xác nhận sau khi ảnh SCENE_SETTING đã tạo
   // xong (xem notifyStoryboardImagesAIVideoResult/createVideoConfirmation
   // trong queue.ts) — callback_data dạng "confirmVideo:<id>", tra lại
@@ -1621,6 +2419,27 @@ export function registerHandlers(bot: Telegraf): void {
     if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     const confirmId = ctx.match[1];
     const ok = confirmVideoGenerationPollo(confirmId);
+    if (!ok) {
+      await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await ctx.answerCbQuery("Đã thêm vào hàng đợi tạo video.");
+    await ctx
+      .editMessageText("✅ Đã xác nhận — đang chờ tạo video.")
+      .catch(() => {});
+  });
+
+  // GIỐNG confirmVideoPollo HỆT nhưng đẩy job dùng ComfyUI (xem
+  // confirmVideoGenerationComfy/StoryboardVideoComfyJob trong queue.ts) — nút
+  // "Tạo video (Comfy)" gửi CÙNG LÚC với "Tạo video (Pollo)" ngay sau khi ảnh
+  // CHARACTER/LOCATION xong (processPolloImageQueue) — ComfyUI KHÔNG có bước
+  // "Tạo ảnh" riêng, dùng LẠI CHÍNH ảnh đó.
+  bot.action(/^confirmVideoComfy:(.+)$/, async (ctx) => {
+    if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    const confirmId = ctx.match[1];
+    const ok = confirmVideoGenerationComfy(confirmId);
     if (!ok) {
       await ctx.answerCbQuery("Lượt xác nhận này đã hết hạn hoặc đã dùng.", {
         show_alert: true,

@@ -157,6 +157,26 @@ export async function dismissBlockingOverlays(page: Page): Promise<void> {
     }
   }
 
+  // "coco-tour" — tour/spotlight giới thiệu tính năng mới (KHÁC HẲN coco-modal
+  // đã xử lý ở trên) — xác nhận qua lỗi thật (job
+  // người_vợ_báo_thù_-Y_CHARACTER_LIN_YIN, 2026-09-17): selectModel timeout
+  // vì bị 4 <rect fill="transparent" pointer-events="auto" ...> (khoét lỗ
+  // quanh vùng đang highlight, mask SVG bên trong div.coco-tour-mask, z-index
+  // 1001) chặn click, dù chính overlay đó "pointer-events: none" — các rect
+  // con bên trong mới thật sự nhận click. Nút đóng KHÔNG dùng aria-label
+  // "Close" như coco-modal — dùng class riêng "coco-tour-next-btn" (text vd
+  // "Got it"/"Next" tuỳ bước). Bấm LẶP LẠI (tối đa 5 lần, cách nhau ngắn) để
+  // qua hết các bước nếu tour có nhiều bước, không chỉ 1 lần.
+  for (let i = 0; i < 5; i++) {
+    const tourNextButton = page.locator("button.coco-tour-next-btn").first();
+    const tourButtonVisible = await tourNextButton
+      .isVisible({ timeout: 1000 })
+      .catch(() => false);
+    if (!tourButtonVisible) break;
+    await tourNextButton.click().catch(() => {});
+    await page.waitForTimeout(300);
+  }
+
   await page.keyboard.press("Escape").catch(() => {});
 }
 
@@ -441,62 +461,104 @@ export async function captureGenerationRecordId(
   page: Page,
   clickAction: () => Promise<void>,
 ): Promise<number | null> {
-  const responsePromise = page
-    .waitForResponse(
-      (res) =>
-        res.request().method() === "POST" &&
-        /\/api\/trpc\/[a-zA-Z0-9_]+\.(create|submit)(\?|$)/.test(res.url()),
-      { timeout: 60_000 },
-    )
-    .catch(() => null);
+  // Theo yêu cầu người dùng: response tRPC báo LỖI (xem errorInfo bên dưới,
+  // vd "Activity daily limit reached") có thể chỉ là chặn TẠM THỜI/thoáng
+  // qua (thao tác tay ngay sau đó vẫn generate được trên CÙNG tài khoản) —
+  // thử bấm lại Generate tối đa 3 lần trước khi chịu thua hẳn, thay vì throw
+  // ngay ở lần đầu. Mỗi lần thử lại là 1 lượt click+chờ response HOÀN TOÀN
+  // MỚI (baseline count không đổi giữa các lần vì lượt trước bị SERVER từ
+  // chối, không có gì được tạo ra cả — an toàn để click lại).
+  const maxAttempts = 3;
+  let lastTrpcError: GenerationError | null = null;
 
-  // Log chẩn đoán — theo yêu cầu điều tra job "Hết thời gian chờ tạo video —
-  // chưa từng thấy card generate nào xuất hiện" (4 job liên tiếp,
-  // EP1_1_SHOT_12..15, 2026-09-16): recordId luôn null (không có log "API
-  // record ... status") cho các job này, tức responsePromise ở trên KHÔNG
-  // khớp được request nào trong 60s — nhưng chưa rõ vì (a) trang KHÔNG hề
-  // gửi request submit nào cả (click không thực sự đăng ký được), hay (b) có
-  // gửi nhưng khớp SAI regex/tên endpoint. Bắt rộng hơn TOÀN BỘ request POST
-  // tới /api/trpc/ (không lọc theo .create|.submit) trong CÙNG khoảng thời
-  // gian để phân biệt 2 khả năng này — chỉ log khi responsePromise ở trên
-  // thất bại (không tốn gì thêm khi mọi thứ chạy bình thường).
-  const observedTrpcRequests: string[] = [];
-  const onRequest = (req: import("playwright").Request) => {
-    if (req.method() === "POST" && req.url().includes("/api/trpc/")) {
-      observedTrpcRequests.push(req.url());
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const responsePromise = page
+      .waitForResponse(
+        (res) =>
+          res.request().method() === "POST" &&
+          /\/api\/trpc\/[a-zA-Z0-9_]+\.(create|submit)(\?|$)/.test(res.url()),
+        { timeout: 60_000 },
+      )
+      .catch(() => null);
+
+    // Log chẩn đoán — theo yêu cầu điều tra job "Hết thời gian chờ tạo video
+    // — chưa từng thấy card generate nào xuất hiện" (4 job liên tiếp,
+    // EP1_1_SHOT_12..15, 2026-09-16): recordId luôn null (không có log "API
+    // record ... status") cho các job này, tức responsePromise ở trên KHÔNG
+    // khớp được request nào trong 60s — nhưng chưa rõ vì (a) trang KHÔNG hề
+    // gửi request submit nào cả (click không thực sự đăng ký được), hay (b) có
+    // gửi nhưng khớp SAI regex/tên endpoint. Bắt rộng hơn TOÀN BỘ request POST
+    // tới /api/trpc/ (không lọc theo .create|.submit) trong CÙNG khoảng thời
+    // gian để phân biệt 2 khả năng này — chỉ log khi responsePromise ở trên
+    // thất bại (không tốn gì thêm khi mọi thứ chạy bình thường).
+    const observedTrpcRequests: string[] = [];
+    const onRequest = (req: import("playwright").Request) => {
+      if (req.method() === "POST" && req.url().includes("/api/trpc/")) {
+        observedTrpcRequests.push(req.url());
+      }
+    };
+    page.on("request", onRequest);
+
+    await clickAction();
+
+    const res = await responsePromise;
+    page.off("request", onRequest);
+    if (!res) {
+      console.warn(
+        `[pollo] captureGenerationRecordId: không bắt được response submit nào trong 60s. Các POST /api/trpc/ đã quan sát được trong lúc chờ: ${
+          observedTrpcRequests.length > 0
+            ? observedTrpcRequests.join(", ")
+            : "(không có request nào cả — click có thể chưa thực sự submit)"
+        }`,
+      );
+      return null;
     }
-  };
-  page.on("request", onRequest);
+    const body = await res.json().catch(() => null);
+    const entry = Array.isArray(body) ? body[0] : body;
 
-  await clickAction();
+    // Xác nhận qua log thật (job EP1_1_SHOT_12..15, 2026-09-16): response
+    // tRPC báo LỖI (không phải "id" thiếu do đổi cấu trúc) có dạng
+    // {"error":{"json":{"message":...,"code":...,"data":{"errorCode":...}}}}
+    // — cụ thể gặp "Activity daily limit reached" (errorCode
+    // "ACTIVITY_DAILY_LIMIT_REACHED", httpStatus 400). Thử lại (xem
+    // maxAttempts ở trên) trước khi throw hẳn ở lần cuối.
+    const errorInfo = entry?.error?.json;
+    if (errorInfo) {
+      const errorCode = errorInfo.data?.errorCode;
+      lastTrpcError = new GenerationError(
+        `pollo.ai từ chối submit generate: ${errorInfo.message ?? "(không rõ message)"}${
+          errorCode ? ` (errorCode: ${errorCode})` : ""
+        }`,
+      );
+      if (attempt < maxAttempts) {
+        console.warn(
+          `[pollo] captureGenerationRecordId: lần thử ${attempt}/${maxAttempts} bị pollo.ai từ chối (${lastTrpcError.message}) — thử bấm Generate lại.`,
+        );
+        await page.waitForTimeout(5_000);
+        continue;
+      }
+      throw lastTrpcError;
+    }
 
-  const res = await responsePromise;
-  page.off("request", onRequest);
-  if (!res) {
-    console.warn(
-      `[pollo] captureGenerationRecordId: không bắt được response submit nào trong 60s. Các POST /api/trpc/ đã quan sát được trong lúc chờ: ${
-        observedTrpcRequests.length > 0
-          ? observedTrpcRequests.join(", ")
-          : "(không có request nào cả — click có thể chưa thực sự submit)"
-      }`,
-    );
-    return null;
+    const id = entry?.result?.data?.json?.id;
+    if (typeof id !== "number") {
+      // Cùng mục đích chẩn đoán như nhánh !res ở trên — response ĐÃ khớp
+      // URL/method mong đợi (res tồn tại) nhưng không đọc được field "id"
+      // dạng number ở đúng vị trí kỳ vọng (entry.result.data.json.id) — có
+      // thể pollo.ai đổi cấu trúc response, hoặc job KHÁC đang chạy song
+      // song khớp NHẦM response (URL đúng nhưng payload không phải của lượt
+      // generate này). Log nguyên văn URL + body để biết chính xác lệch ở
+      // đâu.
+      console.warn(
+        `[pollo] captureGenerationRecordId: bắt được response (${res.url()}) nhưng không đọc được "id" dạng number từ body — body: ${JSON.stringify(body)}`,
+      );
+    }
+    return typeof id === "number" ? id : null;
   }
-  const body = await res.json().catch(() => null);
-  const entry = Array.isArray(body) ? body[0] : body;
-  const id = entry?.result?.data?.json?.id;
-  if (typeof id !== "number") {
-    // Cùng mục đích chẩn đoán như nhánh !res ở trên — response ĐÃ khớp
-    // URL/method mong đợi (res tồn tại) nhưng không đọc được field "id"
-    // dạng number ở đúng vị trí kỳ vọng (entry.result.data.json.id) — có thể
-    // pollo.ai đổi cấu trúc response, hoặc job KHÁC đang chạy song song
-    // khớp NHẦM response (URL đúng nhưng payload không phải của lượt
-    // generate này). Log nguyên văn URL + body để biết chính xác lệch ở đâu.
-    console.warn(
-      `[pollo] captureGenerationRecordId: bắt được response (${res.url()}) nhưng không đọc được "id" dạng number từ body — body: ${JSON.stringify(body)}`,
-    );
-  }
-  return typeof id === "number" ? id : null;
+
+  // Không thể tới đây thật (vòng lặp luôn return hoặc throw ở trên) — chỉ để
+  // TypeScript hài lòng về kiểu trả về.
+  throw lastTrpcError ?? new GenerationError("captureGenerationRecordId: lỗi không xác định.");
 }
 
 /**
@@ -513,10 +575,12 @@ export async function captureGenerationRecordId(
  * bản đầu coi "khác waiting là xong" nên dừng poll NGAY khi thấy
  * "processing", trả về status sai (chưa xong thật) và caller hiểu nhầm là
  * terminal. Danh sách CHƯA XONG giờ là {waiting, processing} — status nào
- * khác 2 giá trị này mới coi là terminal. CHƯA có bằng chứng thật cho trạng
- * thái lỗi (status khi thất bại) — trả nguyên văn status terminal đó ra cho
- * caller tự log/xử lý, KHÔNG đoán bừa ý nghĩa; có thể còn trạng thái trung
- * gian khác chưa gặp, sửa tiếp khi có bằng chứng mới.
+ * khác 2 giá trị này mới coi là terminal. Trạng thái lỗi khi thất bại là
+ * "failed" (theo yêu cầu người dùng, caller — attemptGenerateVideo/
+ * attemptGenerateImage — throw ngay khi thấy giá trị này, không chờ dò DOM
+ * vô ích) — vẫn trả nguyên văn MỌI status terminal khác ra cho caller tự
+ * log/xử lý, KHÔNG đoán bừa ý nghĩa; có thể còn trạng thái trung gian khác
+ * chưa gặp, sửa tiếp khi có bằng chứng mới.
  *
  * PHẢI gọi fetch qua page.evaluate (chạy như JS thật của chính trang), KHÔNG
  * dùng page.context().request/page.request — xác nhận qua lỗi thật: gọi
@@ -796,7 +860,18 @@ export async function selectModel(
   const currentLabel = await chip.innerText().catch(() => "");
   if (currentLabel.trim().toLowerCase() === modelName.toLowerCase()) return;
 
-  await chip.click({ timeout: 10_000 });
+  // clickWithOverlayDismiss (không phải chip.click() thô) — xác nhận qua lỗi
+  // thật LẶP LẠI NHIỀU LẦN, MỖI LẦN 1 PHẦN TỬ CHE KHÁC NHAU (job
+  // người_vợ_báo_thù_-Y_CHARACTER_LIN_YIN/FENG_MINGZHOU, 2026-09-17): lần đầu
+  // bị "coco-tour" (đã sửa riêng, xem dismissBlockingOverlays), lần sau lại
+  // bị 1 <video> nền của thẻ nội dung khuyến mãi phía dưới trang đè lên đúng
+  // vị trí chip model — các phần tử quảng cáo/khuyến mãi trên trang chủ
+  // pollo.ai LIÊN TỤC đổi khác nhau, không thể liệt kê hết từng loại 1. AN
+  // TOÀN gọi dismissBlockingOverlays() giữa các lần thử ở ĐÂY (khác hẳn vòng
+  // lặp click row model bên dưới, nơi Escape sẽ đóng nhầm popup đang mở) —
+  // popup chọn model CHƯA MỞ tại bước này nên Escape không có gì để đóng
+  // nhầm cả.
+  await clickWithOverlayDismiss(page, chip, 10_000, 5);
   const searchInput = page.locator('input[placeholder="Search…"]');
   await searchInput.fill(modelName).catch(() => {});
   await page.waitForTimeout(800);
@@ -1941,6 +2016,11 @@ export async function focusEditorWithRetry(
 export async function enableUnlimitedIfNotEnoughCredit(
   page: Page,
   jobId: string,
+  // Theo yêu cầu người dùng: hàm gen ẢNH (polloImage.ts) luôn cần bật
+  // Unlimited, KHÔNG cần so sánh credit/phí trước — bỏ qua hẳn toàn bộ bước
+  // đọc credit/fee bên dưới, đi thẳng vào bật switch. generateVideo (pollo.ts)
+  // vẫn giữ hành vi cũ (chỉ bật khi credit không đủ) — không truyền cờ này.
+  alwaysEnable = false,
 ): Promise<void> {
   const switchLocator = page
     .locator('div[data-button-name="is_unlimited"] [role="switch"]')
@@ -1953,45 +2033,50 @@ export async function enableUnlimitedIfNotEnoughCredit(
     "true";
   if (alreadyOn) return;
 
-  const creditText = await page
-    .locator("span.i-cus--pol-credits-2")
-    .locator("xpath=..")
-    .first()
-    .innerText()
-    .catch(() => "");
-  const credit = Number.parseInt(creditText, 10);
-  if (!Number.isFinite(credit)) {
-    console.warn(
-      `[pollo] Không đọc được credit hiện tại (credit="${creditText}") — bỏ qua bật Unlimited.`,
-    );
-    return;
-  }
-
-  // credit === 0 → LUÔN bật Unlimited, không cần biết phí lượt tạo là bao
-  // nhiêu (0 chắc chắn không đủ trả bất kỳ phí dương nào) — theo yêu cầu
-  // người dùng. Trước đây chỉ dựa vào so sánh credit/fee: nếu không đọc được
-  // fee (vd site đổi cấu trúc, phần tử chưa kịp render) thì bail ra LUÔN dù
-  // credit=0 rõ ràng không đủ, khiến generate chạy tiếp với credit thật và
-  // fail sau đó vì hết credit thay vì tự bật Unlimited.
+  let credit: number | null = null;
   let fee: number | null = null;
-  if (credit !== 0) {
-    const feeText = await page
-      .locator('[data-slot="credit-cost-value"] .font-semibold')
+  if (!alwaysEnable) {
+    const creditText = await page
+      .locator("span.i-cus--pol-credits-2")
+      .locator("xpath=..")
       .first()
       .innerText()
       .catch(() => "");
-    fee = Number.parseInt(feeText, 10);
-    if (!Number.isFinite(fee)) {
+    credit = Number.parseInt(creditText, 10);
+    if (!Number.isFinite(credit)) {
       console.warn(
-        `[pollo] Không đọc được phí lượt tạo (credit=${credit}, phí="${feeText}") — bỏ qua bật Unlimited.`,
+        `[pollo] Không đọc được credit hiện tại (credit="${creditText}") — bỏ qua bật Unlimited.`,
       );
       return;
     }
-    if (credit >= fee) return;
+
+    // credit === 0 → LUÔN bật Unlimited, không cần biết phí lượt tạo là bao
+    // nhiêu (0 chắc chắn không đủ trả bất kỳ phí dương nào) — theo yêu cầu
+    // người dùng. Trước đây chỉ dựa vào so sánh credit/fee: nếu không đọc
+    // được fee (vd site đổi cấu trúc, phần tử chưa kịp render) thì bail ra
+    // LUÔN dù credit=0 rõ ràng không đủ, khiến generate chạy tiếp với credit
+    // thật và fail sau đó vì hết credit thay vì tự bật Unlimited.
+    if (credit !== 0) {
+      const feeText = await page
+        .locator('[data-slot="credit-cost-value"] .font-semibold')
+        .first()
+        .innerText()
+        .catch(() => "");
+      fee = Number.parseInt(feeText, 10);
+      if (!Number.isFinite(fee)) {
+        console.warn(
+          `[pollo] Không đọc được phí lượt tạo (credit=${credit}, phí="${feeText}") — bỏ qua bật Unlimited.`,
+        );
+        return;
+      }
+      if (credit >= fee) return;
+    }
   }
 
   console.warn(
-    `[pollo] Credit hiện tại (${credit})${fee !== null ? ` không đủ trả phí lượt tạo (${fee})` : ""} — tự bật "Unlimited".`,
+    alwaysEnable
+      ? `[pollo] Luôn bật "Unlimited" cho gen ảnh (theo yêu cầu người dùng).`
+      : `[pollo] Credit hiện tại (${credit})${fee !== null ? ` không đủ trả phí lượt tạo (${fee})` : ""} — tự bật "Unlimited".`,
   );
   // Banner cookie-consent (#cc-main) có thể vẫn còn che switch tại thời điểm
   // này (nó chỉ bị dismiss 1 lần lúc mới vào trang) và chặn click thật —
@@ -2442,8 +2527,7 @@ async function attemptGenerateVideo(
     } else if (referenceImagePaths.length > 0 && !deepLink) {
       await switchModeIfNeeded(page, "Reference to Video");
     }
-
-    if (model && !deepLink?.includesModel) {
+    if (model ) {
       await dismissBlockingOverlays(page);
       await selectModel(page, model);
     }
@@ -2845,6 +2929,18 @@ async function attemptGenerateVideo(
     }
 
     await enableUnlimitedIfNotEnoughCredit(page, jobId);
+    const unlimitedSwitchLocator = page
+      .locator('div[data-button-name="is_unlimited"] [role="switch"]')
+      .first();
+    const unlimitedCheckedBeforeGenerate = await unlimitedSwitchLocator
+        .getAttribute("aria-checked")
+        .catch(() => null);
+console.log(
+      `[pollo-video] Unlimited switch NGAY TRƯỚC khi bấm Generate: aria-checked="${unlimitedCheckedBeforeGenerate}"`,
+    );
+    await captureSnapshot(page, `${jobId}_before-generate`, "before-generate", {
+      includeHtml: true,
+    });
 
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();
@@ -2874,6 +2970,18 @@ async function attemptGenerateVideo(
     if (recordId !== null) {
       console.log(
         `[pollo] API record ${recordId} status: ${apiStatus ?? "(hết thời gian chờ, không rõ)"}`,
+      );
+    }
+
+    // SỬA (theo yêu cầu người dùng): API xác nhận rõ status "failed" thì
+    // throw NGAY, không rơi xuống chờ dò DOM (waitForNewResult) nữa — dò DOM
+    // chắc chắn không bao giờ thấy video mới xuất hiện khi generation đã
+    // failed thật, nên trước đây vẫn phải đợi hết cả config.generationTimeoutMs
+    // (có thể tới hàng chục phút) rồi mới throw timeout, tốn thời gian vô ích
+    // dù đã biết trước là thất bại ngay từ lúc này.
+    if (apiStatus === "failed") {
+      throw new GenerationError(
+        `pollo.ai báo generate thất bại (status: "failed", record ${recordId}) — không tạo được video.`,
       );
     }
 
