@@ -83,15 +83,30 @@ async function getClient(): Promise<TelegramClient> {
  * đó, không cần decode file_id).
  */
 /**
- * Retry ngắn cho downloadMedia — xác nhận qua lỗi thật (2026-09-29):
+ * Retry cho downloadMedia — xác nhận qua lỗi thật (2026-09-29):
  * "TimeoutError: Timeout while fetching data. (caused by upload.GetFile)"
  * kèm `code: 503, errorMessage: 'Timeout'` — đây là lỗi phía SERVER Telegram
  * (DC lưu file phản hồi chậm/quá tải), không phải sai tham số hay session
- * hỏng. Loại lỗi này thường tự qua nếu thử lại sau vài giây — không retry
- * thì user phải upload lại nguyên video từ đầu (xem downloadTelegramVideoRobust
- * trong handlers.ts) chỉ vì 1 lần Telegram chập chờn thoáng qua.
+ * hỏng.
+ *
+ * QUAN TRỌNG (đọc source thật node_modules/teleproto/client/downloads.js,
+ * hàm streamParallel — KHÔNG đoán): file có size xác định được tải bằng
+ * NHIỀU request `upload.GetFile` chạy SONG SONG (mỗi phần partSize, scale số
+ * lượng theo session/window nội bộ), rồi ghép lại đúng thứ tự. CHỈ CẦN 1
+ * trong số các phần đó lỗi (firstError) là toàn bộ downloadMedia() ném lỗi
+ * NGAY, dù các phần khác đã tải xong — thư viện KHÔNG tự retry riêng phần bị
+ * lỗi. Hệ quả: video càng dài/càng nặng thì càng nhiều phần song song, xác
+ * suất ÍT NHẤT 1 phần dính lỗi 503 thoáng qua của Telegram càng cao — video
+ * 1 tiếng nhiều khả năng lỗi hơn hẳn video vài phút dù server không có gì
+ * bất thường hơn. Không sửa được tận gốc (retry-từng-phần) ở tầng gọi vì đó
+ * là logic NỘI BỘ của teleproto (sửa trong node_modules sẽ mất khi npm
+ * install lại) — retry NGUYÊN CẢ FILE ở tầng này là cách khả thi duy nhất.
+ * Nới attempts lên 5 (từ 3) + backoff tăng dần (thay vì cố định 5s) — cho
+ * Telegram server thêm thời gian hồi phục nếu là do quá tải thật, và tăng cơ
+ * hội "trúng" 1 lượt mà cả loạt phần song song đều suôn sẻ với file nặng.
  */
-const MAX_DOWNLOAD_ATTEMPTS = 3;
+const MAX_DOWNLOAD_ATTEMPTS = 5;
+const DOWNLOAD_RETRY_BACKOFF_MS = [5_000, 10_000, 20_000, 30_000];
 
 export async function downloadTelegramMediaViaMTProto(
   chatId: number,
@@ -124,11 +139,15 @@ export async function downloadTelegramMediaViaMTProto(
     } catch (err) {
       lastError = err;
       if (attempt < MAX_DOWNLOAD_ATTEMPTS) {
+        const backoffMs =
+          DOWNLOAD_RETRY_BACKOFF_MS[
+            Math.min(attempt - 1, DOWNLOAD_RETRY_BACKOFF_MS.length - 1)
+          ];
         console.warn(
-          `[MTProto] Tải media lỗi (lần ${attempt}/${MAX_DOWNLOAD_ATTEMPTS}, message ${messageId}, chat ${chatId}), thử lại sau 5s:`,
+          `[MTProto] Tải media lỗi (lần ${attempt}/${MAX_DOWNLOAD_ATTEMPTS}, message ${messageId}, chat ${chatId}), thử lại sau ${backoffMs / 1000}s:`,
           err instanceof Error ? err.message : err,
         );
-        await sleep(5000);
+        await sleep(backoffMs);
       }
     }
   }
