@@ -2767,34 +2767,34 @@ async function processChatAIQueue(): Promise<void> {
       );
       try {
         let downloadedFiles: string[];
-        // if (job.type === "scriptReferenceVideo") {
-        //   ({ downloadedFiles } = await askQwenAboutReferenceVideo(
-        //     job.videoPath,
-        //     jobId,
-        //     job.videoFileName,
-        //     job.extraInstruction,
-        //     job.masterPromptPath,
-        //   ));
-        //   console.log(
-        //     `[queue] processChatAIQueue(${jobId}): askQwenAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
-        //   );
-        // } else {
-        //   // Theo yêu cầu người dùng: đổi sang askQwen (Qwen qua OpenRouter,
-        //   // xem qwenAI.ts) THAY CHO askChatAI/askChatAIWithInlineContent —
-        //   // askQwen KHÔNG có khái niệm "upload file lên composer" (chỉ dán
-        //   // thẳng nội dung file làm text, xem docstring askQwen), nên không
-        //   // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
-        //   // fileAccessError kiểu ChatGPT để mà fallback).
-        //   ({ downloadedFiles } = await askQwen(
-        //     job.prompt,
-        //     jobId,
-        //     job.promptFileName,
-        //     job.promptAttachmentPath,
-        //   ));
-        //   console.log(
-        //     `[queue] processChatAIQueue(${jobId}): askQwen xong, tải được ${downloadedFiles.length} file.`,
-        //   );
-        // }
+        if (job.type === "scriptReferenceVideo") {
+          ({ downloadedFiles } = await askQwenAboutReferenceVideo(
+            job.videoPath,
+            jobId,
+            job.videoFileName,
+            job.extraInstruction,
+            job.masterPromptPath,
+          ));
+          console.log(
+            `[queue] processChatAIQueue(${jobId}): askQwenAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
+          );
+        } else {
+          // Theo yêu cầu người dùng: đổi sang askQwen (Qwen qua OpenRouter,
+          // xem qwenAI.ts) THAY CHO askChatAI/askChatAIWithInlineContent —
+          // askQwen KHÔNG có khái niệm "upload file lên composer" (chỉ dán
+          // thẳng nội dung file làm text, xem docstring askQwen), nên không
+          // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
+          // fileAccessError kiểu ChatGPT để mà fallback).
+          ({ downloadedFiles } = await askQwen(
+            job.prompt,
+            jobId,
+            job.promptFileName,
+            job.promptAttachmentPath,
+          ));
+          console.log(
+            `[queue] processChatAIQueue(${jobId}): askQwen xong, tải được ${downloadedFiles.length} file.`,
+          );
+        }
 
         // "Tạo kịch bản mới" (job.type === "generateScript", dùng CHUNG hàng
         // đợi này với "chatAI" — xem docstring GenerateScriptJob) cần 3 bước
@@ -2815,7 +2815,6 @@ async function processChatAIQueue(): Promise<void> {
         // folder riêng (hành vi mặc định cho job "chatAI" bình thường) — và
         // KHÁC lần remake TRƯỚC của CÙNG tên phim gốc (folder tên khác nhau,
         // không ghi đè/archive lẫn nhau).
-        downloadedFiles = ["storage/chatai-results/beggar.json"]
         if (job.type === "generateScript") {
           const jsonFileIndexes = downloadedFiles
             .map((f, i) => ({ f, i }))
