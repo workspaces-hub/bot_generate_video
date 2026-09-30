@@ -106,6 +106,14 @@ interface MergeState {
   obj: Record<string, unknown>;
 }
 
+// SỬA (xác nhận qua log thật): hàm này DÙNG CHUNG cho cả askQwen VÀ
+// askQwenAboutReferenceVideo (xem 2 nơi gọi mergeJsonPartAuto) — trước đây
+// mọi dòng log bên dưới hardcode cứng tên "askQwenAboutReferenceVideo",
+// khiến log của askQwen (vd job "Tạo kịch bản mới") hiện SAI tên hàm, dễ
+// tưởng nhầm 2 hàm đang chạy song song trên CÙNG 1 jobId (thực ra không
+// phải — processChatAIQueue chỉ gọi ĐÚNG 1 trong 2 hàm cho mỗi job). Bỏ tên
+// hàm cụ thể, chỉ giữ "[qwenAI]" + jobId — vẫn đối chiếu được với dòng log
+// của đúng hàm đang gọi (in ngay trước/sau) nhờ CÙNG jobId.
 function mergeJsonPartAuto(
   state: MergeState,
   part: unknown,
@@ -117,7 +125,7 @@ function mergeJsonPartAuto(
 
   if (!isArrayPart && !isObjectPart) {
     console.warn(
-      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} trả JSON không phải array/object hợp lệ — bỏ qua: ${JSON.stringify(part).slice(0, 200)}`,
+      `[qwenAI] (job ${jobId}) lượt ${turn} trả JSON không phải array/object hợp lệ — bỏ qua: ${JSON.stringify(part).slice(0, 200)}`,
     );
     return;
   }
@@ -125,14 +133,14 @@ function mergeJsonPartAuto(
   if (state.kind === "unset") {
     state.kind = isArrayPart ? "array" : "object";
     console.log(
-      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} — xác định kiểu kết quả là "${state.kind}" (dựa theo lượt đầu tiên có dữ liệu).`,
+      `[qwenAI] (job ${jobId}) lượt ${turn} — xác định kiểu kết quả là "${state.kind}" (dựa theo lượt đầu tiên có dữ liệu).`,
     );
   }
 
   if (state.kind === "array") {
     if (!isArrayPart) {
       console.warn(
-        `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} — đã bắt đầu theo kiểu ARRAY nhưng lượt này trả OBJECT, bỏ qua (không trộn lẫn 2 kiểu).`,
+        `[qwenAI] (job ${jobId}) lượt ${turn} — đã bắt đầu theo kiểu ARRAY nhưng lượt này trả OBJECT, bỏ qua (không trộn lẫn 2 kiểu).`,
       );
       return;
     }
@@ -142,7 +150,7 @@ function mergeJsonPartAuto(
 
   if (!isObjectPart) {
     console.warn(
-      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} — đã bắt đầu theo kiểu OBJECT nhưng lượt này trả ARRAY, bỏ qua (không trộn lẫn 2 kiểu).`,
+      `[qwenAI] (job ${jobId}) lượt ${turn} — đã bắt đầu theo kiểu OBJECT nhưng lượt này trả ARRAY, bỏ qua (không trộn lẫn 2 kiểu).`,
     );
     return;
   }
@@ -154,7 +162,7 @@ function mergeJsonPartAuto(
       state.obj[key] = [...existing, ...value];
     } else {
       console.warn(
-        `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} GHI ĐÈ key "${key}" đã có từ lượt trước (không phải mảng để nối) — có thể model đã lặp lại phần đã gửi.`,
+        `[qwenAI] (job ${jobId}) lượt ${turn} GHI ĐÈ key "${key}" đã có từ lượt trước (không phải mảng để nối) — có thể model đã lặp lại phần đã gửi.`,
       );
       state.obj[key] = value;
     }
@@ -435,7 +443,14 @@ async function callOpenRouterWithProviderRetry(
     }
 
     console.warn(
-      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): ${turnLabel} — lỗi hạ tầng tạm thời (${result.errorType}), thử lại NGUYÊN request (lần ${attempt + 1}/${PROVIDER_ERROR_MAX_RETRIES})...`,
+      // KHÔNG hardcode tên hàm gọi (vd "askQwenAboutReferenceVideo") ở đây —
+      // callOpenRouterWithProviderRetry là hàm DÙNG CHUNG cho askQwen,
+      // askQwenAboutReferenceVideo, reviseGenerationPromptQwen VÀ
+      // verifyReferenceVideoJson (xem turnLabel mỗi nơi gọi truyền vào khác
+      // nhau). Xác nhận qua log thật: hardcode cứng "askQwenAboutReferenceVideo"
+      // trước đây khiến log của askQwen hiện nhầm tên hàm, dễ tưởng nhầm là 2
+      // hàm đang chạy song song trên CÙNG 1 jobId (thực ra không phải).
+      `[qwenAI] (job ${jobId}) ${turnLabel} — lỗi hạ tầng tạm thời (${result.errorType}), thử lại NGUYÊN request (lần ${attempt + 1}/${PROVIDER_ERROR_MAX_RETRIES})...`,
     );
   }
 
@@ -528,12 +543,14 @@ Kết quả JSON cuối cùng PHẢI ĐÚNG THEO SCHEMA đã mô tả ở master
 
 KHÔNG cố xuất toàn bộ kết quả trong một lượt.
 
+GIỚI HẠN CỨNG MỖI LƯỢT — TUÂN THỦ NGHIÊM: tối đa 3 item MỚI (nếu schema ARRAY) hoặc tối đa 3 phần tử MỚI gộp trên mọi key (nếu schema OBJECT) cho MỖI LƯỢT, KỂ CẢ khi còn dư chỗ để viết thêm. Đây KHÔNG phải giới hạn "nếu quá dài mới áp dụng" — ÁP DỤNG LUÔN TỪ LƯỢT ĐẦU TIÊN, bất kể lượt đó có vẻ còn ngắn. Thà mất thêm nhiều lượt hơn còn hơn 1 lượt bị cắt giữa chừng thành JSON hỏng (không parse được, mất trắng toàn bộ nội dung của lượt đó). Nếu 1 item/phần tử tự nó đã dài (vd 1 đoạn VIDEO.prompt chi tiết nhiều câu thoại), GIẢM xuống còn 1 item/lượt — ưu tiên TUYỆT ĐỐI việc đóng JSON hợp lệ hơn số lượng item gửi được.
+
 Mỗi lượt:
 - chỉ trả về ĐÚNG MỘT khối code \`\`\`json ... \`\`\`;
-- nếu schema là ARRAY: bên trong khối là 1 JSON ARRAY hợp lệ, chỉ chứa các item MỚI chưa gửi ở lượt trước;
-- nếu schema là OBJECT: bên trong khối là 1 JSON OBJECT hợp lệ, chỉ chứa 1 vài key/phần tử MỚI chưa gửi ở lượt trước (nếu 1 key là mảng dài, có thể tiếp tục dùng lại đúng key đó ở lượt sau nhưng chỉ chứa PHẦN TỬ MỚI của mảng, không bọc thêm object cha khác);
+- nếu schema là ARRAY: bên trong khối là 1 JSON ARRAY hợp lệ, chỉ chứa các item MỚI chưa gửi ở lượt trước (TỐI ĐA 3 item, xem giới hạn cứng ở trên);
+- nếu schema là OBJECT: bên trong khối là 1 JSON OBJECT hợp lệ, chỉ chứa 1 vài key/phần tử MỚI chưa gửi ở lượt trước (TỐI ĐA 3 phần tử, xem giới hạn cứng ở trên; nếu 1 key là mảng dài, có thể tiếp tục dùng lại đúng key đó ở lượt sau nhưng chỉ chứa PHẦN TỬ MỚI của mảng, không bọc thêm object cha khác);
 - không lặp lại dữ liệu đã gửi nếu không cần thiết;
-- nếu vẫn quá dài, phải chia nhỏ hơn nữa để mỗi lượt luôn là JSON hoàn chỉnh, tự đóng, parse được.
+- TRƯỚC KHI kết thúc phản hồi, TỰ ĐẾM LẠI số dấu ngoặc mở/đóng (\`{\`/\`}\`, \`[\`/\`]\`) của khối JSON vừa viết — nếu còn lệch (chưa đóng đủ), PHẢI hoàn tất việc đóng ngoặc TRƯỚC, kể cả phải cắt bớt nội dung của item cuối đang viết dở để kịp đóng — KHÔNG BAO GIỜ được dừng lại giữa chừng khi ngoặc chưa cân bằng.
 
 Trạng thái đã gom được tới trước lượt ${turn} (dựa CHÍNH XÁC vào đây để biết tiếp tục từ đâu, KHÔNG tự đoán):
 ${completionState}
