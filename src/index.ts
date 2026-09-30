@@ -2,6 +2,7 @@ import os from "node:os";
 import { Telegraf } from "telegraf";
 import { config } from "./config";
 import { registerHandlers } from "./bot/handlers";
+import { startQwenFileServerEagerly } from "./automation/qwenFileServer";
 import { initQueue } from "./queue";
 
 // Theo yêu cầu người dùng (VPS 100% CPU do các Chrome instance gen ảnh/video
@@ -68,6 +69,11 @@ bot.catch((err, ctx) => {
 registerHandlers(bot);
 // Khôi phục job còn dang dở từ lần chạy trước (nếu có) và bắt đầu xử lý.
 initQueue(bot.telegram);
+// Khởi động NGAY lúc boot (không đợi lazy) — xem docstring
+// startQwenFileServerEagerly: link "Nối video" phải sống được qua mọi lần
+// restart process (tsx watch lúc dev, hay pm2 crash-restart lúc production),
+// không phụ thuộc đã có publish nào chạy trong lần process này chưa.
+startQwenFileServerEagerly();
 
 bot
   .launch()

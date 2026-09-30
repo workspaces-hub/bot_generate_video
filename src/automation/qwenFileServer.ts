@@ -107,6 +107,33 @@ function ensureServer(): Promise<http.Server> {
 }
 
 /**
+ * Khởi động server NGAY LÚC BOT BOOT (index.ts) thay vì chỉ lazy đợi lần đầu
+ * publishFileTemporarily() được gọi — xác nhận qua sự cố thật: link "Nối
+ * video" (MERGE_VIDEO_BUTTON_LABEL, publishFileTemporarily KHÔNG cleanup nên
+ * file tồn tại lâu dài trong config.qwenFileServeDir) gửi cho user rồi bị
+ * BÁO KHÔNG DÙNG ĐƯỢC — vì `npm run dev` chạy bằng `tsx watch`, MỌI lần sửa
+ * code đều tự restart process, giết server HTTP đang chạy trong RAM, dù file
+ * .mp4 vẫn còn NGUYÊN trên đĩa — server cũ mất, chưa có publish nào chạy lại
+ * trong lần process mới nên KHÔNG có gì lắng nghe port nữa (xác nhận qua
+ * `lsof -iTCP:<port>` rỗng). Gọi hàm này lúc boot để server luôn sẵn sàng
+ * SUỐT vòng đời process, không phụ thuộc đã có ai gọi publishFileTemporarily
+ * lần nào trong lần chạy này chưa — mọi file publish từ TRƯỚC (còn nằm trong
+ * SERVE_DIR) tự phục vụ lại được ngay. Best-effort: bỏ qua nếu thiếu
+ * QWEN_PUBLIC_BASE_URL (tính năng OpenRouT/Nối video không dùng), chỉ log lỗi
+ * nếu port đã bị chiếm — KHÔNG throw, không được làm crash cả bot vì tính
+ * năng phụ này.
+ */
+export function startQwenFileServerEagerly(): void {
+  if (!config.qwenPublicBaseUrl) return;
+  ensureServer().catch((err) => {
+    console.error(
+      `[qwenFileServer] Không khởi động được server lúc boot (port ${config.qwenFileServerPort}):`,
+      err,
+    );
+  });
+}
+
+/**
  * Copy `localPath` vào config.qwenFileServeDir dưới tên `publicFileName`,
  * khởi động server (nếu chưa chạy) rồi trả về URL công khai (ghép với
  * config.qwenPublicBaseUrl) + hàm cleanup() để xoá file tạm này — GỌI

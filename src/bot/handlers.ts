@@ -13,6 +13,8 @@ import { downloadTelegramMediaViaMTProto } from "../automation/telegramMTProto";
 import { publishFileTemporarily } from "../automation/qwenFileServer";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import {
+  buildVideoTimeline,
+  findVideoEntriesInTimeRange,
   generatedDirFor,
   generatedImageDirFor,
   mergeVideosForFile,
@@ -37,6 +39,7 @@ import {
   CHARACTER_REF_BUTTON_LABEL,
   CHATAI_BUTTON_LABEL,
   CHATAI_CHECK_BUTTON_LABEL,
+  CONTINUE_IMAGE_BUTTON_LABEL,
   CONTINUE_SCENE_FRAME_BUTTON_LABEL,
   CONTINUE_VIDEO_BUTTON_LABEL,
   GENERATE_SCRIPT_BUTTON_LABEL,
@@ -44,6 +47,7 @@ import {
   MERGE_VIDEO_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
   PROMPT_BUTTON_LABEL,
+  REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL,
   SCRIPT_REFERENCE_BUTTON_LABEL,
   STOP_ALL_BUTTON_LABEL,
   TEST_VIDEO_REFERENCE_BUTTON_LABEL,
@@ -69,7 +73,9 @@ type PendingMode =
   | "generateScript"
   | "continueVideo"
   | "continueSceneFrame"
+  | "continueImage"
   | "mergeVideo"
+  | "regenerateVideoByTime"
   | "updateGenerateScriptPrompt"
   | "updateVideoReferencePrompt"
   | "updateTestVideoReferencePrompt";
@@ -385,6 +391,23 @@ const REPLACEMENT_FILENAME_PATTERN = /^(.+)__([^/\\]+\.[A-Za-z0-9]+)$/;
  * path.extname() và mặc định ".png" khi nhóm 2 không có đuôi nào.
  */
 const REPLACEMENT_CAPTION_PATTERN = /^(.+)__([^/\\]+)$/;
+
+/**
+ * Parse 1 mốc thời gian dùng cho REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL — chấp
+ * nhận giây ("12", "12.5"), "mm:ss" ("1:05") hoặc "hh:mm:ss" ("1:02:05"), tự
+ * nhận diện qua số dấu ":" (0/1/2) thay vì bắt buộc 1 format cố định. Trả về
+ * null nếu không khớp bất kỳ format nào (không phải toàn số, sai số nhóm).
+ */
+function parseTimeRangeMark(raw: string): number | null {
+  const parts = raw.trim().split(":");
+  if (parts.length < 1 || parts.length > 3) return null;
+  if (!parts.every((p) => /^\d+(\.\d+)?$/.test(p))) return null;
+  let seconds = 0;
+  for (const part of parts) {
+    seconds = seconds * 60 + Number(part);
+  }
+  return seconds;
+}
 
 /**
  * Tìm số version kế tiếp cho backup "<name>_vXX<ext>" trong dir — quét các
@@ -1723,6 +1746,15 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "regenerateVideoByTime");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ dòng đầu là tên file json, mỗi dòng tiếp theo là 1 đoạn thời gian lỗi TRÊN VIDEO ĐÃ GHÉP (nút "Nối video"), dạng "mốc1-mốc2" (giây, "mm:ss" hoặc "hh:mm:ss"). Ví dụ:\nphim_a\n0:05-0:12\n1:20-1:25`,
+    );
+  });
+
   bot.hears(CONTINUE_SCENE_FRAME_BUTTON_LABEL, async (ctx) => {
     return
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
@@ -1730,6 +1762,15 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "continueSceneFrame");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn tiếp tục gen scene frame.`,
+    );
+  });
+
+  bot.hears(CONTINUE_IMAGE_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "continueImage");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn tiếp tục gen ảnh (CHARACTER/LOCATION).`,
     );
   });
 
@@ -1750,7 +1791,9 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === GENERATE_SCRIPT_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL ||
+      ctx.message.text === CONTINUE_IMAGE_BUTTON_LABEL ||
       ctx.message.text === MERGE_VIDEO_BUTTON_LABEL ||
+      ctx.message.text === REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL ||
       ctx.message.text === UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL ||
       ctx.message.text === UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL ||
       ctx.message.text === UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL
@@ -1992,6 +2035,165 @@ export function registerHandlers(bot: Telegraf): void {
           }
         })();
       }
+    } else if (mode === "regenerateVideoByTime") {
+      // Nút "Gen lại video lỗi" (REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL) —
+      // dòng đầu là tên file json (cùng cách tra file với "mergeVideo"/
+      // "continueVideo"), các dòng sau là đoạn thời gian lỗi TRÊN VIDEO ĐÃ
+      // GHÉP dạng "mốc1-mốc2". Tính timeline [start,end) của TỪNG clip bằng
+      // buildVideoTimeline (cộng dồn VIDEO.duration theo đúng thứ tự shot/
+      // clip — CÙNG thứ tự mergeVideosForFile dùng để ghép, nên mốc thời
+      // gian user báo trên video đã ghép khớp ĐÚNG timeline này), rồi đối
+      // chiếu ra clip nào chồng lấn (findVideoEntriesInTimeRange) — CÙNG
+      // side-effect với regenerateStoryboardItemLine (đánh dấu success=false,
+      // xoá file .mp4 cũ) nhưng áp dụng cho NHIỀU clip cùng lúc, gộp lại
+      // CHỈ 1 job "storyboardVideoComfy" duy nhất cho cả file thay vì đẩy
+      // riêng từng clip (job tự bỏ qua entry còn success=true).
+      const lines = ctx.message.text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      if (lines.length < 2) {
+        await ctx.reply(
+          `❌ Cần dòng đầu là tên file json và ít nhất 1 dòng thời gian lỗi dạng "mốc1-mốc2".`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+        return;
+      }
+
+      const jsonFileName = normalizeTypedJsonFileName(lines[0]);
+      const jsonPath = await resolveExistingGeneratedJsonPath(
+        `${jsonFileName}.json`,
+      );
+      const fileExists = await fs
+        .access(jsonPath)
+        .then(() => true)
+        .catch(() => false);
+      if (!fileExists) {
+        await ctx.reply(
+          `❌ Không tìm thấy file "${jsonFileName}" trong generated/. Không thể gen lại.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+        return;
+      }
+
+      const raw = await fs.readFile(jsonPath, "utf-8");
+      let entries: StoryboardEntry[];
+      try {
+        entries = JSON.parse(raw);
+      } catch {
+        await ctx.reply(`❌ File "${jsonFileName}" không phải JSON hợp lệ.`, {
+          reply_parameters: { message_id: ctx.message.message_id },
+        });
+        return;
+      }
+      if (!Array.isArray(entries)) {
+        await ctx.reply(`❌ File "${jsonFileName}" không phải JSON array.`, {
+          reply_parameters: { message_id: ctx.message.message_id },
+        });
+        return;
+      }
+
+      let timeline;
+      try {
+        timeline = buildVideoTimeline(entries);
+      } catch (err) {
+        await ctx.reply(
+          `❌ Không tính được timeline của "${jsonFileName}": ${err instanceof Error ? err.message : String(err)}`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+        return;
+      }
+      const totalDuration =
+        timeline.length > 0 ? timeline[timeline.length - 1].endSec : 0;
+
+      const reportLines: string[] = [];
+      const matchedIds = new Set<string>();
+      for (const rangeLine of lines.slice(1)) {
+        const parts = rangeLine.split("-");
+        const startSec =
+          parts.length === 2 ? parseTimeRangeMark(parts[0]) : null;
+        const endSec =
+          parts.length === 2 ? parseTimeRangeMark(parts[1]) : null;
+        if (
+          parts.length !== 2 ||
+          startSec === null ||
+          endSec === null ||
+          !(endSec > startSec)
+        ) {
+          reportLines.push(
+            `⚠️ "${rangeLine}": sai định dạng, bỏ qua (cần "mốc1-mốc2", mốc2 > mốc1, mốc là giây/mm:ss/hh:mm:ss).`,
+          );
+          continue;
+        }
+        const matches = findVideoEntriesInTimeRange(timeline, startSec, endSec);
+        if (matches.length === 0) {
+          reportLines.push(
+            `⚠️ "${rangeLine}": không khớp clip nào (video đã ghép dài ${totalDuration.toFixed(1)}s).`,
+          );
+          continue;
+        }
+        for (const m of matches) matchedIds.add(m.id);
+        reportLines.push(
+          `🔁 "${rangeLine}" → ${matches
+            .map(
+              (m) =>
+                `${m.id} (shot ${m.shot} clip ${m.clip}, ${m.startSec.toFixed(1)}s-${m.endSec.toFixed(1)}s)`,
+            )
+            .join(", ")}`,
+        );
+      }
+
+      if (matchedIds.size === 0) {
+        await ctx.reply(
+          [`❌ Không có clip nào khớp để gen lại "${jsonFileName}":`, ...reportLines].join(
+            "\n",
+          ),
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+        return;
+      }
+
+      for (const entry of entries) {
+        if (entry.type === "VIDEO" && entry.id && matchedIds.has(entry.id)) {
+          entry.success = false;
+        }
+      }
+      await fs.writeFile(jsonPath, JSON.stringify(entries, null, 2), "utf-8");
+
+      const outputDir = generatedDirFor(jsonPath);
+      const filesInDir = await fs.readdir(outputDir).catch(() => [] as string[]);
+      for (const id of matchedIds) {
+        const idFilePrefix = `${sanitizeId(id)}.`;
+        for (const fileName of filesInDir) {
+          if (fileName.startsWith(idFilePrefix)) {
+            await fs.unlink(path.join(outputDir, fileName)).catch(() => {});
+          }
+        }
+      }
+
+      const jobType = storyboardJobTypeForEntryType("VIDEO");
+      if (jobType && !isStoryboardJobQueued(jobType, jsonPath)) {
+        enqueueJob({
+          type: jobType,
+          chatId: ctx.chat.id,
+          userId: ctx.from.id,
+          prompt: "",
+          promptMessageId: ctx.message.message_id,
+          jsonPath,
+        });
+      }
+
+      await ctx.reply(
+        [
+          `✅ Đã đánh dấu gen lại ${matchedIds.size} clip trong "${jsonFileName}":`,
+          ...reportLines,
+        ].join("\n"),
+        {
+          reply_parameters: { message_id: ctx.message.message_id },
+          ...promptMenu,
+        },
+      );
     } else if (mode === "continueSceneFrame") {
       // SỬA (theo yêu cầu người dùng): đẩy job "storyboardScenePollo"
       // (pollo.ai) THAY VÌ "storyboardImagesAIVideo" — cùng cách đơn giản
@@ -2026,6 +2228,39 @@ export function registerHandlers(bot: Telegraf): void {
         });
         await ctx.reply(
           `✅ Đã đưa "${jsonFileName}" vào hàng đợi gen scene frame, đợi xử lý.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      } else {
+        await ctx.reply(
+          `❌ Không tìm thấy file "${jsonFileName}" trong generated. Không thể tiếp tục.`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      }
+    } else if (mode === "continueImage") {
+      // GIỐNG "continueSceneFrame" HỆT (không tra failedStoryboardJobsPollo,
+      // chỉ cần file JSON khớp tên tồn tại trong generated/ là đẩy thẳng job
+      // mới) nhưng đẩy job "storyboardImagesPollo" (gen ảnh CHARACTER/
+      // LOCATION) THAY VÌ "storyboardScenePollo" (gen ảnh SCENE_SETTING_START/
+      // END) — xem docstring CONTINUE_IMAGE_BUTTON_LABEL trong keyboard.ts.
+      const jsonFileName = normalizeTypedJsonFileName(ctx.message.text);
+      const jsonPath = await resolveExistingGeneratedJsonPath(
+        `${jsonFileName}.json`,
+      );
+      const fileExists = await fs
+        .access(jsonPath)
+        .then(() => true)
+        .catch(() => false);
+      if (fileExists) {
+        enqueueJob({
+          type: "storyboardImagesPollo",
+          chatId: ctx.chat.id,
+          userId,
+          prompt: "",
+          promptMessageId: ctx.message.message_id,
+          jsonPath,
+        });
+        await ctx.reply(
+          `✅ Đã đưa "${jsonFileName}" vào hàng đợi gen ảnh, đợi xử lý.`,
           { reply_parameters: { message_id: ctx.message.message_id } },
         );
       } else {

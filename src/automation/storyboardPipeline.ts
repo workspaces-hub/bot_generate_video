@@ -472,17 +472,19 @@ export function generatedDirFor(inputPath: string): string {
  * đĩa (chưa từng gen, hoặc gen lỗi chưa retry), throw NGAY với danh sách id
  * còn thiếu, không cố ghép thiếu clip (kết quả sẽ sai timeline, vô nghĩa).
  */
-export async function mergeVideosForFile(
-  jsonPath: string,
-  destPath: string,
-): Promise<{ outputPath: string; videoCount: number }> {
-  const raw = await fs.promises.readFile(jsonPath, "utf-8");
-  const entries: StoryboardEntry[] = JSON.parse(raw);
-  if (!Array.isArray(entries)) {
-    throw new Error("File input phải là 1 JSON array");
-  }
-
-  const videoEntries = entries
+/**
+ * Lọc entry VIDEO có id rồi sort theo ĐÚNG thứ tự timeline (entry.shot rồi
+ * entry.clip, thiếu/không phải number coi như 0) — DÙNG CHUNG cho
+ * mergeVideosForFile VÀ mapTimeRangesToVideoEntries (tính mốc thời gian lỗi
+ * → clip cho nút "Gen lại video theo thời gian lỗi", xem handlers.ts) để
+ * đảm bảo 2 nơi này LUÔN hiểu cùng 1 thứ tự timeline — tách hàm thay vì để
+ * mỗi nơi tự sort riêng, tránh lệch thứ tự nếu sau này sửa 1 chỗ quên sửa
+ * chỗ kia.
+ */
+export function sortVideoEntriesByTimeline(
+  entries: StoryboardEntry[],
+): (StoryboardEntry & { id: string })[] {
+  return entries
     .filter(
       (e): e is StoryboardEntry & { id: string } =>
         e.type === "VIDEO" && Boolean(e.id),
@@ -495,6 +497,19 @@ export async function mergeVideosForFile(
       const clipB = typeof b.clip === "number" ? b.clip : 0;
       return clipA - clipB;
     });
+}
+
+export async function mergeVideosForFile(
+  jsonPath: string,
+  destPath: string,
+): Promise<{ outputPath: string; videoCount: number }> {
+  const raw = await fs.promises.readFile(jsonPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const videoEntries = sortVideoEntriesByTimeline(entries);
 
   if (videoEntries.length === 0) {
     throw new Error(`File "${jsonPath}" không có entry VIDEO nào để ghép.`);
@@ -521,6 +536,76 @@ export async function mergeVideosForFile(
 
   await concatVideos(videoPaths, destPath);
   return { outputPath: destPath, videoCount: videoPaths.length };
+}
+
+/** 1 entry VIDEO kèm mốc [startSec, endSec) trên video ĐÃ GHÉP (xem buildVideoTimeline). */
+export interface VideoTimelineEntry {
+  id: string;
+  shot: number;
+  clip: number;
+  startSec: number;
+  endSec: number;
+}
+
+/**
+ * Cộng dồn VIDEO.duration (giây) theo ĐÚNG thứ tự timeline
+ * (sortVideoEntriesByTimeline — shot rồi clip) để suy ra mốc [startSec,
+ * endSec) của TỪNG clip TRÊN VIDEO ĐÃ GHÉP (mergeVideosForFile) — dùng cho
+ * nút "Gen lại video lỗi" (REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL,
+ * handlers.ts): user xem video đã ghép, báo mốc thời gian lỗi, hàm này tra
+ * ra đúng clip tương ứng để đánh dấu gen lại.
+ *
+ * BẮT BUỘC mọi entry VIDEO phải có "duration" number > 0 — thiếu 1 entry là
+ * timeline SAI LỆCH từ đó trở đi (cộng dồn dựa vào duration thật), nên throw
+ * NGAY thay vì coi thiếu là 0 (im lặng cho ra mốc thời gian sai, sẽ đánh dấu
+ * NHẦM clip cần gen lại).
+ *
+ * Cộng dồn theo Math.ceil(duration), KHÔNG dùng số giây lẻ nguyên văn trong
+ * JSON — video THẬT SỰ được gen ra luôn làm tròn LÊN theo giây (xem
+ * generateVideosForFile: `${Math.ceil(entry.duration)}s` truyền cho
+ * generateVideo, vd 3.1 → "4s"), nên clip thật dài hơn số ghi trong JSON.
+ * Nếu cộng dồn theo số lẻ, timeline sẽ lệch dần khỏi video đã ghép thật —
+ * càng nhiều clip phía trước càng lệch nhiều.
+ */
+export function buildVideoTimeline(
+  entries: StoryboardEntry[],
+): VideoTimelineEntry[] {
+  const videoEntries = sortVideoEntriesByTimeline(entries);
+  const timeline: VideoTimelineEntry[] = [];
+  let cursor = 0;
+  for (const e of videoEntries) {
+    if (typeof e.duration !== "number" || !(e.duration > 0)) {
+      throw new Error(
+        `Entry "${e.id}" thiếu "duration" hợp lệ (>0) trong JSON — không thể tính mốc thời gian timeline.`,
+      );
+    }
+    const startSec = cursor;
+    const endSec = cursor + Math.ceil(e.duration);
+    timeline.push({
+      id: e.id,
+      shot: typeof e.shot === "number" ? e.shot : 0,
+      clip: typeof e.clip === "number" ? e.clip : 0,
+      startSec,
+      endSec,
+    });
+    cursor = endSec;
+  }
+  return timeline;
+}
+
+/**
+ * Tra khoảng thời gian lỗi [startSec, endSec) trên video ĐÃ GHÉP (xem
+ * buildVideoTimeline) ra danh sách entry VIDEO bị CHỒNG LẤN — BẤT KỲ clip
+ * nào có phần giao với khoảng lỗi đều tính (đoạn lỗi có thể vắt ngang ranh
+ * giới 2 clip, khi đó gen lại CẢ HAI). Trả về mảng RỖNG nếu khoảng lỗi nằm
+ * ngoài tổng thời lượng video hoặc không chồng lấn clip nào.
+ */
+export function findVideoEntriesInTimeRange(
+  timeline: VideoTimelineEntry[],
+  startSec: number,
+  endSec: number,
+): VideoTimelineEntry[] {
+  return timeline.filter((t) => t.startSec < endSec && t.endSec > startSec);
 }
 
 /**
