@@ -491,6 +491,8 @@ function buildTurnPrompt(
   turn: number,
   /** true nếu lượt NGAY TRƯỚC bị cắt giữa chừng (JSON không hợp lệ/không đóng) — nhắc model chủ động chia nhỏ hơn NỮA ở lượt này, xem MAX_OUTPUT_TOKENS. */
   lastTurnTruncated = false,
+  /** false = bỏ qua "QUY TẮC AUDIO/VIDEO BẮT BUỘC" — dùng cho askQwen (chỉ có text, không có video/audio đính kèm). Mặc định true cho askQwenAboutReferenceVideo. */
+  includeVideoAudioRules = true,
 ): string {
   const completionState = describeMergeState(state);
 
@@ -498,7 +500,8 @@ function buildTurnPrompt(
     ? `\n\n## CẢNH BÁO — LƯỢT TRƯỚC BỊ CẮT GIỮA CHỪNG\nLượt ngay trước đã trả về JSON KHÔNG HỢP LỆ (bị cắt giữa chừng do quá dài, không đóng được khối). Lượt NÀY hãy chia nhỏ HƠN NỮA để mỗi lượt luôn là JSON hoàn chỉnh.`
     : "";
 
-  return `${basePrompt}${truncationWarning}
+  const videoAudioRules = includeVideoAudioRules
+    ? `
 
 ## QUY TẮC AUDIO/VIDEO BẮT BUỘC
 
@@ -514,7 +517,10 @@ Khi phân tích:
 - KHÔNG lấy phụ đề cháy làm bằng chứng duy nhất cho lời thoại khi audio nghe được;
 - nếu phụ đề cháy khác audio, ưu tiên nội dung thực sự nghe được từ audio và ghi nhận bất đồng nếu schema cho phép;
 - KHÔNG được tự tuyên bố "không có kênh âm thanh" chỉ vì video_url riêng lẻ không mang audio: input_audio đã được cung cấp riêng;
-- chỉ coi audio là không khả dụng khi input_audio thực sự không thể truy cập hoặc không chứa tín hiệu hữu ích.
+- chỉ coi audio là không khả dụng khi input_audio thực sự không thể truy cập hoặc không chứa tín hiệu hữu ích.`
+    : "";
+
+  return `${basePrompt}${truncationWarning}${videoAudioRules}
 
 ## QUY TẮC TRẢ LỜI NHIỀU LƯỢT — BẮT BUỘC
 
@@ -829,12 +835,6 @@ ${extraInstruction}`
   };
 }
 
-// Text CHÍNH XÁC báo hiệu model đã gửi HẾT các item của mảng JSON — giữ
-// ĐÚNG cùng chuỗi INLINE_CONTENT_DONE_MARKER trong chatAI.ts (2 hàm độc lập
-// hoàn toàn — dùng chung text để dễ đối chiếu log giữa 2 luồng ChatGPT/Qwen
-// khi debug).
-const ARRAY_PARTS_DONE_MARKER = "Đã hoàn thành";
-
 /**
  * Bản CLONE của askChatAI/askChatAIWithInlineContent (chatAI.ts) — theo yêu
  * cầu người dùng, dùng cho CẢ 2 luồng "chatAI" (prompt tuỳ ý + file đính kèm
@@ -843,18 +843,29 @@ const ARRAY_PARTS_DONE_MARKER = "Đã hoàn thành";
  * này vốn đã dùng CHUNG 1 hàm askChatAI bên ChatGPT, nên cũng dùng chung 1
  * hàm askQwen ở đây.
  *
- * KHÁC askQwenAboutReferenceVideo (schema kết quả là 1 OBJECT, merge theo
- * key): output ở đây LUÔN là 1 JSON ARRAY phẳng (đúng schema JSON B — xem
- * prompt_generate_script.txt dòng "Root là ARRAY phẳng", và hướng dẫn
- * INLINE_RESULT_INSTRUCTION trong askChatAIWithInlineContent) — mỗi lượt gửi
- * 1 PHẦN các item TIẾP THEO của mảng, bot nối (concat) các phần lại thành 1
- * mảng hoàn chỉnh, đúng nguyên bản chiến lược đã CHỨNG MINH hoạt động ổn
- * định của askChatAIWithInlineContent.
+ * SỬA (xác nhận qua lỗi thật, job 2dd75b09-12f2-41f1-8ea7-62de636d7224):
+ * TRƯỚC ĐÂY hàm này tự viết riêng 1 vòng lặp multi-turn kiểu "conversation
+ * NGÀY CÀNG DÀI" (đẩy thêm assistant+user vào messages mỗi lượt) — CHÍNH kiểu
+ * này đã gây lỗi data_inspection_failed (input bị Alibaba coi là chứa nội
+ * dung không phù hợp) khi context tích luỹ đủ dài, y hệt lỗi đã gặp và ĐÃ SỬA
+ * cho askQwenAboutReferenceVideo trước đó (xem lịch sử sửa buildTurnPrompt/
+ * MergeState) — nhưng askQwen lại không được áp dụng cùng bản sửa. Giờ dùng
+ * LẠI CHÍNH cơ chế "fresh-per-turn" đã chứng minh ổn định của
+ * askQwenAboutReferenceVideo: mỗi lượt xây messages MỚI HOÀN TOÀN từ đầu
+ * (không tích luỹ lịch sử hội thoại), nhúng thẳng trạng thái đã gom được
+ * (describeMergeState) vào prompt để model biết tiếp tục từ đâu — tránh hẳn
+ * context phình to theo thời gian.
+ *
+ * KHÁC askQwenAboutReferenceVideo: KHÔNG có video/audio (chỉ text + file đính
+ * kèm dạng text nếu có, không upload), nên buildTurnPrompt gọi với
+ * includeVideoAudioRules=false. Vẫn dùng CHUNG MergeState/mergeJsonPartAuto
+ * (tự dò kết quả là ARRAY hay OBJECT dựa theo lượt đầu tiên) — KHÔNG còn ép
+ * cứng phải là ARRAY như bản cũ, vì prompt_generate_script.txt cũng có thể
+ * được user tự sửa đổi schema như file prompt tham chiếu video.
  *
  * KHÔNG upload file đính kèm nào — nếu có promptAttachmentPath, đọc THẲNG
  * nội dung text rồi dán vào đầu prompt (giống cách askChatAIWithInlineContent
- * làm khi dùng làm fallback), vì OpenRouter/Qwen ở đây chỉ nhận text (+
- * video_url/input_audio khi cần, không dùng ở hàm này).
+ * làm khi dùng làm fallback), vì OpenRouter/Qwen ở đây chỉ nhận text.
  */
 export async function askQwen(
   prompt: string,
@@ -870,26 +881,31 @@ export async function askQwen(
         .catch(() => null)
     : null;
 
-  const instruction = `QUAN TRỌNG: Trả kết quả JSON TRỰC TIẾP trong tin nhắn trả lời, bọc trong khối \`\`\`json ... \`\`\` — không có công cụ tạo file nào ở đây.
+  const basePrompt = fileContent
+    ? `${fileContent}\n\n${prompt}`
+    : prompt;
 
-Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài để gửi trong 1 lượt, hãy CHIA THÀNH NHIỀU LƯỢT trả lời — mỗi lượt gửi 1 khối code chứa 1 JSON ARRAY là 1 PHẦN các item TIẾP THEO (không lặp lại item đã gửi, không bọc thêm object nào khác ngoài mảng). Ở CUỐI tin nhắn của lượt CUỐI CÙNG (khi đã gửi hết toàn bộ, không còn item nào nữa), viết rõ nguyên văn "${ARRAY_PARTS_DONE_MARKER}". TUYỆT ĐỐI KHÔNG viết "${ARRAY_PARTS_DONE_MARKER}" ở các lượt CHƯA gửi hết.`;
-
-  const initialPrompt = fileContent
-    ? `${fileContent}\n\n${prompt}\n\n${instruction}`
-    : `${prompt}\n\n${instruction}`;
-
-  const messages: OpenRouterMessage[] = [
-    { role: "user", content: initialPrompt },
-  ];
-
-  const allItems: unknown[] = [];
-  let done = false;
+  const mergeState: MergeState = { kind: "unset", items: [], obj: {} };
+  let sawDoneMarker = false;
+  let lastTurnTruncated = false;
 
   for (let turn = 1; turn <= MAX_PART_TURNS; turn++) {
     const turnLabel = `lượt ${turn}/${MAX_PART_TURNS}`;
     console.log(
       `[qwenAI] askQwen(${jobId}): ${turnLabel} — gọi OpenRouter (model=${config.qwenOmniModel})...`,
     );
+
+    const turnPrompt = buildTurnPrompt(
+      basePrompt,
+      mergeState,
+      turn,
+      lastTurnTruncated,
+      false,
+    );
+    const messages: OpenRouterMessage[] = [
+      { role: "user", content: turnPrompt },
+    ];
+
     const { text } = await callOpenRouterWithProviderRetry(
       messages,
       jobId,
@@ -899,42 +915,55 @@ Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài đ�
       `[qwenAI] askQwen(${jobId}): ${turnLabel} xong, độ dài text=${text.length}.`,
     );
 
-    let chunkItemCount = 0;
+    sawDoneMarker = text.includes(DONE_MARKER);
     const jsonPartText = extractJsonFromText(text);
+    lastTurnTruncated = !jsonPartText;
+
     if (jsonPartText) {
-      const parsed = JSON.parse(jsonPartText);
-      if (Array.isArray(parsed)) {
-        chunkItemCount = parsed.length;
-        allItems.push(...parsed);
-      } else {
+      try {
+        const parsedPart = JSON.parse(jsonPartText);
+        mergeJsonPartAuto(mergeState, parsedPart, jobId, turn);
+      } catch (err) {
         console.warn(
-          `[qwenAI] askQwen(${jobId}): lượt ${turn} — JSON trả về KHÔNG PHẢI array, bỏ qua (theo đúng yêu cầu, mỗi phần phải là array).`,
+          `[qwenAI] askQwen(${jobId}): lượt ${turn} — parse lại jsonPartText lỗi bất thường:`,
+          err,
         );
       }
+    } else {
+      console.warn(
+        `[qwenAI] askQwen(${jobId}): lượt ${turn} — KHÔNG tìm thấy khối JSON hợp lệ trong text trả lời (nghi bị cắt giữa chừng — lượt sau sẽ được nhắc chia nhỏ hơn).`,
+      );
     }
 
-    done = text.includes(ARRAY_PARTS_DONE_MARKER);
     console.log(
-      `[qwenAI] askQwen(${jobId}): lượt ${turn} — nhận ${chunkItemCount} item mới (tổng ${allItems.length}), marker "${ARRAY_PARTS_DONE_MARKER}": ${done ? "CÓ" : "chưa"}.`,
+      `[qwenAI] askQwen(${jobId}): lượt ${turn} — kiểu "${mergeState.kind}", ${
+        mergeState.kind === "array"
+          ? `${mergeState.items.length} item`
+          : mergeState.kind === "object"
+            ? `${Object.keys(mergeState.obj).length} key`
+            : "chưa có dữ liệu"
+      }, marker "${DONE_MARKER}": ${sawDoneMarker ? "CÓ" : "chưa"}.`,
     );
 
-    if (done) break;
-
-    messages.push({ role: "assistant", content: text });
-    messages.push({
-      role: "user",
-      content: `Tiếp tục gửi phần tiếp theo của mảng JSON (khối code, chỉ chứa các item CHƯA gửi) — chỉ viết "${ARRAY_PARTS_DONE_MARKER}" khi đã gửi hết toàn bộ.`,
-    });
+    if (sawDoneMarker) break;
   }
 
-  if (!done) {
+  if (!sawDoneMarker) {
     throw new QwenAIError(
-      `Qwen (job ${jobId}) chưa gửi "${ARRAY_PARTS_DONE_MARKER}" sau ${MAX_PART_TURNS} lượt — kết quả có thể chưa đầy đủ (đã nhận ${allItems.length} item).`,
+      `Qwen (job ${jobId}) chưa gửi "${DONE_MARKER}" sau ${MAX_PART_TURNS} lượt — kết quả có thể chưa đầy đủ.`,
     );
   }
-  if (allItems.length === 0) {
+
+  const finalResult: unknown =
+    mergeState.kind === "object" ? mergeState.obj : mergeState.items;
+  const isEmpty =
+    mergeState.kind === "unset" ||
+    (mergeState.kind === "array" && mergeState.items.length === 0) ||
+    (mergeState.kind === "object" &&
+      Object.keys(mergeState.obj).length === 0);
+  if (isEmpty) {
     throw new QwenAIError(
-      `Qwen (job ${jobId}) báo đã hoàn thành nhưng không có item JSON nào.`,
+      `Qwen (job ${jobId}) báo đã hoàn thành nhưng không có dữ liệu JSON nào.`,
     );
   }
 
@@ -945,11 +974,15 @@ Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài đ�
   const filePath = path.join(config.chatAIResultsDir, `${baseName}.json`);
   await fs.promises.writeFile(
     filePath,
-    JSON.stringify(allItems, null, 2),
+    JSON.stringify(finalResult, null, 2),
     "utf-8",
   );
   console.log(
-    `[qwenAI] askQwen(${jobId}): đã lưu "${filePath}" (${allItems.length} item).`,
+    `[qwenAI] askQwen(${jobId}): đã lưu "${filePath}" (kiểu ${mergeState.kind}, ${
+      mergeState.kind === "array"
+        ? `${mergeState.items.length} item`
+        : `${Object.keys(mergeState.obj).length} key`
+    }).`,
   );
 
   return { downloadedFiles: [filePath] };
