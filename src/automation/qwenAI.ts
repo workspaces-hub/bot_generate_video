@@ -5,6 +5,10 @@ import { promisify } from "node:util";
 
 import { config } from "../config";
 import { publishFileTemporarily } from "./qwenFileServer";
+import {
+  findDanglingAssetRefs,
+  type StoryboardEntry,
+} from "./storyboardPipeline";
 
 const execFileAsync = promisify(execFile);
 
@@ -295,10 +299,20 @@ async function callOpenRouter(
     const bodyText = await response.text().catch(() => "");
 
     // Lỗi tạm thời phía provider khi tải video/audio (URL công khai bị
-    // nghẽn/timeout thoáng qua) — KHÔNG throw cứng ở đây vì sẽ bỏ qua luôn
-    // callOpenRouterWithProviderRetry (throw thoát khỏi vòng lặp retry).
-    // Trả về kết quả có cấu trúc để lớp retry xử lý giống provider_unavailable.
-    if (/failed to download multimodal content/i.test(bodyText)) {
+    // nghẽn/timeout thoáng qua, hoặc qua tunnel free-tier như ngrok đôi khi
+    // trả response thiếu header/lỗi vặt dù server mình gửi ĐÚNG — xác nhận
+    // qua test thật: curl -I qua ngrok LUÔN thấy Content-Length đầy đủ, cùng
+    // lúc Alibaba báo "Missing Content-Length of multimodal url") — KHÔNG
+    // throw cứng ở đây vì sẽ bỏ qua luôn callOpenRouterWithProviderRetry
+    // (throw thoát khỏi vòng lặp retry). Trả về kết quả có cấu trúc để lớp
+    // retry xử lý giống provider_unavailable — dù "URL không hợp lệ" thật sự
+    // (vd trỏ localhost) sẽ retry vô ích rồi vẫn fail sau
+    // PROVIDER_ERROR_MAX_RETRIES lần, không có gì mất thêm ngoài vài giây.
+    const isTransientUrlFetchError =
+      /failed to download multimodal content/i.test(bodyText) ||
+      /missing content-length/i.test(bodyText) ||
+      /does not appear to be valid/i.test(bodyText);
+    if (isTransientUrlFetchError) {
       console.warn(
         `[qwenAI] callOpenRouter(${jobId}): HTTP ${response.status} — lỗi tải multimodal content tạm thời: ${bodyText.slice(0, 500)}`,
       );
@@ -356,17 +370,28 @@ async function callOpenRouter(
   }
 
   if (typeof text !== "string") {
-    if (choice?.error) {
-      return {
-        text: "",
-        finishReason: choice.finish_reason ?? "error",
-        errorType,
-      };
+    if (!choice) {
+      throw new QwenAIError(
+        `OpenRouter trả response không có choices[0] nào (job ${jobId}): ${JSON.stringify(data).slice(0, 2000)}`,
+      );
     }
 
-    throw new QwenAIError(
-      `OpenRouter trả response không có choices[0].message.content dạng text (job ${jobId}): ${JSON.stringify(data).slice(0, 2000)}`,
-    );
+    // content null/thiếu dù CÓ choice — có thể kèm choice.error (lỗi hạ tầng
+    // provider, đã xử lý như cũ) HOẶC KHÔNG kèm error gì cả (xác nhận qua lỗi
+    // thật, job a272783d-7464-4378-a047-81c3262e4b78: finish_reason="length",
+    // message.content=null nhưng message.reasoning có hàng nghìn ký tự — model
+    // đốt hết ngân sách token vào "reasoning" trước khi kịp sinh answer thật,
+    // KHÔNG phải lỗi hạ tầng provider). CẢ 2 trường hợp đều KHÔNG throw cứng ở
+    // đây (sẽ bỏ qua callOpenRouterWithProviderRetry, throw thoát khỏi vòng
+    // lặp retry) — trả kết quả có cấu trúc để lớp retry thử lại NGUYÊN
+    // request, vì cả 2 đều là lỗi tạm thời/không đoán trước được, thử lại
+    // thường thành công (model không nhất thiết lặp lại y hệt lỗi cũ do
+    // sampling).
+    return {
+      text: "",
+      finishReason: choice.finish_reason ?? "error",
+      errorType: errorType ?? "empty_content",
+    };
   }
 
   return {
@@ -392,10 +417,15 @@ async function callOpenRouterWithProviderRetry(
     lastResult = result;
 
     const isTransientProviderError =
-      result.finishReason === "error" &&
-      (result.errorType === "provider_unavailable" ||
-        result.errorType === "download_failed" ||
-        result.errorType === "invalid_response_body");
+      (result.finishReason === "error" &&
+        (result.errorType === "provider_unavailable" ||
+          result.errorType === "download_failed" ||
+          result.errorType === "invalid_response_body")) ||
+      // empty_content GIỮ NGUYÊN finish_reason thật từ API (vd "length", xem
+      // callOpenRouter) thay vì ép thành "error" như 3 loại lỗi trên — kiểm
+      // tra RIÊNG theo errorType, không gộp chung điều kiện finishReason===
+      // "error".
+      result.errorType === "empty_content";
 
     if (
       !isTransientProviderError ||
@@ -555,19 +585,37 @@ ${extraInstruction}`
     `[qwenAI] askQwenAboutReferenceVideo(${jobId}): video nén còn ${(compressedStat.size / 1024 / 1024).toFixed(2)} MB.`,
   );
 
-  console.log(
-    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): publish video "${compressedVideoPath}" ra URL công khai tạm thời...`,
-  );
-
-  const { url: videoUrl, cleanup } =
-    await publishFileTemporarily(
-      compressedVideoPath,
-      `${jobId}${path.extname(compressedVideoPath) || ".mp4"}`,
+  // SỬA (theo yêu cầu người dùng, xem docstring config.qwenVideoUsePublicUrl):
+  // nhánh theo config thay vì LUÔN publish URL công khai — false thì gửi
+  // THẲNG video base64 inline (KHÔNG cần qwenFileServer/QWEN_PUBLIC_BASE_URL),
+  // hữu ích khi chạy local không có URL công khai đáng tin cậy.
+  let videoUrl: string;
+  let cleanup: () => Promise<void>;
+  if (config.qwenVideoUsePublicUrl) {
+    console.log(
+      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): publish video "${compressedVideoPath}" ra URL công khai tạm thời...`,
     );
 
-  console.log(
-    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): video công khai tại ${videoUrl}`,
-  );
+    ({ url: videoUrl, cleanup } = await publishFileTemporarily(
+      compressedVideoPath,
+      `${jobId}${path.extname(compressedVideoPath) || ".mp4"}`,
+    ));
+
+    console.log(
+      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): video công khai tại ${videoUrl}`,
+    );
+  } else {
+    console.log(
+      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): QWEN_VIDEO_USE_PUBLIC_URL=false — gửi video base64 inline (KHÔNG publish URL công khai).`,
+    );
+
+    const videoBase64 = await fs.promises.readFile(
+      compressedVideoPath,
+      "base64",
+    );
+    videoUrl = `data:video/mp4;base64,${videoBase64}`;
+    cleanup = async () => {};
+  }
 
   const audioPath = path.join(
     config.debugDir,
@@ -654,10 +702,11 @@ ${extraInstruction}`
       );
 
       if (
-        finishReason === "error" &&
-        (errorType === "provider_unavailable" ||
-          errorType === "download_failed" ||
-          errorType === "invalid_response_body")
+        (finishReason === "error" &&
+          (errorType === "provider_unavailable" ||
+            errorType === "download_failed" ||
+            errorType === "invalid_response_body")) ||
+        errorType === "empty_content"
       ) {
         throw new QwenAIError(
           `Qwen/OpenRouter vẫn lỗi (${errorType}) sau ${PROVIDER_ERROR_MAX_RETRIES} lần retry (job ${jobId}, ${turnLabel}).`,
@@ -724,6 +773,25 @@ ${extraInstruction}`
     throw new QwenAIError(
       `Qwen (job ${jobId}) đã báo "${DONE_MARKER}" nhưng không gom được dữ liệu nào (mọi lượt trả về đều không parse được thành JSON array/object hợp lệ).`,
     );
+  }
+
+  // SỬA (xác nhận qua lỗi thật: JSON tham chiếu "CHAR_BALD_MAN_GLASSES"
+  // trong VIDEO.ref nhưng KHÔNG có entry CHARACTER nào id đó) — chỉ validate
+  // khi kết quả là ARRAY (đúng schema storyboard CHARACTER/LOCATION/PROP/
+  // OBJECT/VIDEO có ref, xem findDanglingAssetRefs); kết quả kiểu OBJECT là
+  // schema tự do khác (xem describeMergeState), không áp dụng được kiểm tra
+  // này. Throw NGAY, KHÔNG lưu file — tốt hơn để lỗi trôi xuống tận bước gen
+  // ảnh/video mới phát hiện (tốn API call, thông báo lỗi lúc đó cũng mơ hồ
+  // hơn).
+  if (mergeState.kind === "array") {
+    const danglingRefErrors = findDanglingAssetRefs(
+      mergeState.items as StoryboardEntry[],
+    );
+    if (danglingRefErrors.length > 0) {
+      throw new QwenAIError(
+        `Qwen (job ${jobId}) tạo JSON có ref trỏ tới asset chưa từng khai báo (${danglingRefErrors.length} lỗi):\n${danglingRefErrors.join("\n")}`,
+      );
+    }
   }
 
   await fs.promises.mkdir(config.chatAIResultsDir, {

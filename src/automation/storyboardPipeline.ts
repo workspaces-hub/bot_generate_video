@@ -59,6 +59,55 @@ export function sanitizeId(id: string): string {
 }
 
 /**
+ * Kiểm tra MỌI entry.ref[].id trong file JSON storyboard (thường là VIDEO)
+ * đều trỏ tới đúng 1 asset (CHARACTER/LOCATION/PROP/OBJECT) CÓ THẬT khai báo
+ * trong CÙNG mảng — xác nhận qua lỗi thật: JSON do prompt_video_reference.txt
+ * tạo ra tham chiếu "CHAR_BALD_MAN_GLASSES" trong VIDEO.ref nhưng KHÔNG có
+ * entry CHARACTER nào id đó trong danh sách asset. Mọi master prompt
+ * (prompt.txt/prompt_video_reference.txt/prompt_split_video.txt/
+ * prompt_generate_script.txt) đều đã ghi rõ quy tắc "ref.id phải tồn tại
+ * trong CÙNG file", nhưng đó chỉ là hướng dẫn MỀM cho model — không có gì ép
+ * buộc thật, model vẫn có thể vi phạm (hallucinate 1 id chưa từng khai báo).
+ *
+ * KHÔNG validate sớm sẽ để lỗi trôi tới tận bước gen ảnh/video
+ * (resolveRefImagePath throw "không tìm thấy ảnh" — tốn API call cho các
+ * asset khác trước khi phát hiện, và thông báo lỗi lúc đó cũng khó hiểu hơn:
+ * không rõ ngay là do id chưa từng được khai báo hay do gen ảnh thất bại vì
+ * lý do khác).
+ *
+ * Trả về danh sách mô tả lỗi dạng string (mảng RỖNG nếu hợp lệ) — KHÔNG throw
+ * trực tiếp, để caller tự quyết định throw hay chỉ log cảnh báo.
+ */
+export function findDanglingAssetRefs(entries: StoryboardEntry[]): string[] {
+  const declaredIds = new Set(
+    entries
+      .filter(
+        (e) =>
+          e.type === "CHARACTER" ||
+          e.type === "LOCATION" ||
+          e.type === "PROP" ||
+          e.type === "OBJECT",
+      )
+      .map((e) => e.id)
+      .filter((id): id is string => Boolean(id)),
+  );
+
+  const errors: string[] = [];
+  for (const entry of entries) {
+    if (!entry.ref || entry.ref.length === 0) continue;
+    for (const r of entry.ref) {
+      if (!r.id) continue;
+      if (!declaredIds.has(r.id)) {
+        errors.push(
+          `Entry "${entry.id ?? "(không có id)"}" (type ${entry.type ?? "?"}) tham chiếu id "${r.id}" (type ${r.type ?? "?"}) nhưng KHÔNG có asset nào id đó trong danh sách CHARACTER/LOCATION/PROP/OBJECT của file.`,
+        );
+      }
+    }
+  }
+  return errors;
+}
+
+/**
  * Chờ ms mili giây — dùng giữa các lần gọi generateReferenceImage/askChatAI
  * liên tiếp (xem generateReferenceImagesForFile/generateSceneImagesForFile
  * bên dưới, và processChatAIQueue trong queue.ts), tránh gửi request quá nhanh

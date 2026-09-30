@@ -2621,7 +2621,19 @@ export async function verifyVideo(
  * videoConcat.ts) đã ra được 1 video CUỐI CÙNG, gọi hàm này để nhờ ChatGPT
  * (GPT thật, KHÁC Qwen đã dùng ở bước tạo JSON — theo yêu cầu người dùng:
  * dùng model khác để đánh giá, tránh thiên vị) so sánh video GỐC với video
- * MỚI vừa tái tạo, đánh giá pipeline có tái tạo đúng video gốc hay không.
+ * MỚI vừa tái tạo.
+ *
+ * SỬA (theo yêu cầu người dùng): pipeline này (prompt_split_video.txt,
+ * TRANSFORM_MODE mặc định ON) CỐ Ý tạo ra 1 CÂU CHUYỆN MỚI (nhân vật/bối
+ * cảnh/lời thoại/cốt truyện cụ thể có thể khác hoàn toàn), chỉ giữ nguyên
+ * KHUNG KỸ THUẬT DỰNG PHIM — nên KHÔNG còn đánh giá video MỚI có tái tạo
+ * ĐÚNG nội dung video gốc hay không (nhân vật/bối cảnh/lời thoại giống nhau
+ * là SAI Ý ĐỊNH, không phải đúng). Thay vào đó, đánh giá video MỚI có GIỮ
+ * ĐƯỢC "khung kỹ thuật kể chuyện" (storytelling engineering) của video gốc
+ * hay không — 26 tiêu chí cụ thể về cấu trúc cảm xúc/nhịp điệu/chức năng
+ * cảnh/ngôn ngữ điện ảnh (xem message bên dưới), ÁP DỤNG lên câu chuyện mới.
+ * Đây là phép đo ĐÚNG mục đích thật của TRANSFORM_MODE: "giữ cách làm phim,
+ * đổi nội dung phim".
  *
  * KHÁC verifyVideo (kiểm tra 1 CLIP đơn lẻ đúng với CHÍNH prompt/ref đã dùng
  * để tạo ra nó, phục vụ QA nội bộ giữa các lượt gen) — ở đây so sánh 2 VIDEO
@@ -2667,13 +2679,47 @@ export async function compareOriginalWithFinalVideo(
 
     const message = `Bạn nhận được 2 video, ĐÚNG THEO THỨ TỰ đính kèm:
 1. Video GỐC (video tham chiếu thật do người dùng cung cấp).
-2. Video MỚI (được tái tạo lại bằng pipeline AI: video gốc → phân tích thành kịch bản JSON → tạo ảnh nhân vật/bối cảnh/đạo cụ → tạo từng đoạn video ngắn → ghép lại thành 1 video hoàn chỉnh theo đúng thứ tự timeline).
+2. Video MỚI (được TÁI TẠO bằng pipeline AI: video gốc → phân tích thành kịch bản JSON → tạo ảnh nhân vật/bối cảnh/đạo cụ → tạo từng đoạn video ngắn → ghép lại thành 1 video hoàn chỉnh theo đúng thứ tự timeline).
 
-Nhiệm vụ: xem/nghe kỹ CẢ 2 video, so sánh video MỚI với video GỐC, rồi báo cáo:
-1. Video MỚI có tái tạo ĐÚNG video GỐC không (nhân vật, bối cảnh, đạo cụ/vật thể, hành động, lời thoại, cảm xúc, trình tự sự kiện/timeline, tổng thời lượng)?
-2. Liệt kê CỤ THỂ từng điểm khác biệt/sai lệch nếu có — mô tả rõ khác ở đoạn nào (theo thời điểm/thứ tự xuất hiện) so với video gốc. Nếu tái tạo khớp hoàn toàn, nói rõ "Khớp hoàn toàn, không phát hiện sai lệch."
-3. Đánh giá tổng thể mức độ giống nhau (ước lượng theo %) và kết luận pipeline hiện tại (phân tích JSON / tạo ảnh / tạo video / ghép video) có đủ tốt hay cần cải thiện ở bước nào.
-4. Không sửa gì, không xuất file — CHỈ trả lời bằng 1 đoạn văn bản báo cáo, có thể dùng gạch đầu dòng cho từng điểm khác biệt.`;
+QUAN TRỌNG: Pipeline này CỐ Ý tạo ra 1 CÂU CHUYỆN MỚI khác video gốc (nhân vật, bối cảnh, lời thoại, cốt truyện cụ thể có thể hoàn toàn khác) — đây là MỤC ĐÍCH THIẾT KẾ, KHÔNG phải lỗi. Nhiệm vụ của bạn KHÔNG PHẢI đánh giá video MỚI có kể lại ĐÚNG câu chuyện của video gốc hay không (nhân vật/bối cảnh/lời thoại giống hệt là SAI Ý ĐỊNH). Thay vào đó, đánh giá video MỚI có GIỮ ĐƯỢC "khung kỹ thuật kể chuyện" (storytelling engineering) của video gốc hay không — tức cấu trúc cảm xúc, nhịp điệu, chức năng từng cảnh và ngôn ngữ điện ảnh, ÁP DỤNG lên câu chuyện mới.
+
+Xem/nghe kỹ CẢ 2 video, rồi đối chiếu TỪNG tiêu chí sau đây giữa video GỐC và video MỚI:
+
+1. Đường cong cảm xúc (người xem cảm thấy gì ở từng thời điểm)
+2. Cường độ cảm xúc (mức độ mạnh/yếu của từng cảm xúc ở từng thời điểm)
+3. Nhịp cảm xúc (căng thẳng → thư giãn → căng hơn → bùng nổ → giải tỏa...)
+4. Chức năng của từng cảnh (gây tò mò, tạo xung đột, tăng bất công, tạo hy vọng, phá hy vọng, đảo chiều, giải tỏa...)
+5. Cấu trúc câu chuyện (thứ tự các giai đoạn lớn của câu chuyện)
+6. Vị trí điểm thu hút người xem (thời điểm xuất hiện sự kiện/thông tin khiến người xem muốn xem tiếp)
+7. Vị trí và nhịp tăng xung đột (khi nào xung đột xuất hiện, khi nào tăng cấp, tăng mạnh đến mức nào)
+8. Vị trí các cú đảo chiều (thời điểm tình thế, thông tin hoặc cán cân quyền lực thay đổi)
+9. Vị trí cao trào (thời điểm cảm xúc/xung đột đạt đỉnh)
+10. Vị trí tình tiết gây tò mò cuối đoạn (thời điểm tạo câu hỏi hoặc biến cố khiến người xem muốn xem tiếp)
+11. Cách che giấu và tiết lộ thông tin (người xem biết gì, từng nhân vật biết gì, thông tin nào bị giấu và khi nào được tiết lộ)
+12. Quan hệ quyền lực giữa các vai (ai đang mạnh, ai đang yếu, ai kiểm soát tình thế và cán cân quyền lực thay đổi như thế nào)
+13. Quá trình tăng khó khăn cho nhân vật chính (vấn đề ngày càng nghiêm trọng như thế nào trước khi được giải quyết)
+14. Cách tích tụ cảm xúc (cảm xúc như tức giận, lo lắng, tò mò, thương cảm... được tích tụ trong bao lâu và bằng nhịp như thế nào)
+15. Cách trả thưởng cảm xúc (thời điểm và cách người xem được hả hê, thỏa mãn, xúc động, bất ngờ hoặc giải tỏa)
+16. Nhịp kể chuyện (đoạn nào nhanh, đoạn nào chậm, khi nào tăng tốc, khi nào cho người xem nghỉ)
+17. Độ dài tương đối của từng cảnh (cảnh nào ngắn, cảnh nào dài và tỷ lệ thời lượng giữa các loại cảnh)
+18. Mật độ sự kiện (bao lâu xuất hiện một hành động, biến cố hoặc thay đổi mới)
+19. Mật độ xung đột (tần suất xuất hiện va chạm, trở ngại hoặc đối đầu)
+20. Mật độ thông tin mới (bao lâu người xem nhận được một thông tin, manh mối, bí mật hoặc phát hiện mới)
+21. Tỷ lệ thoại và hành động (bao nhiêu phần câu chuyện được truyền tải bằng lời thoại so với hành động/hình ảnh)
+22. Kiểu phản ứng của nhân vật (cách phim sử dụng phản ứng, biểu cảm và khoảng dừng của nhân vật để khuếch đại cảm xúc)
+23. Ngôn ngữ điện ảnh tổng quát (cách sử dụng cận cảnh, trung cảnh, toàn cảnh, chuyển động máy quay và cách nhấn mạnh những khoảnh khắc quan trọng)
+24. Nhịp dựng (tần suất cắt cảnh, thời gian giữ một khuôn hình và tốc độ chuyển đổi giữa các cảnh)
+25. Cách sử dụng âm thanh và âm nhạc (thời điểm nhạc bắt đầu, tăng, giảm, dừng và cách âm thanh hỗ trợ cảm xúc)
+26. Cách kết thúc từng đoạn/tập (cách tạo câu hỏi, biến cố, bí mật hoặc tình huống chưa giải quyết để kéo người xem sang phần tiếp theo)
+
+Với MỖI tiêu chí trên, báo cáo theo đúng định dạng 1 dòng:
+- [số thứ tự + tên tiêu chí]: GIỮ ĐƯỢC / GIỮ MỘT PHẦN / KHÔNG GIỮ ĐƯỢC — giải thích ngắn gọn, nêu rõ khác biệt cụ thể (nếu có) kèm thời điểm/vị trí xuất hiện trong video.
+
+Sau khi liệt kê đủ 26 tiêu chí, kết luận thêm:
+- Tổng số tiêu chí GIỮ ĐƯỢC / GIỮ MỘT PHẦN / KHÔNG GIỮ ĐƯỢC (đếm cụ thể).
+- Đánh giá tổng thể: pipeline hiện tại có tái tạo tốt "khung kỹ thuật kể chuyện" của video gốc hay không; nếu có tiêu chí bị mất/lệch nhiều, chỉ rõ bước nào trong pipeline (phân tích JSON / viết prompt ảnh / gen ảnh / gen video / ghép video) nhiều khả năng là nguyên nhân.
+
+Không sửa gì, không xuất file — CHỈ trả lời bằng 1 đoạn văn bản báo cáo có cấu trúc rõ ràng theo đúng định dạng trên.`;
 
     await sendMessage(page, message, jobId);
 

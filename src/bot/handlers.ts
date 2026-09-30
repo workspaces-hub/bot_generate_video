@@ -1598,6 +1598,7 @@ export function registerHandlers(bot: Telegraf): void {
       `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
         `hoặc gửi kèm 1 ảnh làm start frame trước (nếu gửi nhiều ảnh, ảnh gửi gần nhất sẽ được dùng), ` +
         `rồi gõ prompt ở tin nhắn tiếp theo.`,
+      promptMenu
     );
   });
 
@@ -1608,6 +1609,7 @@ export function registerHandlers(bot: Telegraf): void {
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi prompt tạo ảnh (chỉ cần gõ text), ` +
         `hoặc gửi kèm tối đa ${MAX_REFERENCE_IMAGES} ảnh tham chiếu (gửi ảnh trước rồi gõ prompt ở tin nhắn tiếp theo).`,
+      promptMenu
     );
   });
 
@@ -1618,6 +1620,7 @@ export function registerHandlers(bot: Telegraf): void {
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
         `hoặc gửi kèm tối đa ${MAX_VIDEO_REF_IMAGES} ảnh tham chiếu (gửi ảnh trước rồi gõ prompt ở tin nhắn tiếp theo).`,
+      promptMenu
     );
   });
 
@@ -1628,6 +1631,7 @@ export function registerHandlers(bot: Telegraf): void {
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi 1 ảnh nhân vật (bắt buộc — nếu gửi nhiều ảnh, ảnh gửi gần nhất sẽ được dùng), ` +
         `rồi gõ prompt ở tin nhắn tiếp theo.`,
+      promptMenu
     );
   });
 
@@ -1638,6 +1642,7 @@ export function registerHandlers(bot: Telegraf): void {
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi nội dung prompt bạn muốn tạo video ở tin nhắn tiếp theo, ` +
         `hoặc gửi kèm tối đa ${MAX_OMNI_REFERENCE_ITEMS} file tham chiếu (ảnh/video/audio, gửi trước rồi gõ prompt ở tin nhắn tiếp theo).`,
+      promptMenu
     );
   });
 
@@ -1647,6 +1652,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "chatAI");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi file .txt kịch bản kèm prompt`,
+      promptMenu
     );
   });
 
@@ -1656,6 +1662,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "chatAICheck");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, Gửi file .txt kịch bản kèm prompt`,
+      promptMenu
     );
   });
 
@@ -1665,6 +1672,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "scriptReference");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu`,
+      promptMenu
     );
   });
 
@@ -1674,6 +1682,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "videoReference");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu — bot sẽ phân tích nhân vật/bối cảnh/đạo cụ rồi trả về JSON gồm các đoạn video ngắn nối tiếp (mỗi đoạn tối đa 15s, ranh giới cắt theo lời thoại hợp lý) dùng để gen lại toàn bộ video.`,
+      promptMenu
     );
   });
 
@@ -1683,6 +1692,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "videoReferenceTest");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu — bot sẽ dùng prompt.txt tạo JSON (CHARACTER/LOCATION/PROP/OBJECT + VIDEO), sau đó tự đối chiếu lại JSON với CHÍNH video gốc và gửi báo cáo cho bạn xem prompt.txt có mô tả đúng video không.`,
+      promptMenu
     );
   });
 
@@ -1692,6 +1702,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "generateScript");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gõ tên (hoặc 1 phần tên) file JSON kịch bản đã có trong storage/chatai-results — bot sẽ tìm mọi file JSON có tên chứa chuỗi đó (nhiều file = nhiều tập phim) rồi tạo 1 bộ phim mới tương tự.`,
+      promptMenu
     );
   });
 
@@ -1701,6 +1712,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "updateGenerateScriptPrompt");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptGenerateScript}"`,
+      promptMenu
     );
   });
 
@@ -1710,6 +1722,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "updateVideoReferencePrompt");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptVideoReference}"`,
+      promptMenu
     );
   });
 
@@ -1719,13 +1732,14 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "updateTestVideoReferencePrompt");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptVideoReferenceTest}"`,
+      promptMenu
     );
   });
 
   bot.hears(STOP_ALL_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     stopAll(ctx.from.id);
-    await ctx.reply(`🛑 Đã dừng job của bạn`);
+    await ctx.reply(`🛑 Đã dừng job của bạn`, promptMenu);
   });
 
   bot.hears(CONTINUE_VIDEO_BUTTON_LABEL, async (ctx) => {
@@ -1734,6 +1748,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "continueVideo");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn tiếp tục tạo video.`,
+      promptMenu
     );
   });
 
@@ -1743,6 +1758,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "mergeVideo");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn nối video (ghép các video theo thứ tự shot/clip).`,
+      promptMenu
     );
   });
 
@@ -1752,6 +1768,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "regenerateVideoByTime");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gõ dòng đầu là tên file json, mỗi dòng tiếp theo là 1 đoạn thời gian lỗi TRÊN VIDEO ĐÃ GHÉP (nút "Nối video"), dạng "mốc1-mốc2" (giây, "mm:ss" hoặc "hh:mm:ss"). Ví dụ:\nphim_a\n0:05-0:12\n1:20-1:25`,
+      promptMenu
     );
   });
 
@@ -1762,6 +1779,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "continueSceneFrame");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn tiếp tục gen scene frame.`,
+      promptMenu
     );
   });
 
@@ -1771,6 +1789,7 @@ export function registerHandlers(bot: Telegraf): void {
     waitingMode.set(ctx.from.id, "continueImage");
     await ctx.reply(
       `${ctx.from.first_name ?? "Bạn"}, gõ tên file json muốn tiếp tục gen ảnh (CHARACTER/LOCATION).`,
+      promptMenu
     );
   });
 

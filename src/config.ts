@@ -188,6 +188,20 @@ export const config = {
   // đúng VPS đang chạy bot (vd "http://<ip-vps>:8787") — để trống thì
   // askQwenAboutReferenceVideo báo lỗi rõ ràng thay vì âm thầm dùng URL sai.
   qwenPublicBaseUrl: process.env.QWEN_PUBLIC_BASE_URL ?? "",
+  // SỬA (theo yêu cầu người dùng): cho phép TẮT hẳn đường publish URL công
+  // khai (qwenFileServer.ts) cho video tham chiếu (askQwenAboutReferenceVideo)
+  // — hữu ích khi chạy LOCAL không có URL công khai đáng tin cậy (localhost
+  // không được, tunnel free-tier như ngrok đôi khi lỗi vặt, xem lỗi thật
+  // "Missing Content-Length of multimodal url"/"URL does not appear to be
+  // valid"). Mặc định TRUE (giữ nguyên hành vi cũ — video đã được
+  // compressVideoForQwen nén nhỏ trước khi publish, nhưng vẫn ưu tiên URL vì
+  // đây là đường ĐÃ XÁC NHẬN hoạt động ổn định trên VPS thật). Đặt "false" để
+  // gửi THẲNG video base64 inline (video_url.url = "data:video/mp4;base64,...")
+  // thay vì publish — chỉ nên dùng khi video đã nén đủ nhỏ (base64 hoá còn
+  // lớn dễ bị OpenRouter trả 413, xem lịch sử comment qwenOmniModel phía
+  // trên — lý do ban đầu chuyển sang URL).
+  qwenVideoUsePublicUrl:
+    (process.env.QWEN_VIDEO_USE_PUBLIC_URL ?? "true") !== "false",
   qwenFileServerPort: Number(process.env.QWEN_FILE_SERVER_PORT ?? 8787),
   qwenFileServeDir: path.resolve(
     process.env.QWEN_FILE_SERVE_DIR ?? "./storage/qwen-public-tmp",
