@@ -82,33 +82,77 @@ function extractJsonFromText(text: string): string | null {
   }
 }
 
-function mergeJsonPart(
-  target: Record<string, unknown>,
+/**
+ * SỬA (theo yêu cầu người dùng: file prompt tham chiếu video CÓ THỂ được sửa
+ * để yêu cầu output là OBJECT thay vì ARRAY — mỗi master prompt tự quyết
+ * định schema riêng qua nội dung file .txt, KHÔNG cố định trong code): bản
+ * ngay trước đó ép cứng CHỈ chấp nhận ARRAY (fix cho lỗi thật job
+ * 54548cd4-c05b-4998-9087-9c3135825fb5 — bản CŨ HƠN NỮA lại ép cứng chỉ chấp
+ * nhận OBJECT với 6 key cố định, cũng sai vì không khớp schema thật lúc đó).
+ * Cả 2 lần đều sai vì HARD-CODE 1 kiểu duy nhất trong khi schema thực tế do
+ * FILE PROMPT (user tự sửa qua UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL/
+ * UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL) quyết định, có thể đổi bất
+ * kỳ lúc nào. Giờ tự DÒ kiểu (array hay object) dựa vào lượt ĐẦU TIÊN model
+ * thực sự trả về, rồi merge nhất quán theo đúng kiểu đó cho các lượt sau —
+ * hỗ trợ CẢ 2 kiểu mà không cần biết trước đang dùng master prompt nào.
+ */
+interface MergeState {
+  kind: "unset" | "array" | "object";
+  items: unknown[];
+  obj: Record<string, unknown>;
+}
+
+function mergeJsonPartAuto(
+  state: MergeState,
   part: unknown,
   jobId: string,
   turn: number,
 ): void {
-  if (!part || typeof part !== "object" || Array.isArray(part)) {
+  const isArrayPart = Array.isArray(part);
+  const isObjectPart = part !== null && typeof part === "object" && !isArrayPart;
+
+  if (!isArrayPart && !isObjectPart) {
     console.warn(
-      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} trả JSON không phải object — bỏ qua merge: ${JSON.stringify(part).slice(0, 200)}`,
+      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} trả JSON không phải array/object hợp lệ — bỏ qua: ${JSON.stringify(part).slice(0, 200)}`,
     );
     return;
   }
 
-  for (const [key, value] of Object.entries(
-    part as Record<string, unknown>,
-  )) {
-    const existing = target[key];
+  if (state.kind === "unset") {
+    state.kind = isArrayPart ? "array" : "object";
+    console.log(
+      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} — xác định kiểu kết quả là "${state.kind}" (dựa theo lượt đầu tiên có dữ liệu).`,
+    );
+  }
 
+  if (state.kind === "array") {
+    if (!isArrayPart) {
+      console.warn(
+        `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} — đã bắt đầu theo kiểu ARRAY nhưng lượt này trả OBJECT, bỏ qua (không trộn lẫn 2 kiểu).`,
+      );
+      return;
+    }
+    state.items.push(...(part as unknown[]));
+    return;
+  }
+
+  if (!isObjectPart) {
+    console.warn(
+      `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} — đã bắt đầu theo kiểu OBJECT nhưng lượt này trả ARRAY, bỏ qua (không trộn lẫn 2 kiểu).`,
+    );
+    return;
+  }
+  for (const [key, value] of Object.entries(part as Record<string, unknown>)) {
+    const existing = state.obj[key];
     if (existing === undefined) {
-      target[key] = value;
+      state.obj[key] = value;
     } else if (Array.isArray(existing) && Array.isArray(value)) {
-      target[key] = [...existing, ...value];
+      state.obj[key] = [...existing, ...value];
     } else {
       console.warn(
         `[qwenAI] askQwenAboutReferenceVideo(${jobId}): lượt ${turn} GHI ĐÈ key "${key}" đã có từ lượt trước (không phải mảng để nối) — có thể model đã lặp lại phần đã gửi.`,
       );
-      target[key] = value;
+      state.obj[key] = value;
     }
   }
 }
@@ -369,25 +413,31 @@ async function callOpenRouterWithProviderRetry(
 }
 
 /**
- * SỬA (theo câu hỏi người dùng: "1 lượt bị mất không parse được JSON thì lượt
- * sau có thực hiện lại data của lượt đó không?" — câu trả lời THẬT là KHÔNG,
- * đây là lỗ hổng thật): mỗi lượt là 1 request MỚI HOÀN TOÀN, không mang lịch
- * sử hội thoại — nếu chỉ báo "đã có key X" (không nói rõ đã có BAO NHIÊU
- * phần tử/tới MỐC nào), model không biết chính xác đã phủ tới đâu khi tiếp
- * tục 1 mảng dài (segments...), dễ BỎ SÓT (tưởng đã đủ, nhảy sang phần sau)
- * hoặc TRÙNG LẶP (gửi lại từ đầu, bị mergeJsonPart nối chồng lên vì chỉ biết
- * concat, không dedupe). Báo CHI TIẾT: số phần tử hiện có + id/end_s của
- * phần tử CUỐI CÙNG (nếu mảng có các field này) — cho model điểm neo chính
- * xác để tiếp tục đúng chỗ, không đoán mù.
+ * Mô tả trạng thái đã gom được — nhánh theo state.kind ("array" hay
+ * "object", xem docstring mergeJsonPartAuto) để model biết CHÍNH XÁC đã tới
+ * đâu (điểm neo: số item/id cuối cho array, hoặc danh sách key + số phần tử
+ * mỗi key cho object) khi tiếp tục 1 kết quả dài, không lặp/không bỏ sót.
  */
-function describeCompletionState(
-  mergedResult: Record<string, unknown>,
-): string {
-  const keys = Object.keys(mergedResult);
+function describeMergeState(state: MergeState): string {
+  if (state.kind === "unset") return "(chưa có dữ liệu nào)";
+
+  if (state.kind === "array") {
+    if (state.items.length === 0) return "(chưa có item nào)";
+    const lastItem = state.items[state.items.length - 1] as
+      | Record<string, unknown>
+      | undefined;
+    const lastId =
+      lastItem && typeof lastItem === "object" && "id" in lastItem
+        ? String(lastItem.id)
+        : null;
+    return `Đang trả lời theo kiểu JSON ARRAY — đã có ${state.items.length} item${lastId ? `, item CUỐI CÙNG có id="${lastId}"` : ""}. Nếu tiếp tục, PHẢI bắt đầu NGAY SAU item cuối trên — KHÔNG lặp lại item đã có, KHÔNG bỏ sót phần nào ở giữa.`;
+  }
+
+  const keys = Object.keys(state.obj);
   if (keys.length === 0) return "(chưa có key nào)";
-  return keys
+  const keyDetails = keys
     .map((key) => {
-      const value = mergedResult[key];
+      const value = state.obj[key];
       if (Array.isArray(value)) {
         const count = value.length;
         const lastItem = value[count - 1] as
@@ -397,35 +447,25 @@ function describeCompletionState(
           lastItem && typeof lastItem === "object" && "id" in lastItem
             ? String(lastItem.id)
             : null;
-        const lastEndS =
-          lastItem && typeof lastItem === "object" && "end_s" in lastItem
-            ? lastItem.end_s
-            : null;
-        const detailParts = [
-          `${count} phần tử`,
-          lastId ? `phần tử CUỐI id="${lastId}"` : null,
-          lastEndS !== null && lastEndS !== undefined
-            ? `end_s CUỐI=${lastEndS}`
-            : null,
-        ].filter(Boolean);
-        return `- "${key}": ĐÃ CÓ (${detailParts.join(", ")}). Nếu tiếp tục mảng này, PHẢI bắt đầu NGAY SAU phần tử cuối trên — KHÔNG lặp lại phần tử đã có, KHÔNG bỏ sót đoạn nào ở giữa.`;
+        return `- "${key}": ĐÃ CÓ (${count} phần tử${lastId ? `, phần tử CUỐI id="${lastId}"` : ""}). Nếu tiếp tục mảng này, PHẢI bắt đầu NGAY SAU phần tử cuối — KHÔNG lặp lại, KHÔNG bỏ sót.`;
       }
       return `- "${key}": ĐÃ CÓ (đối tượng đơn — coi như xong, không cần gửi lại trừ khi phát hiện sai).`;
     })
     .join("\n");
+  return `Đang trả lời theo kiểu JSON OBJECT — các key đã gom được:\n${keyDetails}`;
 }
 
 function buildTurnPrompt(
   basePrompt: string,
-  mergedResult: Record<string, unknown>,
+  state: MergeState,
   turn: number,
   /** true nếu lượt NGAY TRƯỚC bị cắt giữa chừng (JSON không hợp lệ/không đóng) — nhắc model chủ động chia nhỏ hơn NỮA ở lượt này, xem MAX_OUTPUT_TOKENS. */
   lastTurnTruncated = false,
 ): string {
-  const completionState = describeCompletionState(mergedResult);
+  const completionState = describeMergeState(state);
 
   const truncationWarning = lastTurnTruncated
-    ? `\n\n## CẢNH BÁO — LƯỢT TRƯỚC BỊ CẮT GIỮA CHỪNG\nLượt ngay trước đã trả về JSON KHÔNG HỢP LỆ (bị cắt giữa chừng do quá dài, không đóng được khối code). Lượt NÀY hãy chia nhỏ HƠN NỮA — ví dụ nếu đang gửi "segments", chỉ gửi 1 PHẦN TỬ segment DUY NHẤT (không phải nhiều phần tử cùng lúc) để chắc chắn JSON đóng gọn trong giới hạn 1 lượt.`
+    ? `\n\n## CẢNH BÁO — LƯỢT TRƯỚC BỊ CẮT GIỮA CHỪNG\nLượt ngay trước đã trả về JSON KHÔNG HỢP LỆ (bị cắt giữa chừng do quá dài, không đóng được khối). Lượt NÀY hãy chia nhỏ HƠN NỮA để mỗi lượt luôn là JSON hoàn chỉnh.`
     : "";
 
   return `${basePrompt}${truncationWarning}
@@ -448,34 +488,23 @@ Khi phân tích:
 
 ## QUY TẮC TRẢ LỜI NHIỀU LƯỢT — BẮT BUỘC
 
-Kết quả JSON cuối cùng là MỘT object duy nhất gồm các key:
-- schema_version
-- film_info
-- assets
-- segments
-- emotional_beats
-- adaptation_blueprint
+Kết quả JSON cuối cùng PHẢI ĐÚNG THEO SCHEMA đã mô tả ở master prompt phía trên — có thể là MỘT JSON ARRAY phẳng, hoặc MỘT JSON OBJECT gồm nhiều key, tuỳ theo master prompt yêu cầu. Chọn ĐÚNG 1 kiểu (theo schema master prompt) và giữ NHẤT QUÁN kiểu đó xuyên suốt mọi lượt — TUYỆT ĐỐI KHÔNG đổi giữa array/object giữa các lượt.
 
-KHÔNG cố xuất toàn bộ object này trong một lượt.
+KHÔNG cố xuất toàn bộ kết quả trong một lượt.
 
 Mỗi lượt:
 - chỉ trả về ĐÚNG MỘT khối code \`\`\`json ... \`\`\`;
-- bên trong phải là MỘT JSON object HỢP LỆ, tự đóng, parse được;
-- chỉ chứa một vài key/phần tử MỚI chưa gửi ở lượt trước;
-- không bọc thêm object cha khác;
+- nếu schema là ARRAY: bên trong khối là 1 JSON ARRAY hợp lệ, chỉ chứa các item MỚI chưa gửi ở lượt trước;
+- nếu schema là OBJECT: bên trong khối là 1 JSON OBJECT hợp lệ, chỉ chứa 1 vài key/phần tử MỚI chưa gửi ở lượt trước (nếu 1 key là mảng dài, có thể tiếp tục dùng lại đúng key đó ở lượt sau nhưng chỉ chứa PHẦN TỬ MỚI của mảng, không bọc thêm object cha khác);
 - không lặp lại dữ liệu đã gửi nếu không cần thiết;
-- nếu key là mảng dài như segments, có thể tiếp tục dùng lại cùng key "segments" ở lượt sau nhưng chỉ chứa các PHẦN TỬ MỚI;
-- nếu một phần vẫn quá dài, phải chia nhỏ hơn nữa để mỗi lượt luôn là JSON hoàn chỉnh.
+- nếu vẫn quá dài, phải chia nhỏ hơn nữa để mỗi lượt luôn là JSON hoàn chỉnh, tự đóng, parse được.
 
-Trạng thái các top-level key bot đã gom được tới trước lượt ${turn} (dựa CHÍNH XÁC vào đây để biết tiếp tục từ đâu, KHÔNG tự đoán):
+Trạng thái đã gom được tới trước lượt ${turn} (dựa CHÍNH XÁC vào đây để biết tiếp tục từ đâu, KHÔNG tự đoán):
 ${completionState}
 
 Đây là lượt ${turn}/${MAX_PART_TURNS}.
 
-Ở CUỐI tin nhắn của LƯỢT CUỐI CÙNG, sau khối JSON, khi chắc chắn đã gửi ĐỦ toàn bộ:
-schema_version, film_info, assets, segments, emotional_beats, adaptation_blueprint
-
-hãy viết đúng nguyên văn:
+Ở CUỐI tin nhắn của LƯỢT CUỐI CÙNG, sau khối JSON, khi chắc chắn đã gửi ĐỦ toàn bộ theo đúng schema đã mô tả ở master prompt, hãy viết đúng nguyên văn:
 ${DONE_MARKER}
 
 TUYỆT ĐỐI KHÔNG viết "${DONE_MARKER}" nếu vẫn còn phần chưa gửi.
@@ -562,7 +591,7 @@ ${extraInstruction}`
     "base64",
   );
 
-  const mergedResult: Record<string, unknown> = {};
+  const mergeState: MergeState = { kind: "unset", items: [], obj: {} };
   let sawDoneMarker = false;
   let lastTurnTruncated = false;
 
@@ -576,7 +605,7 @@ ${extraInstruction}`
 
       const turnPrompt = buildTurnPrompt(
         basePrompt,
-        mergedResult,
+        mergeState,
         turn,
         lastTurnTruncated,
       );
@@ -643,8 +672,8 @@ ${extraInstruction}`
       if (jsonPartText) {
         try {
           const parsedPart = JSON.parse(jsonPartText);
-          mergeJsonPart(
-            mergedResult,
+          mergeJsonPartAuto(
+            mergeState,
             parsedPart,
             jobId,
             turn,
@@ -679,26 +708,21 @@ ${extraInstruction}`
 
   if (!sawDoneMarker) {
     throw new QwenAIError(
-      `Qwen (job ${jobId}) chưa gửi "${DONE_MARKER}" sau ${MAX_PART_TURNS} lượt — kết quả có thể chưa đầy đủ. Các key đã gom được: ${Object.keys(mergedResult).join(", ") || "(không có)"}.`,
+      `Qwen (job ${jobId}) chưa gửi "${DONE_MARKER}" sau ${MAX_PART_TURNS} lượt — kết quả có thể chưa đầy đủ. ${describeMergeState(mergeState)}`,
     );
   }
 
-  const requiredTopLevelKeys = [
-    "schema_version",
-    "film_info",
-    "assets",
-    "segments",
-    "emotional_beats",
-    "adaptation_blueprint",
-  ] as const;
+  const finalResult: unknown =
+    mergeState.kind === "array" ? mergeState.items : mergeState.obj;
+  const isEmpty =
+    mergeState.kind === "unset" ||
+    (mergeState.kind === "array" && mergeState.items.length === 0) ||
+    (mergeState.kind === "object" &&
+      Object.keys(mergeState.obj).length === 0);
 
-  const missingKeys = requiredTopLevelKeys.filter(
-    (key) => !(key in mergedResult),
-  );
-
-  if (missingKeys.length > 0) {
+  if (isEmpty) {
     throw new QwenAIError(
-      `Qwen (job ${jobId}) đã báo "${DONE_MARKER}" nhưng JSON merge vẫn thiếu top-level key: ${missingKeys.join(", ")}.`,
+      `Qwen (job ${jobId}) đã báo "${DONE_MARKER}" nhưng không gom được dữ liệu nào (mọi lượt trả về đều không parse được thành JSON array/object hợp lệ).`,
     );
   }
 
@@ -720,12 +744,16 @@ ${extraInstruction}`
 
   await fs.promises.writeFile(
     filePath,
-    JSON.stringify(mergedResult, null, 2),
+    JSON.stringify(finalResult, null, 2),
     "utf-8",
   );
 
   console.log(
-    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): đã lưu "${filePath}" (key: ${Object.keys(mergedResult).join(", ")}).`,
+    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): đã lưu "${filePath}" (kiểu ${mergeState.kind}, ${
+      mergeState.kind === "array"
+        ? `${mergeState.items.length} item`
+        : `${Object.keys(mergeState.obj).length} key`
+    }).`,
   );
 
   return {
