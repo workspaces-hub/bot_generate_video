@@ -137,12 +137,28 @@ export const workingIndicatorLocator = (page: Page): Locator =>
  * `.agent-turn` nên nhánh Chat ở trên khớp 0 phần tử — phải OR thêm nhánh
  * này, không thay thế, để hasAssistantTurn/readLatestAssistantMessage nhận
  * đúng lượt trả lời ở CẢ HAI mode thay vì treo vô hạn (xem sendMessage).
+ *
+ * BỔ SUNG THÊM nhánh thứ 3 — xác nhận qua lỗi thật (test-chatai-image.ts,
+ * 2026-09-30): sendImagePrompt treo ĐỦ 20 phút (config.generationTimeoutMs)
+ * dù ảnh ĐÃ render xong thật trên trang (screenshot debug xác nhận rõ, không
+ * còn placeholder "đang tạo"/nút Stop) — grep TOÀN BỘ HTML snapshot lúc lỗi
+ * xác nhận CẢ HAI nhánh trên đều khớp 0 phần tử (không có
+ * `conversation-turn`/`.agent-turn`, và `[data-content-search-unit-key]` CHỈ
+ * có mỗi bản ghi "...:user", KHÔNG có bản ghi nào kết thúc ":assistant").
+ * DOM thật của phiên này dùng `<div class="block-BQZwFn"><span
+ * data-chatgpt-agent-turn-start></span><h4 data-conversation-role="assistant"
+ * class="sr-only" ...>ChatGPT said:</h4><div>...(nội dung thật, gồm cả ảnh
+ * generated-image-gallery)...</div></div>` — h4 sr-only này CÙNG CẤP (direct
+ * sibling) với div nội dung thật, nên dùng div CHA của nó (div:has(>
+ * h4[data-conversation-role="assistant"])) làm scope để descendant locator
+ * (ảnh, text...) tìm thấy đúng nội dung bên trong.
  */
 export const assistantMessageLocator = (page: Page): Locator =>
   page
     .locator('section[data-testid^="conversation-turn-"]')
     .filter({ has: page.locator(".agent-turn") })
-    .or(page.locator('[data-content-search-unit-key$=":assistant"]'));
+    .or(page.locator('[data-content-search-unit-key$=":assistant"]'))
+    .or(page.locator('div:has(> h4[data-conversation-role="assistant"])'));
 
 /**
  * File ChatAI tạo ra và đính kèm trong 1 tin nhắn trả lời (vd qua code

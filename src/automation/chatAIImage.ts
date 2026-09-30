@@ -195,8 +195,16 @@ async function sendImagePrompt(page: Page, text: string): Promise<void> {
     } else {
       if (stableSince === null) stableSince = Date.now();
       if (Date.now() - stableSince >= stableRequiredMs) {
+        // SỬA (xác nhận qua lỗi thật, test-chatai-image.ts 2026-09-30):
+        // lưới an toàn này TỪNG chỉ kiểm tra "[data-message-author-role]" —
+        // đúng 1 trong 3 biến thể DOM ChatAI dùng (xem docstring
+        // assistantMessageLocator trong chatAISelectors.ts, phiên test đó
+        // KHÔNG hề có attribute này ở CẢ user lẫn assistant) — throw NHẦM
+        // "mất trạng thái" dù ẢNH ĐÃ SẴN SÀNG thật (hasImageReady đã true,
+        // đủ bằng chứng có tin nhắn). Đổi sang dùng CHÍNH assistantMessageLocator
+        // (đã gộp đủ cả 3 biến thể) thay vì tự dò lại 1 selector hẹp riêng.
         const hasAnyMessage =
-          (await page.locator("[data-message-author-role]").count()) > 0;
+          (await assistantMessageLocator(page).count()) > 0;
         if (!hasAnyMessage) {
           throw new ChatAIImageError(
             "Trang không có tin nhắn nào sau khi chờ phản hồi (có thể đã mất trạng thái giữa chừng) — cần thử lại.",
@@ -468,26 +476,57 @@ async function attemptGenerateReferenceImage(
       );
     }
 
-    // Ảnh do ChatAI tạo thường phục vụ qua URL đã ký sẵn (pre-signed) —
-    // fetch thẳng qua request context (dùng chung cookie/session với page)
-    // thay vì phải bấm hover/click UI để kích hoạt sự kiện download.
-    //
-    // Xác nhận qua log lỗi thật (job e887e23c): mặc định request.get() chỉ
-    // chờ 30s — response header đã về 200 OK nhưng ảnh dung lượng lớn tải qua
-    // mạng VPS chậm chưa đọc xong body thì đã bị coi là timeout. timeout: 0
-    // = tắt hẳn giới hạn thời gian (Playwright chờ tới khi xong hoặc lỗi
-    // mạng thật, không tự huỷ giữa chừng).
-    const response = await page.context().request.get(src, { timeout: 0 });
-    if (!response.ok()) {
-      throw new ChatAIImageError(`Tải ảnh thất bại: HTTP ${response.status()}`);
-    }
+    console.log(
+      `[chatAIImage] Đang tải ảnh từ src="${src.slice(0, 200)}"...`,
+    );
 
     await fs.promises.mkdir(destDir, { recursive: true });
     const destPath = path.join(
       destDir,
       `${baseFileName}.${guessImageExtension(src)}`,
     );
-    await fs.promises.writeFile(destPath, await response.body());
+
+    // SỬA (xác nhận qua lỗi thật, test-chatai-image.ts 2026-09-30: HTML
+    // snapshot lúc lỗi cho thấy src THẬT SỰ là "blob:https://chatgpt.com/..."
+    // — KHÁC HẲN giả định cũ "URL đã ký sẵn dạng https://ChatAI/backend-api/
+    // estuary/content?id=...&sig=..." của job 24b9cf53): blob: URL chỉ tồn
+    // tại trong bộ nhớ JS của CHÍNH page đó (tạo bằng URL.createObjectURL())
+    // — page.context().request.get() hoạt động ở tầng network/HTTP, KHÔNG
+    // thể resolve blob:, khiến request TREO VĨNH VIỄN (không lỗi, không
+    // xong — xác nhận qua debug thật, CPU time gần như không tăng suốt hàng
+    // chục phút). Phải fetch NGAY TRONG page (nơi blob: mới resolve được)
+    // qua page.evaluate(), rồi chuyển base64 mang ra ngoài Node.
+    //
+    // Giữ NHÁNH CŨ (request.get qua network) làm fallback cho trường hợp src
+    // là URL http(s) thật (tuỳ phiên/thời điểm ChatAI có thể vẫn phục vụ qua
+    // URL ký sẵn như mô tả cũ) — xác nhận qua log lỗi thật (job e887e23c):
+    // mặc định request.get() chỉ chờ 30s, ảnh lớn tải qua mạng VPS chậm dễ bị
+    // coi là timeout nên dùng timeout DÀI nhưng CÓ GIỚI HẠN (5 phút) — không
+    // còn dùng timeout:0 (tắt hẳn giới hạn) nữa vì đã xác nhận có thể treo
+    // mãi mãi nếu request không bao giờ tự hoàn tất/lỗi.
+    if (src.startsWith("blob:")) {
+      const base64 = await page.evaluate(async (blobUrl) => {
+        const res = await fetch(blobUrl);
+        const buf = await res.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+      }, src);
+      await fs.promises.writeFile(destPath, Buffer.from(base64, "base64"));
+    } else {
+      const response = await page
+        .context()
+        .request.get(src, { timeout: 300_000 });
+      if (!response.ok()) {
+        throw new ChatAIImageError(
+          `Tải ảnh thất bại: HTTP ${response.status()}`,
+        );
+      }
+      await fs.promises.writeFile(destPath, await response.body());
+    }
 
     return { path: destPath, sessionId: extractChatAISessionId(page.url()) };
   } catch (err) {
