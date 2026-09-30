@@ -149,6 +149,15 @@ export const config = {
   // phần tử đó mô tả TOÀN BỘ video để gen lại trong 1 lần, xem
   // prompt_video_reference.txt.
   promptVideoReference: "prompt_video_reference.txt",
+  // Master prompt cho tính năng "Test prompt tham chiếu video" (nút
+  // TEST_VIDEO_REFERENCE_BUTTON_LABEL) — GIỐNG luồng "Tham chiếu video" ở
+  // trên (cùng ScriptReferenceVideoJob/askQwenAboutReferenceVideo) nhưng
+  // dùng file prompt.txt ở gốc repo, và job đặt verifyPromptTest=true: sau
+  // khi có JSON, gọi THÊM 1 lượt Qwen khác (verifyReferenceVideoJson trong
+  // qwenAI.ts) upload lại CHÍNH video gốc + JSON vừa tạo để đối chiếu xem
+  // JSON có mô tả đúng video thật không, rồi gửi báo cáo đối chiếu đó cho
+  // user (xem processChatAIQueue trong queue.ts).
+  promptVideoReferenceTest: "prompt.txt",
   // Master prompt cho tính năng "Tạo kịch bản mới" (nút
   // GENERATE_SCRIPT_BUTTON_LABEL) — user gõ tên file json, bot tìm các file
   // JSON storyboard đã có trong config.chatAIResultsDir có tên CHỨA chuỗi đó

@@ -152,6 +152,78 @@ async function extractAudioForQwen(
   }
 }
 
+/**
+ * Nén 1 bản video NHẸ HƠN riêng để publish cho OpenRouter/Qwen tải (KHÔNG
+ * đụng tới videoPath gốc — video gốc vẫn dùng nguyên cho các bước khác của
+ * pipeline). Xác nhận qua lỗi thật (job 269504c4-b8bb-4c7d-bc3e-888c72e0cee6,
+ * 2026-09-29): sau khi đã sửa xong vấn đề mạng (RunPod TCP port thay vì HTTP
+ * proxy — xem qwenFileServer.ts), request TỪ Alibaba ĐÃ tới được server
+ * (`[qwenFileServer] Request đến`), nhưng OpenRouter vẫn trả lỗi cụ thể
+ * "Download multimodal file timed out" — log server xác nhận client (Alibaba)
+ * chủ động đóng kết nối sau ĐÚNG 120222ms, nghĩa là Alibaba tự giới hạn thời
+ * gian tải file (~120s) và video gốc (thường vài trăm MB tới hàng GB, có thể
+ * dài tới 1 tiếng — xem hội thoại trước) không tải kịp trong ngần đó thời
+ * gian qua kết nối thực tế từ VPS/pod.
+ *
+ * Giải pháp: hạ hẳn kích thước file cần Alibaba tải, KHÔNG cần giữ chất
+ * lượng cao — Qwen chỉ cần NHÌN được nội dung (nhân vật/bối cảnh/hành động)
+ * để phân tích kịch bản, không phải xem để đánh giá chất lượng hình ảnh.
+ * - Hạ độ phân giải xuống tối đa 480p (scale=-2:480, -2 giữ tỉ lệ khung hình
+ *   VÀ đảm bảo số chẵn — codec H.264 yêu cầu width/height chia hết cho 2).
+ * - Giảm framerate còn 15fps — đủ để nhận diện hành động/chuyển cảnh, không
+ *   cần mượt.
+ * - CRF 30 (nén nhiều hơn hẳn mức mặc định ~23) — chấp nhận giảm chất lượng
+ *   hình để đổi lấy file nhẹ hơn nhiều.
+ * - -an (bỏ HẲN track audio) — model đã nhận audio THẬT riêng qua input_audio
+ *   (xem QUY TẮC AUDIO/VIDEO BẮT BUỘC trong buildTurnPrompt: model được dặn
+ *   dùng input_audio làm nguồn audio chính thức), audio trong chính file
+ *   video không cần thiết, bỏ đi giảm thêm dung lượng đáng kể.
+ * - -movflags +faststart — đưa metadata (moov atom) lên ĐẦU file thay vì
+ *   cuối, để 1 client tải tuần tự (Alibaba fetch qua HTTP) có thể bắt đầu xử
+ *   lý sớm hơn thay vì phải tải hết mới đọc được metadata — giảm thêm rủi ro
+ *   timeout với file MP4 encode mặc định (moov thường nằm cuối).
+ */
+async function compressVideoForQwen(
+  videoPath: string,
+  outputPath: string,
+): Promise<void> {
+  try {
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      videoPath,
+      "-vf",
+      "scale=-2:480,fps=15",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "30",
+      "-an",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ]);
+  } catch (err) {
+    throw new QwenAIError(
+      `Không thể nén video bằng ffmpeg từ "${videoPath}": ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  const stat = await fs.promises.stat(outputPath).catch(() => null);
+  if (!stat || stat.size <= 0) {
+    throw new QwenAIError(
+      `FFmpeg không tạo được video nén hợp lệ từ "${videoPath}".`,
+    );
+  }
+}
+
 async function callOpenRouter(
   messages: OpenRouterMessage[],
   jobId: string,
@@ -438,14 +510,30 @@ ${extraInstruction}`
     recursive: true,
   });
 
+  const compressedVideoPath = path.join(
+    config.debugDir,
+    `${jobId}-qwen-video.mp4`,
+  );
+
   console.log(
-    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): publish video "${videoPath}" ra URL công khai tạm thời...`,
+    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): nén video bằng ffmpeg trước khi publish (giảm rủi ro Alibaba tải không kịp trong ~120s)...`,
+  );
+
+  await compressVideoForQwen(videoPath, compressedVideoPath);
+
+  const compressedStat = await fs.promises.stat(compressedVideoPath);
+  console.log(
+    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): video nén còn ${(compressedStat.size / 1024 / 1024).toFixed(2)} MB.`,
+  );
+
+  console.log(
+    `[qwenAI] askQwenAboutReferenceVideo(${jobId}): publish video "${compressedVideoPath}" ra URL công khai tạm thời...`,
   );
 
   const { url: videoUrl, cleanup } =
     await publishFileTemporarily(
-      videoPath,
-      `${jobId}${path.extname(videoPath) || ".mp4"}`,
+      compressedVideoPath,
+      `${jobId}${path.extname(compressedVideoPath) || ".mp4"}`,
     );
 
   console.log(
@@ -586,6 +674,7 @@ ${extraInstruction}`
     });
 
     await fs.promises.unlink(audioPath).catch(() => {});
+    await fs.promises.unlink(compressedVideoPath).catch(() => {});
   }
 
   if (!sawDoneMarker) {
@@ -818,4 +907,99 @@ Hãy viết lại ĐÚNG prompt này để mô tả lại y hệt ý tưởng, b
     );
   }
   return revisedPrompt;
+}
+
+/**
+ * Dùng cho "Test prompt tham chiếu video" (TEST_VIDEO_REFERENCE_BUTTON_LABEL,
+ * xem config.promptVideoReferenceTest/ScriptReferenceVideoJob.verifyPromptTest
+ * trong queue.ts): sau khi askQwenAboutReferenceVideo đã tạo ra 1 file JSON TỪ
+ * video gốc (dùng prompt.txt), gọi hàm này để upload LẠI CHÍNH video gốc đó
+ * kèm nội dung file JSON vừa tạo, nhờ Qwen đối chiếu xem JSON có mô tả ĐÚNG
+ * video thật hay không — trả về 1 đoạn văn bản báo cáo cho người dùng đọc.
+ *
+ * KHÁC askQwenAboutReferenceVideo: đây KHÔNG dùng chiến lược nhiều lượt/JSON
+ * parts (mục tiêu chỉ là 1 nhận xét ngắn, không phải tái tạo lại toàn bộ nội
+ * dung) — gọi OpenRouter ĐÚNG 1 LẦN duy nhất.
+ */
+export async function verifyReferenceVideoJson(
+  videoPath: string,
+  jsonPath: string,
+  jobId: string,
+): Promise<string> {
+  const jsonContent = await fs.promises.readFile(jsonPath, "utf-8");
+
+  await fs.promises.mkdir(config.debugDir, { recursive: true });
+
+  console.log(
+    `[qwenAI] verifyReferenceVideoJson(${jobId}): publish video "${videoPath}" ra URL công khai tạm thời...`,
+  );
+
+  const { url: videoUrl, cleanup } = await publishFileTemporarily(
+    videoPath,
+    `${jobId}-verify${path.extname(videoPath) || ".mp4"}`,
+  );
+
+  const audioPath = path.join(config.debugDir, `${jobId}-verify-audio.mp3`);
+
+  try {
+    console.log(
+      `[qwenAI] verifyReferenceVideoJson(${jobId}): tách audio bằng ffmpeg...`,
+    );
+    await extractAudioForQwen(videoPath, audioPath);
+    const audioBase64 = await fs.promises.readFile(audioPath, "base64");
+
+    const verifyPrompt = `Bạn nhận được 1 video gốc (kèm audio) và 1 file JSON được tạo ra TỪ chính video này (JSON gồm các asset CHARACTER/LOCATION/PROP/OBJECT và các đoạn VIDEO — mục tiêu của JSON là mô tả đủ chi tiết để gen ảnh + gen video rồi ghép lại tái tạo giống video gốc).
+
+Nhiệm vụ: xem/nghe kỹ video gốc, đối chiếu TỪNG PHẦN của JSON với đúng nội dung video thật, rồi báo cáo:
+1. JSON có khớp CHÍNH XÁC với video gốc không (nhân vật, bối cảnh, đạo cụ/vật thể, lời thoại, số lượng đoạn VIDEO, thứ tự, duration mỗi đoạn)?
+2. Liệt kê CỤ THỂ từng điểm sai lệch nếu có — nêu rõ id/field nào sai, mô tả đúng phải là gì theo video thật. Nếu JSON khớp hoàn toàn, nói rõ "Khớp hoàn toàn, không phát hiện sai lệch."
+3. Không sửa lại JSON, không xuất file — CHỈ trả lời bằng 1 đoạn văn bản báo cáo ngắn gọn, rõ ràng, có thể dùng gạch đầu dòng cho từng điểm sai lệch.
+
+Nội dung file JSON cần đối chiếu:
+\`\`\`json
+${jsonContent}
+\`\`\``;
+
+    const messages: OpenRouterMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "video_url", video_url: { url: videoUrl } },
+          {
+            type: "input_audio",
+            input_audio: { data: audioBase64, format: "mp3" },
+          },
+          { type: "text", text: verifyPrompt },
+        ],
+      },
+    ];
+
+    const { text, finishReason } = await callOpenRouterWithProviderRetry(
+      messages,
+      jobId,
+      "verifyReferenceVideoJson",
+    );
+
+    if (finishReason === "length") {
+      console.warn(
+        `[qwenAI] verifyReferenceVideoJson(${jobId}): finish_reason=length — báo cáo có thể bị cắt giữa chừng.`,
+      );
+    }
+
+    if (!text) {
+      throw new QwenAIError(
+        `Qwen không trả về nội dung đối chiếu nào (job ${jobId}).`,
+      );
+    }
+
+    return text;
+  } finally {
+    await cleanup().catch((err) => {
+      console.warn(
+        `[qwenAI] verifyReferenceVideoJson(${jobId}): cleanup video public URL lỗi:`,
+        err,
+      );
+    });
+    await fs.promises.unlink(audioPath).catch(() => {});
+  }
 }

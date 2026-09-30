@@ -12,6 +12,11 @@ import { generateImage } from "./automation/aiVideoImage";
 // chatAI.ts — vẫn còn nguyên trong file đó, chỉ không import ở đây nữa vì
 // không còn nơi nào trong queue.ts gọi tới).
 import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
+// compareOriginalWithFinalVideo: dùng cho "Test prompt tham chiếu video"
+// (xem nhánh job.verifyPromptTest bên dưới) — GPT thật (KHÁC Qwen ở trên,
+// theo yêu cầu người dùng dùng model khác để đánh giá, tránh thiên vị) so
+// sánh video gốc với video cuối cùng do pipeline tái tạo ra.
+import { compareOriginalWithFinalVideo } from "./automation/chatAI";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import {
@@ -32,6 +37,7 @@ import {
   generateVideosForFileComfyUI,
   generateVideosForFilePollo,
   loadPersistedStopStoryboardRequests,
+  mergeVideosForFile,
   reconcileAssetLedgerAcrossFiles,
   requestStopStoryboardPipeline,
   sleep,
@@ -127,6 +133,18 @@ export interface ScriptReferenceVideoJob extends BaseJob {
   masterPromptPath?: string;
   /** true = job CHỈ gửi lại JSON cho user rồi dừng, KHÔNG tạo folder generated/, KHÔNG gửi nút "Tạo ảnh" xác nhận (xem processChatAIQueue). Nút "Tham chiếu video" đặt true; "Tham chiếu kịch bản" giữ mặc định false/undefined. */
   skipImageConfirmation?: boolean;
+  /**
+   * true = SAU KHI có JSON (chỉ áp dụng khi skipImageConfirmation cũng true),
+   * chạy TOÀN BỘ pipeline test TỰ ĐỘNG (không chờ user bấm nút xác nhận):
+   * gen ảnh CHARACTER/LOCATION/PROP/OBJECT (generateReferenceImagesForFileViaPollo)
+   * → gen từng đoạn VIDEO (generateVideosForFileComfyUI) → ghép tất cả video
+   * theo đúng thứ tự timeline (mergeVideosForFile, storyboardPipeline.ts) → nhờ ChatGPT
+   * (compareOriginalWithFinalVideo, chatAI.ts — GPT thật, KHÁC Qwen dùng ở
+   * bước tạo JSON) so sánh video gốc (job.videoPath) với video cuối cùng vừa
+   * tái tạo, gửi báo cáo cho user. CHỈ nút "Test prompt tham chiếu video"
+   * (TEST_VIDEO_REFERENCE_BUTTON_LABEL) đặt true — xem processChatAIQueue.
+   */
+  verifyPromptTest?: boolean;
 }
 
 /**
@@ -158,6 +176,21 @@ export interface GenerateScriptJob extends BaseJob {
   referenceFileNames: string[];
   /** Job "generateScript" LUÔN có field này (khác ChatAIJob — tuỳ chọn) — ghi đè lại kiểu bắt buộc để handlers.ts/queue.ts không cần check null thừa. */
   promptAttachmentPath: string;
+  /**
+   * Tên phim đã VERSION HOÁ theo số lần remake — vd tham chiếu "phim_a" lần
+   * đầu → "phim_a_1", lần 2 → "phim_a_2" (xem resolveNextRemakeVersion,
+   * storyboardPipeline.ts) — tính SẴN trong handleGenerateScriptRequest
+   * (handlers.ts, TRƯỚC khi enqueue) để mỗi lần bấm "Tạo kịch bản mới" tham
+   * chiếu CÙNG 1 tên phim luôn ra 1 folder generated/ MỚI, KHÔNG ghi đè/
+   * archive folder của lần remake trước.
+   *
+   * Dùng làm job.generatedFolderName TRỰC TIẾP (KHÔNG còn rút ra từ tên file
+   * JSON ChatGPT/Qwen tự đặt như trước — OUTPUT_BASENAME_GOI_Y trong prompt
+   * chỉ là GỢI Ý, không đảm bảo model tuân theo đúng) — processChatAIQueue tự
+   * ĐỔI TÊN LẠI mọi file JSON tải về theo field này (giữ nguyên hậu tố
+   * "_tapN..." nếu có, phân biệt nhiều tập) trước khi copy vào generated/.
+   */
+  remakeBaseName: string;
 }
 
 /**
@@ -2734,48 +2767,75 @@ async function processChatAIQueue(): Promise<void> {
       );
       try {
         let downloadedFiles: string[];
-        if (job.type === "scriptReferenceVideo") {
-          ({ downloadedFiles } = await askQwenAboutReferenceVideo(
-            job.videoPath,
-            jobId,
-            job.videoFileName,
-            job.extraInstruction,
-            job.masterPromptPath,
-          ));
-          console.log(
-            `[queue] processChatAIQueue(${jobId}): askQwenAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
-          );
-        } else {
-          // Theo yêu cầu người dùng: đổi sang askQwen (Qwen qua OpenRouter,
-          // xem qwenAI.ts) THAY CHO askChatAI/askChatAIWithInlineContent —
-          // askQwen KHÔNG có khái niệm "upload file lên composer" (chỉ dán
-          // thẳng nội dung file làm text, xem docstring askQwen), nên không
-          // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
-          // fileAccessError kiểu ChatGPT để mà fallback).
-          ({ downloadedFiles } = await askQwen(
-            job.prompt,
-            jobId,
-            job.promptFileName,
-            job.promptAttachmentPath,
-          ));
-          console.log(
-            `[queue] processChatAIQueue(${jobId}): askQwen xong, tải được ${downloadedFiles.length} file.`,
-          );
-        }
+        // if (job.type === "scriptReferenceVideo") {
+        //   ({ downloadedFiles } = await askQwenAboutReferenceVideo(
+        //     job.videoPath,
+        //     jobId,
+        //     job.videoFileName,
+        //     job.extraInstruction,
+        //     job.masterPromptPath,
+        //   ));
+        //   console.log(
+        //     `[queue] processChatAIQueue(${jobId}): askQwenAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
+        //   );
+        // } else {
+        //   // Theo yêu cầu người dùng: đổi sang askQwen (Qwen qua OpenRouter,
+        //   // xem qwenAI.ts) THAY CHO askChatAI/askChatAIWithInlineContent —
+        //   // askQwen KHÔNG có khái niệm "upload file lên composer" (chỉ dán
+        //   // thẳng nội dung file làm text, xem docstring askQwen), nên không
+        //   // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
+        //   // fileAccessError kiểu ChatGPT để mà fallback).
+        //   ({ downloadedFiles } = await askQwen(
+        //     job.prompt,
+        //     jobId,
+        //     job.promptFileName,
+        //     job.promptAttachmentPath,
+        //   ));
+        //   console.log(
+        //     `[queue] processChatAIQueue(${jobId}): askQwen xong, tải được ${downloadedFiles.length} file.`,
+        //   );
+        // }
 
         // "Tạo kịch bản mới" (job.type === "generateScript", dùng CHUNG hàng
-        // đợi này với "chatAI" — xem docstring GenerateScriptJob) cần 2 bước
-        // RIÊNG trước khi gửi JSON cho user: (1) hậu kiểm bằng CODE đối
-        // chiếu CHARACTER/LOCATION/PROP/OBJECT xuyên các file tập, ghi đè
-        // cho khớp bản canonical nếu ChatGPT lỡ viết lệch mô tả (xem
-        // docstring reconcileAssetLedgerAcrossFiles trong
-        // storyboardPipeline.ts); (2) xác định job.generatedFolderName (tên
-        // phim, rút từ OUTPUT_BASENAME chung mà master prompt bắt buộc đặt
-        // trong tên MỌI file tập) để runStoryboardPipelinePollo bên dưới
-        // dùng CHUNG 1 folder generated/<tên phim>/ cho mọi tập (xem docstring
-        // generatedFolderName trong BaseJob) thay vì mỗi tập 1 folder riêng
-        // (hành vi mặc định cho job "chatAI" bình thường).
+        // đợi này với "chatAI" — xem docstring GenerateScriptJob) cần 3 bước
+        // RIÊNG trước khi gửi JSON cho user: (1) ĐỔI TÊN mọi file JSON tải về
+        // theo job.remakeBaseName (đã version hoá theo số lần remake, tính
+        // SẴN trong handleGenerateScriptRequest — xem docstring
+        // remakeBaseName) — KHÔNG tin theo tên ChatGPT/Qwen tự đặt (chỉ là
+        // GỢI Ý qua OUTPUT_BASENAME_GOI_Y trong prompt, không đảm bảo tuân
+        // theo), giữ lại hậu tố "_tapN..." nếu có (phân biệt nhiều tập); (2)
+        // hậu kiểm bằng CODE đối chiếu CHARACTER/LOCATION/PROP/OBJECT xuyên
+        // các file tập, ghi đè cho khớp bản canonical nếu ChatGPT lỡ viết
+        // lệch mô tả (xem docstring reconcileAssetLedgerAcrossFiles trong
+        // storyboardPipeline.ts — chạy SAU khi đã đổi tên, để hậu kiểm thao
+        // tác đúng trên tên file cuối cùng); (3) đặt job.generatedFolderName
+        // = job.remakeBaseName để runStoryboardPipelinePollo bên dưới dùng
+        // CHUNG 1 folder generated/<tên phim đã version>/ cho mọi tập (xem
+        // docstring generatedFolderName trong BaseJob) thay vì mỗi tập 1
+        // folder riêng (hành vi mặc định cho job "chatAI" bình thường) — và
+        // KHÁC lần remake TRƯỚC của CÙNG tên phim gốc (folder tên khác nhau,
+        // không ghi đè/archive lẫn nhau).
+        downloadedFiles = ["storage/chatai-results/beggar.json"]
         if (job.type === "generateScript") {
+          const jsonFileIndexes = downloadedFiles
+            .map((f, i) => ({ f, i }))
+            .filter(({ f }) => path.extname(f).toLowerCase() === ".json");
+
+          for (const { f: oldPath, i } of jsonFileIndexes) {
+            const dir = path.dirname(oldPath);
+            const oldWithoutExt = path.basename(oldPath, ".json");
+            const tapSuffixMatch = oldWithoutExt.match(/(_tap\d+.*)$/i);
+            const tapSuffix = tapSuffixMatch ? tapSuffixMatch[1] : "";
+            const newPath = path.join(
+              dir,
+              `${job.remakeBaseName}${tapSuffix}.json`,
+            );
+            if (newPath !== oldPath) {
+              await fsp.rename(oldPath, newPath);
+            }
+            downloadedFiles[i] = newPath;
+          }
+
           const jsonFiles = downloadedFiles.filter(
             (f) => path.extname(f).toLowerCase() === ".json",
           );
@@ -2797,15 +2857,7 @@ async function processChatAIQueue(): Promise<void> {
                 .catch(() => {});
             }
           }
-          if (jsonFiles.length > 0) {
-            const firstJsonWithoutExt = path
-              .basename(jsonFiles[0])
-              .replace(/\.json$/i, "");
-            const match = firstJsonWithoutExt.match(/^(.*?)_tap\d+.*$/i);
-            job.generatedFolderName = (
-              match ? match[1] : firstJsonWithoutExt
-            ).trim();
-          }
+          job.generatedFolderName = job.remakeBaseName;
         }
 
         // Gửi NGAY file JSON storyboard vừa tải về cho user, TRƯỚC KHI bắt
@@ -2828,13 +2880,15 @@ async function processChatAIQueue(): Promise<void> {
         }
 
         if (job.type === "scriptReferenceVideo" && job.skipImageConfirmation) {
-          // "Tham chiếu video" — CHỈ dừng ở bước gửi JSON, không tạo folder
-          // generated/, không gửi nút xác nhận "Tạo ảnh" (theo yêu cầu
-          // người dùng, khác "Tham chiếu kịch bản" ở nhánh else bên dưới).
-          const jsonCount = downloadedFiles.filter(
+          // "Tham chiếu video"/"Test prompt tham chiếu video" — CHỈ dừng ở
+          // bước gửi JSON (+ báo cáo đối chiếu nếu verifyPromptTest), không
+          // tạo folder generated/, không gửi nút xác nhận "Tạo ảnh" (theo
+          // yêu cầu người dùng, khác "Tham chiếu kịch bản" ở nhánh else bên
+          // dưới).
+          const jsonFiles = downloadedFiles.filter(
             (f) => path.extname(f).toLowerCase() === ".json",
-          ).length;
-          if (jsonCount === 0) {
+          );
+          if (jsonFiles.length === 0) {
             await telegram.sendMessage(
               job.chatId,
               "✅ ChatAI đã trả lời xong (không có file JSON đính kèm nào).",
@@ -2843,6 +2897,146 @@ async function processChatAIQueue(): Promise<void> {
                 ...promptMenu,
               },
             );
+          } else if (job.verifyPromptTest) {
+            // "Test prompt tham chiếu video" — SỬA (theo yêu cầu người
+            // dùng): thay vì chỉ đối chiếu JSON với video gốc bằng Qwen (cũ),
+            // giờ chạy TOÀN BỘ pipeline tự động, KHÔNG dừng chờ user bấm nút
+            // xác nhận "Tạo ảnh"/"Tạo video" như luồng "Tham chiếu kịch bản"
+            // bình thường (đây là chế độ TEST — mục tiêu tự động đánh giá
+            // chất lượng prompt/pipeline, không phải nội dung sản xuất thật
+            // cần user duyệt ảnh trước khi tốn credit video):
+            // 1. JSON đã có (jsonFiles[0]) → gen ảnh CHARACTER/LOCATION/PROP/
+            //    OBJECT qua generateReferenceImagesForFileViaPollo.
+            // 2. Gen từng đoạn VIDEO qua generateVideosForFileComfyUI (provider
+            //    THẬT đang dùng cho VIDEO hiện nay — KHÔNG phải
+            //    generateVideosForFilePollo, xem chú thích 2 hàm đó trong
+            //    storyboardPipeline.ts).
+            // 3. Ghép TẤT CẢ video theo ĐÚNG thứ tự timeline (mergeVideosForFile,
+            //    storyboardPipeline.ts) — thứ tự lấy theo (shot, clip) của từng entry
+            //    VIDEO trong JSON (schema quy định VIDEO luôn ở cuối mảng,
+            //    đúng thứ tự thời gian — sort lại theo shot/clip cho chắc,
+            //    phòng trường hợp Qwen lỡ xuất sai thứ tự).
+            // 4. Nhờ ChatGPT (GPT thật, KHÁC Qwen dùng ở bước 1) so sánh video
+            //    GỐC (job.videoPath) với video CUỐI CÙNG vừa ghép — xem
+            //    compareOriginalWithFinalVideo trong chatAI.ts.
+            //
+            // Bất kỳ bước nào lỗi (gen ảnh/video có entry fail, ghép lỗi, so
+            // sánh lỗi) đều dừng NGAY, báo lỗi cho user — không cố gắng ghép
+            // video thiếu clip (kết quả sẽ vô nghĩa cho việc đánh giá prompt).
+            const jsonPath = jsonFiles[0];
+            try {
+              console.log(
+                `[queue] processChatAIQueue(${jobId}): [test-prompt] bắt đầu gen ảnh CHARACTER/LOCATION/PROP/OBJECT (Pollo)...`,
+              );
+              const outputDir = await ensureGeneratedFolder(jsonPath);
+              const jsonPathInGenerated = path.join(
+                outputDir,
+                path.basename(jsonPath),
+              );
+
+              const imagesResult = await generateReferenceImagesForFileViaPollo(
+                jsonPathInGenerated,
+                async (imagePath) => {
+                  await sendGeneratedImage(
+                    job.chatId,
+                    imagePath,
+                    `🖼️ ${path.parse(imagePath).name}`,
+                    job.promptMessageId,
+                  );
+                },
+                async (id, errorMessage) => {
+                  console.error(
+                    `[queue] processChatAIQueue(${jobId}): [test-prompt] gen ảnh "${id}" lỗi:`,
+                    errorMessage,
+                  );
+                },
+              );
+              if (imagesResult.failed > 0) {
+                throw new Error(
+                  `Gen ảnh thất bại cho ${imagesResult.failed} entry: ${imagesResult.failedEntries.map((e) => e.id).join(", ")}`,
+                );
+              }
+
+              console.log(
+                `[queue] processChatAIQueue(${jobId}): [test-prompt] bắt đầu gen video (ComfyUI)...`,
+              );
+              const videosResult = await generateVideosForFileComfyUI(
+                jsonPathInGenerated,
+                async (videoPath) => {
+                  await sendGeneratedVideo(
+                    job.chatId,
+                    videoPath,
+                    `🎬 ${path.parse(videoPath).name}`,
+                    job.promptMessageId,
+                    path.basename(videoPath),
+                  );
+                },
+                async (id, errorMessage) => {
+                  console.error(
+                    `[queue] processChatAIQueue(${jobId}): [test-prompt] gen video "${id}" lỗi:`,
+                    errorMessage,
+                  );
+                },
+              );
+              if (videosResult.failed > 0) {
+                throw new Error(
+                  `Gen video thất bại cho ${videosResult.failed} entry: ${videosResult.failedEntries.map((e) => e.id).join(", ")}`,
+                );
+              }
+
+              const jsonBaseName = path.basename(jsonPathInGenerated, ".json");
+              const finalVideoPath = path.join(
+                outputDir,
+                `${jsonBaseName}_final.mp4`,
+              );
+              console.log(
+                `[queue] processChatAIQueue(${jobId}): [test-prompt] ghép video theo timeline...`,
+              );
+              const { videoCount } = await mergeVideosForFile(
+                jsonPathInGenerated,
+                finalVideoPath,
+              );
+              console.log(
+                `[queue] processChatAIQueue(${jobId}): [test-prompt] đã ghép ${videoCount} video.`,
+              );
+
+              await sendGeneratedVideo(
+                job.chatId,
+                finalVideoPath,
+                "🎬 Video CUỐI CÙNG (ghép từ toàn bộ clip AI tạo, theo đúng thứ tự timeline)",
+                job.promptMessageId,
+                `${jsonBaseName}_final.mp4`,
+              );
+
+              console.log(
+                `[queue] processChatAIQueue(${jobId}): [test-prompt] so sánh video gốc với video cuối cùng (ChatGPT)...`,
+              );
+              const verdict = await compareOriginalWithFinalVideo(
+                job.videoPath,
+                finalVideoPath,
+                jobId,
+              );
+              await sendTextMaybeSplit(
+                job.chatId,
+                `📋 Kết quả so sánh video gốc với video mới tạo (GPT):\n\n${verdict}`,
+                job.promptMessageId,
+              );
+            } catch (err) {
+              console.error(
+                `[queue] processChatAIQueue(${jobId}): [test-prompt] lỗi:`,
+                err,
+              );
+              await telegram
+                .sendMessage(
+                  job.chatId,
+                  `⚠️ Test prompt thất bại: ${err instanceof Error ? err.message : String(err)}`,
+                  {
+                    reply_parameters: { message_id: job.promptMessageId },
+                    ...promptMenu,
+                  },
+                )
+                .catch(() => {});
+            }
           }
           await deleteStatusMessage(job);
         } else {
@@ -3470,6 +3664,32 @@ async function splitFileIntoParts(
     await fd.close();
   }
   return partPaths;
+}
+
+// Dưới hạn thật 4096 ký tự/tin nhắn của Telegram — chừa biên an toàn (markdown
+// entities, khoảng trắng thêm vào không tính đúng 1 ký tự = 1 byte UTF-16).
+const TELEGRAM_MAX_MESSAGE_CHARS = 4000;
+
+/**
+ * Gửi 1 đoạn văn bản dài (vd báo cáo đối chiếu của verifyReferenceVideoJson)
+ * qua sendMessage — nếu vượt TELEGRAM_MAX_MESSAGE_CHARS, chia thành nhiều tin
+ * nhắn liên tiếp thay vì để Telegram tự trả lỗi "message is too long". Chỉ
+ * đính kèm promptMenu ở tin nhắn CUỐI để không lặp lại bàn phím vô ích ở mỗi
+ * phần.
+ */
+async function sendTextMaybeSplit(
+  chatId: number,
+  text: string,
+  replyToMessageId: number,
+): Promise<void> {
+  for (let i = 0; i < text.length; i += TELEGRAM_MAX_MESSAGE_CHARS) {
+    const chunk = text.slice(i, i + TELEGRAM_MAX_MESSAGE_CHARS);
+    const isLastChunk = i + TELEGRAM_MAX_MESSAGE_CHARS >= text.length;
+    await telegram!.sendMessage(chatId, chunk, {
+      reply_parameters: { message_id: replyToMessageId },
+      ...(isLastChunk ? promptMenu : {}),
+    });
+  }
 }
 
 /**

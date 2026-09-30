@@ -2613,6 +2613,107 @@ export async function verifyVideo(
   }
 }
 
+/**
+ * Dùng cho "Test prompt tham chiếu video" (TEST_VIDEO_REFERENCE_BUTTON_LABEL,
+ * xem ScriptReferenceVideoJob.verifyPromptTest trong queue.ts) — SAU KHI
+ * toàn bộ pipeline (Qwen tạo JSON → gen ảnh CHARACTER/LOCATION/PROP/OBJECT →
+ * gen từng đoạn VIDEO → ghép lại theo timeline bằng concatVideos trong
+ * videoConcat.ts) đã ra được 1 video CUỐI CÙNG, gọi hàm này để nhờ ChatGPT
+ * (GPT thật, KHÁC Qwen đã dùng ở bước tạo JSON — theo yêu cầu người dùng:
+ * dùng model khác để đánh giá, tránh thiên vị) so sánh video GỐC với video
+ * MỚI vừa tái tạo, đánh giá pipeline có tái tạo đúng video gốc hay không.
+ *
+ * KHÁC verifyVideo (kiểm tra 1 CLIP đơn lẻ đúng với CHÍNH prompt/ref đã dùng
+ * để tạo ra nó, phục vụ QA nội bộ giữa các lượt gen) — ở đây so sánh 2 VIDEO
+ * HOÀN CHỈNH với nhau (video gốc user upload vs. video cuối cùng ghép từ
+ * pipeline), không cần prompt/ref gốc. Trả về text báo cáo tự do (giống
+ * verifyReferenceVideoJson bên qwenAI.ts — dùng để đối chiếu JSON với video,
+ * còn hàm này đối chiếu VIDEO với VIDEO), không phải JSON có cấu trúc như
+ * verifyVideo.
+ */
+export async function compareOriginalWithFinalVideo(
+  originalVideoPath: string,
+  finalVideoPath: string,
+  jobId: string,
+): Promise<string> {
+  const context = await getChatAIBrowserContext();
+  const page = await context.newPage();
+  try {
+    await gotoChatAIWithRetry(page, config.chatAIBaseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await dismissCloudflareChallengeIfPresent(page);
+
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+      .then(() => true)
+      .catch(() => false);
+    if (signedOut) {
+      throw new ChatAIError(
+        "Chưa đăng nhập ChatAI hoặc session đã hết hạn. Chạy: npm run login-chatai",
+      );
+    }
+
+    await page
+      .waitForLoadState("networkidle", { timeout: 30_000 })
+      .catch(() => {});
+
+    await selectChatAIModeFromConfig(page, jobId);
+
+    // Upload video GỐC trước, rồi video MỚI — thứ tự khớp đúng với thứ tự
+    // nêu trong message bên dưới ("ĐÚNG THEO THỨ TỰ đính kèm").
+    await uploadAttachment(page, originalVideoPath);
+    await uploadAttachment(page, finalVideoPath);
+
+    const message = `Bạn nhận được 2 video, ĐÚNG THEO THỨ TỰ đính kèm:
+1. Video GỐC (video tham chiếu thật do người dùng cung cấp).
+2. Video MỚI (được tái tạo lại bằng pipeline AI: video gốc → phân tích thành kịch bản JSON → tạo ảnh nhân vật/bối cảnh/đạo cụ → tạo từng đoạn video ngắn → ghép lại thành 1 video hoàn chỉnh theo đúng thứ tự timeline).
+
+Nhiệm vụ: xem/nghe kỹ CẢ 2 video, so sánh video MỚI với video GỐC, rồi báo cáo:
+1. Video MỚI có tái tạo ĐÚNG video GỐC không (nhân vật, bối cảnh, đạo cụ/vật thể, hành động, lời thoại, cảm xúc, trình tự sự kiện/timeline, tổng thời lượng)?
+2. Liệt kê CỤ THỂ từng điểm khác biệt/sai lệch nếu có — mô tả rõ khác ở đoạn nào (theo thời điểm/thứ tự xuất hiện) so với video gốc. Nếu tái tạo khớp hoàn toàn, nói rõ "Khớp hoàn toàn, không phát hiện sai lệch."
+3. Đánh giá tổng thể mức độ giống nhau (ước lượng theo %) và kết luận pipeline hiện tại (phân tích JSON / tạo ảnh / tạo video / ghép video) có đủ tốt hay cần cải thiện ở bước nào.
+4. Không sửa gì, không xuất file — CHỈ trả lời bằng 1 đoạn văn bản báo cáo, có thể dùng gạch đầu dòng cho từng điểm khác biệt.`;
+
+    await sendMessage(page, message, jobId);
+
+    const messages = assistantMessageLocator(page);
+    // Chờ tới khi có ÍT NHẤT 1 tin nhắn trả lời — cùng cơ chế poll đã dùng
+    // trong verifyVideo/readLatestAssistantMessage (trang có thể kẹt loading
+    // 1 lúc SAU KHI sendMessage đã xác nhận xong).
+    let count = await messages.count();
+    const pollDeadline = Date.now() + 30_000;
+    while (count === 0 && Date.now() < pollDeadline) {
+      await page.waitForTimeout(1000);
+      count = await messages.count();
+    }
+    if (count === 0) {
+      throw new ChatAIError(
+        "Không tìm thấy câu trả lời nào từ ChatAI trên trang",
+      );
+    }
+
+    const latest = messages.last();
+    await captureSnapshot(page, `${jobId}_compare-final`, "result");
+
+    const text = (await latest.innerText().catch(() => "")).trim();
+    if (!text) {
+      throw new ChatAIError(
+        `ChatAI không trả về nội dung so sánh nào (job ${jobId}).`,
+      );
+    }
+
+    return text;
+  } catch (err) {
+    await captureErrorSnapshot(page, jobId, err);
+    throw err instanceof ChatAIError
+      ? err
+      : new ChatAIError(err instanceof Error ? err.message : String(err));
+  } finally {
+    await page.close();
+  }
+}
+
 /** Bỏ dấu ngoặc kép/backtick bọc ngoài và khối ```code fence``` (nếu ChatAI lỡ trả lời kèm định dạng) khỏi prompt đã viết lại. */
 function cleanRevisedPrompt(text: string): string {
   return text

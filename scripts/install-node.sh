@@ -21,10 +21,10 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
 echo "[install-node] Cài các gói hệ thống cần thiết (curl, build-essential, xvfb...)..."
 if command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get update -y
+   apt-get update -y
   # xvfb: cung cấp lệnh xvfb-run (dùng cho "npm run start:xvfb" — chạy Chrome
   # headful trên display ảo, không cần GPU/màn hình thật).
-  sudo apt-get install -y curl ca-certificates build-essential xvfb
+   apt-get install -y curl ca-certificates build-essential xvfb ffmpeg
 else
   echo "[install-node] CẢNH BÁO: không tìm thấy apt-get — bỏ qua bước cài gói hệ thống, giả định đã có curl/build tools/xvfb." >&2
 fi
@@ -65,13 +65,13 @@ if command -v google-chrome-stable >/dev/null 2>&1 || command -v google-chrome >
   echo "[install-node] Google Chrome đã có sẵn — bỏ qua bước cài mới."
 elif command -v apt-get >/dev/null 2>&1; then
   echo "[install-node] Cài Google Chrome (repo chính thức của Google)..."
-  sudo install -d -m 0755 /etc/apt/keyrings
+   install -d -m 0755 /etc/apt/keyrings
   curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
-    | sudo gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+    |  gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
   echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
-    | sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
-  sudo apt-get update -y
-  sudo apt-get install -y google-chrome-stable
+    |  tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
+   apt-get update -y
+   apt-get install -y google-chrome-stable
 else
   echo "[install-node] CẢNH BÁO: không tìm thấy apt-get — bỏ qua bước cài Google Chrome, giả định đã có sẵn." >&2
 fi

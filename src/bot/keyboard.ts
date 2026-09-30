@@ -32,6 +32,25 @@ export const SCRIPT_REFERENCE_BUTTON_LABEL = "Tham chiếu kịch bản";
  */
 export const VIDEO_REFERENCE_BUTTON_LABEL = "Tham chiếu video";
 /**
+ * GẦN GIỐNG VIDEO_REFERENCE_BUTTON_LABEL (cùng askQwenAboutReferenceVideo,
+ * cùng job "scriptReferenceVideo"/processChatAIQueue, skipImageConfirmation=
+ * true) nhưng KHÁC 2 điểm: (1) master prompt dùng config.promptVideoReferenceTest
+ * (file prompt.txt ở gốc repo, schema CHARACTER/LOCATION/PROP/OBJECT + VIDEO,
+ * xem prompt.txt) thay vì config.promptVideoReference; (2) job đặt thêm
+ * verifyPromptTest=true — SAU KHI có JSON, bot tự upload LẠI CHÍNH video gốc
+ * + JSON vừa tạo lên Qwen lần nữa để ĐỐI CHIẾU xem JSON có mô tả đúng video
+ * thật không (xem verifyReferenceVideoJson trong qwenAI.ts), rồi gửi báo cáo
+ * đối chiếu đó cho user — dùng để TEST độ chính xác của prompt.txt.
+ */
+export const TEST_VIDEO_REFERENCE_BUTTON_LABEL = "Test prompt tham chiếu video";
+/**
+ * GIỐNG UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL HỆT nhưng ghi đè
+ * config.promptVideoReferenceTest (prompt.txt, dùng cho
+ * TEST_VIDEO_REFERENCE_BUTTON_LABEL) thay vì prompt_video_reference.txt.
+ */
+export const UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL =
+  "Cập nhật prompt test tham chiếu video";
+/**
  * User gõ tên (1 phần của tên) file JSON storyboard đã có sẵn trong
  * storage/chatai-results — bot tìm TẤT CẢ file JSON có tên CHỨA chuỗi đó
  * (có thể khớp nhiều file = nhiều tập phim), gửi ghép nội dung các file đó +
@@ -79,12 +98,29 @@ export const CONTINUE_VIDEO_BUTTON_LABEL = "Tiếp tục tạo video";
  * thay AIVideo).
  */
 export const CONTINUE_SCENE_FRAME_BUTTON_LABEL = "Tiếp tục tạo frame";
+/**
+ * User gõ tên (1 phần của tên) file JSON storyboard ĐÃ CÓ SẴN trong
+ * storage/generated (đã gen xong toàn bộ entry VIDEO — tìm qua
+ * resolveExistingGeneratedJsonPath, CÙNG cách tra file với
+ * CONTINUE_VIDEO_BUTTON_LABEL) — bot đọc JSON, lấy các entry VIDEO, GHÉP lại
+ * theo ĐÚNG thứ tự timeline (shot rồi clip, xem mergeVideosForFile trong
+ * storyboardPipeline.ts — dùng chung logic với bước ghép cuối của
+ * TEST_VIDEO_REFERENCE_BUTTON_LABEL), lưu video kết quả CÙNG TÊN với file
+ * JSON (chỉ khác đuôi .mp4) vào ĐÚNG folder generated/ chứa JSON đó — sau đó
+ * publish THÊM 1 bản ra QWEN_PUBLIC_BASE_URL (qwenFileServer.ts, xem
+ * handlers.ts) để xem trực tiếp qua link, gửi LINK đó cho user (KHÔNG gửi
+ * nguyên file qua Telegram). KHÔNG tự gen thiếu — entry VIDEO nào chưa có
+ * file .mp4 trên đĩa thì báo lỗi rõ ràng, không ghép thiếu clip.
+ */
+export const MERGE_VIDEO_BUTTON_LABEL = "Nối video";
 
 export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
   [CONTINUE_SCENE_FRAME_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
   [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
+  // [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
+  [MERGE_VIDEO_BUTTON_LABEL],
   [STOP_ALL_BUTTON_LABEL],
   // [IMAGE_BUTTON_LABEL, PROMPT_BUTTON_LABEL],
   // [VIDEO_REF_BUTTON_LABEL, CHARACTER_REF_BUTTON_LABEL],

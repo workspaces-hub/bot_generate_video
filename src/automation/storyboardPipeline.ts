@@ -18,6 +18,7 @@ import {
   generateVideoComfyMiniMaxH3TextToVideo,
   MAX_MINIMAX_H3_REFERENCE_IMAGES,
 } from "./comfyui";
+import { concatVideos } from "./videoConcat";
 
 /**
  * Logic dùng CHUNG cho cả 2 nơi gọi: script CLI (scripts/generate-reference-images.ts,
@@ -456,6 +457,73 @@ export function generatedDirFor(inputPath: string): string {
 }
 
 /**
+ * Ghép TẤT CẢ entry VIDEO của 1 file JSON storyboard ĐÃ GEN XONG thành 1
+ * video duy nhất, theo ĐÚNG thứ tự timeline (shot rồi clip) — dùng chung cho
+ * nút "Nối video" (MERGE_VIDEO_BUTTON_LABEL, xem handlers.ts) VÀ bước ghép
+ * cuối của "Test prompt tham chiếu video" (processChatAIQueue trong
+ * queue.ts, nhánh job.verifyPromptTest).
+ *
+ * Thứ tự lấy theo (entry.shot, entry.clip) — sort lại tường minh thay vì tin
+ * thứ tự có sẵn trong mảng JSON, phòng trường hợp model tạo JSON lỡ xuất sai
+ * thứ tự (xem schema prompt.txt/prompt_video_reference.txt: quy định VIDEO ở
+ * cuối mảng theo đúng thứ tự thời gian, nhưng không có gì đảm bảo TUYỆT ĐỐI).
+ *
+ * KHÔNG tự gen thiếu — nếu 1 entry VIDEO chưa có file .mp4 tương ứng trên
+ * đĩa (chưa từng gen, hoặc gen lỗi chưa retry), throw NGAY với danh sách id
+ * còn thiếu, không cố ghép thiếu clip (kết quả sẽ sai timeline, vô nghĩa).
+ */
+export async function mergeVideosForFile(
+  jsonPath: string,
+  destPath: string,
+): Promise<{ outputPath: string; videoCount: number }> {
+  const raw = await fs.promises.readFile(jsonPath, "utf-8");
+  const entries: StoryboardEntry[] = JSON.parse(raw);
+  if (!Array.isArray(entries)) {
+    throw new Error("File input phải là 1 JSON array");
+  }
+
+  const videoEntries = entries
+    .filter(
+      (e): e is StoryboardEntry & { id: string } =>
+        e.type === "VIDEO" && Boolean(e.id),
+    )
+    .sort((a, b) => {
+      const shotA = typeof a.shot === "number" ? a.shot : 0;
+      const shotB = typeof b.shot === "number" ? b.shot : 0;
+      if (shotA !== shotB) return shotA - shotB;
+      const clipA = typeof a.clip === "number" ? a.clip : 0;
+      const clipB = typeof b.clip === "number" ? b.clip : 0;
+      return clipA - clipB;
+    });
+
+  if (videoEntries.length === 0) {
+    throw new Error(`File "${jsonPath}" không có entry VIDEO nào để ghép.`);
+  }
+
+  const outputDir = generatedDirFor(jsonPath);
+  const videoPaths = videoEntries.map((e) =>
+    path.join(outputDir, `${sanitizeId(e.id)}.mp4`),
+  );
+
+  const missingIds: string[] = [];
+  for (let i = 0; i < videoPaths.length; i++) {
+    const exists = await fs.promises
+      .access(videoPaths[i])
+      .then(() => true)
+      .catch(() => false);
+    if (!exists) missingIds.push(videoEntries[i].id);
+  }
+  if (missingIds.length > 0) {
+    throw new Error(
+      `Thiếu file video cho ${missingIds.length} entry (chưa gen hoặc gen lỗi): ${missingIds.join(", ")}`,
+    );
+  }
+
+  await concatVideos(videoPaths, destPath);
+  return { outputPath: destPath, videoCount: videoPaths.length };
+}
+
+/**
  * Thư mục ẢNH — theo yêu cầu người dùng: KHÁC thư mục VIDEO
  * (generatedDirFor) khi nhiều file JSON (nhiều tập) dùng CHUNG 1 folder theo
  * tên phim. Ảnh (CHARACTER/LOCATION/PROP/OBJECT/SCENE_SETTING) phải lưu/tra
@@ -610,6 +678,46 @@ export async function ensureGeneratedFolderForName(
   await archiveExistingGeneratedFiles(outputDir);
   await fs.promises.mkdir(outputDir, { recursive: true });
   return outputDir;
+}
+
+/**
+ * Tính số lần "remake" TIẾP THEO cho 1 tên phim gốc — dùng cho
+ * GENERATE_SCRIPT_BUTTON_LABEL (xem handleGenerateScriptRequest trong
+ * handlers.ts, GenerateScriptJob.remakeBaseName trong queue.ts): user tham
+ * chiếu "phim_a" lần đầu → folder/file "phim_a_remake_1", lần 2 →
+ * "phim_a_remake_2"...
+ *
+ * Quét storage/generated/ tìm TẤT CẢ folder tên ĐÚNG "<baseName>_remake_<số
+ * nguyên>" (baseName đã qua sanitizeId — PHẢI khớp CHÍNH XÁC cách
+ * ensureGeneratedFolderForName đặt tên folder thật trên đĩa, xem hàm đó),
+ * lấy số LỚN NHẤT đã có rồi +1. Không có folder nào khớp thì trả về 1 (lần
+ * đầu tiên remake tên phim này).
+ *
+ * So sánh bằng string.startsWith thay vì dựng RegExp động từ baseName — an
+ * toàn hơn hẳn khi baseName chứa ký tự có ý nghĩa đặc biệt trong regex (dù
+ * đã qua sanitizeId nên thực ra chỉ còn [a-zA-Z0-9_-], không có ký tự regex
+ * đặc biệt nào — vẫn tránh dựng RegExp động cho chắc).
+ */
+export async function resolveNextRemakeVersion(
+  baseName: string,
+): Promise<number> {
+  const sanitizedBaseName = sanitizeId(baseName);
+  const generatedRoot = path.resolve("./storage/generated");
+  const entries = await fs.promises
+    .readdir(generatedRoot, { withFileTypes: true })
+    .catch(() => [] as import("node:fs").Dirent[]);
+
+  const prefix = `${sanitizedBaseName}_remake_`;
+  let maxVersion = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.startsWith(prefix)) continue;
+    const rest = entry.name.slice(prefix.length);
+    if (!/^\d+$/.test(rest)) continue;
+    const version = Number(rest);
+    if (version > maxVersion) maxVersion = version;
+  }
+  return maxVersion + 1;
 }
 
 export interface FailedEntry {
