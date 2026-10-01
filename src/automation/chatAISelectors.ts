@@ -281,7 +281,9 @@ export const workModeResourceCardDownloadButtonLocator = (
   message: Locator,
 ): Locator =>
   workModeResourceCardRowLocator(message).locator(
-    'button[aria-label="Download file"]',
+    // "Tải xuống tệp" — cùng nút khi giao diện ChatGPT ở tiếng Việt (DOM thật
+    // xác nhận, job 46b0d899-f664-4383-9b87-17904322ce0c).
+    'button[aria-label="Download file"], button[aria-label="Tải xuống tệp"]',
   );
 
 /**

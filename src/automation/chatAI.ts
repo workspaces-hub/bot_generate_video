@@ -1056,11 +1056,46 @@ async function sendMessage(
  * gốc này bị xoá luôn — không cần tiền tố jobId để tránh trùng tên vì mỗi
  * file chỉ "sống" tạm trong khoảng ngắn giữa lúc tải về và lúc copy xong.
  */
+/**
+ * Danh sách nhiều file đính kèm có thể bị THU GỌN — DOM thật xác nhận (job
+ * 46b0d899-f664-4383-9b87-17904322ce0c, "Tạo kịch bản mới" 4 tập): chỉ hiện 3
+ * file, cuối danh sách có nút `<button aria-controls="..."
+ * aria-expanded="false">Thêm 1 tệp</button>` ("Show 1 more file" bản tiếng
+ * Anh). File bị ẩn CHƯA được render vào DOM nên mọi locator đều không thấy
+ * — phải bấm mở rộng trước khi đếm/tải. Lặp vài lần phòng trường hợp danh
+ * sách mở rộng theo từng nấc.
+ */
+async function expandCollapsedFileLists(message: Locator): Promise<void> {
+  const collapsedToggle = message
+    .locator('button[aria-controls][aria-expanded="false"]')
+    .filter({ hasText: /(thêm|show)\s+\d+|\d+\s+(more|tệp|file)/i });
+  for (let round = 0; round < 5; round++) {
+    const count = await collapsedToggle.count().catch(() => 0);
+    if (count === 0) return;
+    console.log(
+      `[chatAI] downloadAttachedFiles: mở rộng ${count} danh sách file đang thu gọn ("Thêm N tệp").`,
+    );
+    for (let i = 0; i < count; i++) {
+      await collapsedToggle
+        .first()
+        .click({ timeout: 5000 })
+        .catch((err) => {
+          console.warn(
+            "[chatAI] Bấm mở rộng danh sách file lỗi (bỏ qua):",
+            err instanceof Error ? err.message : err,
+          );
+        });
+    }
+    await message.page().waitForTimeout(800);
+  }
+}
+
 async function downloadAttachedFiles(
   page: Page,
   message: Locator,
   promptFileName?: string,
 ): Promise<string[]> {
+  await expandCollapsedFileLists(message);
   const downloadLinks = downloadFileLinkLocator(message);
   const fileCards = fileCardLocator(message);
   const inlineLinks = inlineFileLinkLocator(message);
