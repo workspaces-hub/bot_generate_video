@@ -130,11 +130,21 @@ export const stopGeneratingButtonCandidates = (page: Page): Array<() => Locator>
  * dạng "tabular-nums"/"text-tertiary" là tên tiện ích chung chung, dễ trùng
  * phần tử khác — text nội dung ổn định/đặc trưng hơn) làm candidate thứ 2,
  * OR với locator cũ — giữ nguyên locator cũ phòng khi UI cũ còn tồn tại.
+ *
+ * SỬA THÊM (xác nhận qua debug thật, job 6650af2a-5b99-46c0-bfe4-d0517f3ffcdf):
+ * phát hiện 1 kiểu hiển thị tool-call NGẮN KHÁC, không có "Working for Xs" —
+ * chỉ 1 dòng text có hiệu ứng shimmer động, DOM thật: `<span
+ * class="...cadencedShimmer-uMTG1d...">Inspecting Existing Video JSON
+ * Contents<span class="cadencedShimmerSweep-...">...</span></span>` (hậu tố
+ * hash trong class riêng từng bản build, KHÔNG dùng để so khớp — chỉ phần
+ * tiền tố "cadencedShimmer" ổn định). Thêm candidate thứ 3 dò theo tiền tố
+ * class này (CSS attribute-selector chứa chuỗi con, không cần đúng hash).
  */
 export const workingIndicatorLocator = (page: Page): Locator =>
   page
     .locator("[data-streaming-response-status]")
-    .or(page.getByText(/^Working for /i));
+    .or(page.getByText(/^Working for /i))
+    .or(page.locator('[class*="cadencedShimmer"]'));
 
 /**
  * Khối tin nhắn trả lời của ChatAI (mỗi lượt hỏi/đáp 1 khối riêng, lấy khối
