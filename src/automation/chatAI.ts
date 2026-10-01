@@ -1410,6 +1410,14 @@ async function downloadAttachedFiles(
 function isCompletionText(text: string): boolean {
   if (/đã hoàn thành/i.test(text)) return true;
   if (/đã hoàn thiện bản json/i.test(text)) return true;
+  // Xác nhận qua debug thật (job 005ffccc-5530-4273-9467-cf8e0bb4e501): 1 số
+  // master prompt (vd biến thể "REBUILD 1/SOURCE-FAITHFUL") tự định nghĩa quy
+  // ước báo trạng thái RIÊNG bằng tiếng Anh — "một câu nêu complete/partial"
+  // — thay vì cụm "đã hoàn thành" cố định của hệ thống. ChatAI trả lời đúng
+  // bằng dạng "Complete: ..."/"**Complete**: ..." (đối xứng với "**Partial**:
+  // ..." đã xác nhận thật ở isPartialAnalysisText) — nhận thêm dạng này.
+  // (?<!in) loại trừ "incomplete:" (phủ định, KHÔNG phải báo đã xong).
+  if (/(?<!in)\*{0,2}complete\*{0,2}\s*:/i.test(text)) return true;
   return /production-ready/i.test(text) && /đầy đủ/i.test(text);
 }
 
@@ -1489,7 +1497,12 @@ function isFileAccessErrorText(text: string): boolean {
  * file partial này làm kết quả, không được kết thúc job với 0 file.
  */
 function isPartialAnalysisText(text: string): boolean {
-  return /analysis_status["'\s:=]*partial|kết quả phân tích:?\s*partial|trạng thái partial|phân tích:?\s*partial/i.test(
+  // Thêm dạng "Partial: ..."/"**Partial**: ..." — xác nhận qua debug thật
+  // (job 005ffccc-5530-4273-9467-cf8e0bb4e501, screenshot no-file-turn-1):
+  // ChatAI trả lời đúng NGUYÊN VĂN "**Partial**: phần hình ảnh đã được phân
+  // tích..." theo quy ước master prompt "REBUILD 1/SOURCE-FAITHFUL" ("một câu
+  // nêu complete/partial") — không khớp các cụm tiếng Việt cố định bên dưới.
+  return /analysis_status["'\s:=]*partial|kết quả phân tích:?\s*partial|trạng thái partial|phân tích:?\s*partial|\*{0,2}partial\*{0,2}\s*:/i.test(
     text,
   );
 }
@@ -2229,28 +2242,22 @@ export async function askChatAI(
         }
       }
 
-      // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
-      // có) chỉ là bản nháp/trung gian (xem docstring askChatAI), KHÔNG phải
-      // kết quả cuối — xoá luôn khỏi đĩa để tránh rác lại config.chatAIResultsDir
-      // và tránh nhầm với file thật khi đọc lại sau này. KHÔNG được gán
-      // downloadedFiles = result.downloadedFiles ở đây (đã xảy ra lỗi thật,
-      // job adcd2d90-a272-4cbe-9e80-e2a8b830eb5a: gán xong RỒI XOÁ NGAY file
-      // đó khỏi đĩa, khiến hàm trả về path của 1 file ĐÃ BỊ XOÁ nếu vòng lặp
-      // hết lượt ngay ở nhánh này — ENOENT lúc processChatAIQueue gửi file) —
-      // biến downloadedFiles (kết quả TỐT NHẤT hiện có) chỉ được cập nhật ở
-      // nhánh isComplete/partialAnalysis phía trên, giữ nguyên giá trị cũ ở
-      // đây. QUAN TRỌNG: tên file đặt CỐ ĐỊNH theo promptFileName (không đổi
-      // giữa các lượt, xem docstring replaceBestResultFiles) — nếu 1 lượt
-      // TRƯỚC đó đã giữ lại 1 file "tốt nhất" (isComplete/partialAnalysis) và
-      // lượt NÀY (dù chỉ là nháp/chưa hoàn thiện) ghi đè lên ĐÚNG path đó,
-      // xoá mù filePath sẽ xoá NHẦM file tốt đã giữ — chỉ xoá path nào KHÔNG
-      // trùng với downloadedFiles hiện có.
-      const keptPaths = new Set(downloadedFiles.map((p) => path.resolve(p)));
-      for (const filePath of result.downloadedFiles) {
-        if (keptPaths.has(path.resolve(filePath))) continue;
-        await fs.promises.unlink(filePath).catch((err) => {
-          console.warn(`[chatAI] Không xoá được file nháp "${filePath}":`, err);
-        });
+      // SỬA (theo yêu cầu người dùng): Chưa hoàn thiện (isComplete = false,
+      // không phải partialAnalysis) — TRƯỚC ĐÂY coi file lượt này là bản
+      // nháp/trung gian rồi XOÁ LUÔN, chấp nhận job có thể trả về TAY KHÔNG
+      // nếu hết MAX_TURNS_WAITING_FOR_FILE mà ChatAI chưa từng báo đúng cụm
+      // hoàn thành (xác nhận qua lỗi thật, job 005ffccc-5530-4273-9467-cf8e0bb4e501:
+      // ChatAI giao file HỢP LỆ nhiều lượt liên tiếp nhưng không dùng đúng
+      // cụm "đã hoàn thành"/"complete:" hệ thống dò — mất trắng file dù model
+      // đã làm đúng). Giờ GIỮ LẠI file mới nhất (nếu lượt này có đính kèm) làm
+      // kết quả TỐT NHẤT hiện có — same cách isComplete/partialAnalysis đang
+      // làm — để nếu hết lượt mà vẫn chưa nhận diện được tín hiệu hoàn thành,
+      // job vẫn trả về được file GẦN NHẤT tải được thay vì rỗng.
+      if (result.downloadedFiles.length > 0) {
+        downloadedFiles = await replaceBestResultFiles(
+          downloadedFiles,
+          result.downloadedFiles,
+        );
       }
 
       // Chưa có file — chụp lại trạng thái hiện tại TRƯỚC KHI gửi "yes" để
