@@ -344,7 +344,7 @@ async function waitForComposerTilesToSettle(page: Page): Promise<void> {
 }
 
 /** Chặn lặp vô hạn nếu vì lý do gì đó ChatAI không bao giờ đính kèm file. */
-const MAX_TURNS_WAITING_FOR_FILE = 5;
+const MAX_TURNS_WAITING_FOR_FILE = 3;
 
 /**
  * SỬA (xác nhận qua debug thật, before-send.png job test-chatai-video-ref-
@@ -811,7 +811,7 @@ async function sendMessage(
   // timeout dù ChatAI xong từ lâu. Vì vậy: nếu tin nhắn trả lời MỚI NHẤT đã có
   // file đính kèm hiện ra (fileAttachmentLocator), coi đó là dấu hiệu xong
   // THAY THẾ cho việc chờ nút Stop biến mất.
-  const stableRequiredMs = 30000;
+  const stableRequiredMs = 20000;
   // 10s thay vì 5s — giảm tần suất đánh thức renderer (query DOM mỗi lần)
   // trong lúc queue ảnh/video khác đang tranh CPU. Vòng lặp này KHÔNG giới
   // hạn thời gian tổng (chờ tới khi ChatAI thật sự trả lời xong), nên với
