@@ -344,7 +344,7 @@ async function waitForComposerTilesToSettle(page: Page): Promise<void> {
 }
 
 /** Chặn lặp vô hạn nếu vì lý do gì đó ChatAI không bao giờ đính kèm file. */
-const MAX_TURNS_WAITING_FOR_FILE = 4;
+const MAX_TURNS_WAITING_FOR_FILE = 10;
 
 /**
  * SỬA (xác nhận qua debug thật, before-send.png job test-chatai-video-ref-
