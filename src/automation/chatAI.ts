@@ -917,15 +917,26 @@ async function sendMessage(
       // nhắn MỚI NHẤT đã có file đính kèm (fileAttachmentLocator) là dấu
       // hiệu xong ĐÁNG TIN CẬY hơn, dùng THAY THẾ việc chờ Stop biến mất
       // trong đúng trường hợp này.
+      // SỬA (xác nhận qua debug thật, job dcc32511-9669-4a21-bd1d-9961ba4748ec):
+      // hasFileReady bên dưới chỉ kiểm tra "có file đính kèm NÀO ĐÓ trong tin
+      // nhắn cuối" — KHÔNG phân biệt được file đó là của lượt NGAY TRƯỚC (đã
+      // xong thật, Stop kẹt lại không biến mất — đúng trường hợp job 5010d1a3
+      // dự định xử lý) hay chỉ là file CŨ còn sót lại từ vài lượt trước trong
+      // khi ChatAI ĐANG thực sự chạy 1 tool-call MỚI (shimmer "Inspecting..."
+      // xem workingIndicatorLocator). Debug thật xác nhận: shimmer vẫn hiện
+      // SONG SONG với file cũ ở TẤT CẢ các lượt bị báo nhầm "xong" — thêm điều
+      // kiện KHÔNG có workingIndicatorVisible (tool-call mới) mới cho phép
+      // hasFileReady ghi đè — nếu còn shimmer/"Working for" thật, luôn ưu
+      // tiên chờ tiếp, dù đã có file cũ.
       const latestMessages = assistantMessageLocator(page);
       const hasFileReady =
         (await latestMessages.count()) > 0 &&
         (await fileAttachmentLocator(latestMessages.last())
           .count()
           .catch(() => 0)) > 0;
-      if (hasFileReady) {
+      if (hasFileReady && !workingIndicatorVisible) {
         console.log(
-          "[chatAI] sendMessage: nút Stop vẫn hiện nhưng tin nhắn mới nhất đã có file đính kèm — coi như xong (không chờ Stop biến mất).",
+          "[chatAI] sendMessage: nút Stop vẫn hiện nhưng tin nhắn mới nhất đã có file đính kèm (và KHÔNG có tool-call mới nào đang chạy) — coi như xong (không chờ Stop biến mất).",
         );
         return;
       }
