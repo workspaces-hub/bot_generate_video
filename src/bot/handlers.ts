@@ -43,6 +43,7 @@ import {
   CONTINUE_SCENE_FRAME_BUTTON_LABEL,
   CONTINUE_VIDEO_BUTTON_LABEL,
   GENERATE_SCRIPT_BUTTON_LABEL,
+  GENERATE_SCRIPT_EPISODE_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   MERGE_VIDEO_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
@@ -71,6 +72,7 @@ type PendingMode =
   | "videoReference"
   | "videoReferenceTest"
   | "generateScript"
+  | "generateScriptEpisode"
   | "continueVideo"
   | "continueSceneFrame"
   | "continueImage"
@@ -299,6 +301,7 @@ async function handleScriptReferenceVideoUpload(
 
   const downloadingMessage = await ctx.reply("⏳ Đang tải video từ Telegram...", {
     reply_parameters: { message_id: messageId },
+    ...promptMenu,
   });
 
   void (async () => {
@@ -737,6 +740,7 @@ async function tryRegenerateStoryboardItem(
 
   await ctx.reply(results.join("\n"), {
     reply_parameters: { message_id: promptMessageId },
+    ...promptMenu
   });
   return true;
 }
@@ -823,7 +827,10 @@ async function tryReplaceGeneratedFile(
 
     await ctx.reply(
       `✅ Đã thay thế "${targetFileName}" trong "${jsonBaseName}".`,
-      { reply_parameters: { message_id: promptMessageId } },
+      {  
+        reply_parameters: { message_id: promptMessageId },
+        ...promptMenu
+      },
     );
   } catch (err) {
     console.error("[bot] Thay thế file thất bại:", err);
@@ -1006,6 +1013,7 @@ async function tryHandleReferenceJsonUpload(
 
     await ctx.reply(`✅ Đã lưu kịch bản "${normalizedFileName}".`, {
       reply_parameters: { message_id: promptMessageId },
+      ...promptMenu,
     });
   } catch (err) {
     console.error("[bot] Lưu file json tham chiếu thất bại:", err);
@@ -1073,6 +1081,7 @@ async function submitVideoJob({
     `⏳ Đang tạo video cho prompt:\n"${prompt.split(" ").slice(0, 20).join(" ")}"${startFrameNote}${refImageNote}${characterNote}${omniNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
+      ...promptMenu,
     },
   );
 
@@ -1128,6 +1137,7 @@ async function submitImageJob({
     `⏳ Đang tạo ảnh cho prompt:\n"${prompt.split(" ").slice(0, 20).join(" ")}"${refNote}`,
     {
       reply_parameters: { message_id: promptMessageId },
+      ...promptMenu
     },
   );
 
@@ -1283,7 +1293,10 @@ async function handleGenerateScriptRequest(
   if (matches.length === 0) {
     await ctx.reply(
       `❌ Không tìm thấy file JSON nào có tên chứa "${searchTerm}" trong storage/chatai-results. Không thể tiếp tục.`,
-      { reply_parameters: { message_id: promptMessageId } },
+      { 
+        reply_parameters: { message_id: promptMessageId },
+        ...promptMenu
+      },
     );
     return;
   }
@@ -1300,7 +1313,10 @@ async function handleGenerateScriptRequest(
   if (masterPrompt === null) {
     await ctx.reply(
       "❌ Không đọc được master prompt cho tính năng này, đã huỷ.",
-      { reply_parameters: { message_id: promptMessageId } },
+      { 
+        reply_parameters: { message_id: promptMessageId },
+        ...promptMenu
+      },
     );
     return;
   }
@@ -1336,7 +1352,10 @@ async function handleGenerateScriptRequest(
     if (content === null) {
       await ctx.reply(
         `❌ Không đọc được file "${fileName}", đã huỷ.`,
-        { reply_parameters: { message_id: promptMessageId } },
+        { 
+          reply_parameters: { message_id: promptMessageId },
+          ...promptMenu
+        },
       );
       return;
     }
@@ -1368,6 +1387,240 @@ async function handleGenerateScriptRequest(
     referenceFileNames: matches,
     promptAttachmentPath: combinedAttachmentPath,
     remakeBaseName,
+  });
+}
+
+/**
+ * Tìm ĐÚNG 1 file JSON trong config.chatAIResultsDir có tên CHỨA searchTerm
+ * (không phân biệt hoa/thường) — dùng cho handleGenerateScriptEpisodeRequest,
+ * nơi mỗi dòng input PHẢI trỏ tới ĐÚNG 1 file (khác handleGenerateScriptRequest
+ * ở trên, nơi 1 chuỗi được phép khớp NHIỀU file = nhiều tập cùng lúc). Trả về
+ * null kèm thông báo lỗi đã gửi sẵn cho user nếu khớp 0 hoặc >1 file (liệt kê
+ * rõ các file khớp để user gõ lại chính xác hơn).
+ */
+async function findSingleGeneratedScriptFile(
+  ctx: Context,
+  searchTerm: string,
+  promptMessageId: number,
+  /** Nhãn mô tả dùng trong thông báo lỗi (vd "TẬP GỐC", "TẬP MỚI TRƯỚC ĐÓ"). */
+  label: string,
+): Promise<string | null> {
+  const allFiles = await fs
+    .readdir(config.chatAIResultsDir)
+    .catch(() => [] as string[]);
+  const matches = allFiles.filter(
+    (f) =>
+      f.toLowerCase().endsWith(".json") &&
+      f.toLowerCase().includes(searchTerm.toLowerCase()),
+  );
+
+  if (matches.length === 0) {
+    await ctx.reply(
+      `❌ Không tìm thấy file JSON nào có tên chứa "${searchTerm}" (${label}) trong storage/chatai-results. Không thể tiếp tục.`,
+      { reply_parameters: { message_id: promptMessageId },
+        ...promptMenu
+      },
+    );
+    return null;
+  }
+  if (matches.length > 1) {
+    await ctx.reply(
+      `❌ "${searchTerm}" (${label}) khớp ${matches.length} file, cần khớp ĐÚNG 1 file: ${matches.join(", ")}. Gõ lại tên cụ thể hơn.`,
+      { reply_parameters: { message_id: promptMessageId },
+        ...promptMenu
+      },
+    );
+    return null;
+  }
+  return matches[0];
+}
+
+/**
+ * Nút "Tạo kịch bản theo từng tập" (GENERATE_SCRIPT_EPISODE_BUTTON_LABEL) —
+ * KHÁC handleGenerateScriptRequest ở trên: sinh ĐÚNG 1 TẬP/lần thay vì cả
+ * phim cùng lúc. User gõ 1-2 dòng:
+ * - Dòng 1 (bắt buộc): tên/1 phần tên file JSON TẬP GỐC — dùng làm khung kỹ
+ *   thuật (số shot/clip, duration, aspectRatio, frameRate).
+ * - Dòng 2 (tuỳ chọn): tên/1 phần tên file JSON TẬP MỚI ngay trước đó (của
+ *   CHÍNH phim mới đang viết, không phải phim gốc) — dùng làm nguồn giữ nhất
+ *   quán nhân vật/bối cảnh/đạo cụ (Asset Ledger) và tiếp nối mạch truyện.
+ *
+ * Xác định remakeBaseName/tapNumber:
+ * - KHÔNG có dòng 2 (tập đầu tiên): dùng resolveNextRemakeVersion (CÙNG cơ
+ *   chế với handleGenerateScriptRequest) để mỗi phim mới tham chiếu CÙNG 1
+ *   tên phim gốc luôn ra 1 folder generated/ MỚI — tapNumber = 1.
+ * - CÓ dòng 2 (tập tiếp nối): rút tên phim + số tập từ CHÍNH tên file dòng 2
+ *   (dạng "<tên_phim>_tapN_full.json", khớp đúng quy ước đặt tên của job
+ *   "generateScript"/"generateScriptEpisode" — xem processChatAIQueue) —
+ *   tapNumber = N + 1, DÙNG LẠI đúng "<tên_phim>" làm generatedFolderNameOverride
+ *   để tập mới chia sẻ CHUNG 1 folder generated/ với (các) tập trước, không
+ *   tách folder riêng. Nếu tên file dòng 2 KHÔNG khớp đúng quy ước này (file
+ *   do user tự đổi tên, hoặc sinh từ nguồn khác) — coi cả basename đó là tên
+ *   phim, tapNumber mặc định = 2 (giả định file đó là tập 1).
+ *
+ * Output LUÔN đúng 1 file JSON (schema prompt_generate_script_episode.txt) —
+ * dùng CHUNG job type "generateScript"/processChatAIQueue với
+ * handleGenerateScriptRequest (chỉ set generatedFolderNameOverride để tách
+ * folder khỏi remakeBaseName, xem docstring field đó trong queue.ts).
+ */
+async function handleGenerateScriptEpisodeRequest(
+  ctx: Context,
+  typedText: string,
+  promptMessageId: number,
+): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId || !ctx.chat) return;
+
+  const lines = typedText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    await ctx.reply("Chưa gõ tên file nào, đã huỷ.", promptMenu);
+    return;
+  }
+
+  const originalSearchTerm = normalizeTypedJsonFileName(lines[0]);
+  const continuitySearchTerm = lines[1]
+    ? normalizeTypedJsonFileName(lines[1])
+    : null;
+
+  const originalFileName = await findSingleGeneratedScriptFile(
+    ctx,
+    originalSearchTerm,
+    promptMessageId,
+    "TẬP GỐC",
+  );
+  if (!originalFileName) return;
+
+  const continuityFileName = continuitySearchTerm
+    ? await findSingleGeneratedScriptFile(
+        ctx,
+        continuitySearchTerm,
+        promptMessageId,
+        "TẬP MỚI TRƯỚC ĐÓ",
+      )
+    : null;
+  if (continuitySearchTerm && !continuityFileName) return;
+
+  const masterPrompt = await fs
+    .readFile(config.promptGenerateScriptEpisode, "utf-8")
+    .catch((err) => {
+      console.error(
+        `[bot] Không đọc được master prompt "${config.promptGenerateScriptEpisode}":`,
+        err,
+      );
+      return null;
+    });
+  if (masterPrompt === null) {
+    await ctx.reply(
+      "❌ Không đọc được master prompt cho tính năng này, đã huỷ.",
+      { reply_parameters: { message_id: promptMessageId }, ...promptMenu },
+    );
+    return;
+  }
+
+  const originalContent = await fs
+    .readFile(path.join(config.chatAIResultsDir, originalFileName), "utf-8")
+    .catch((err) => {
+      console.error(
+        `[bot] Không đọc được file "${originalFileName}":`,
+        err,
+      );
+      return null;
+    });
+  if (originalContent === null) {
+    await ctx.reply(`❌ Không đọc được file "${originalFileName}", đã huỷ.`, {
+      reply_parameters: { message_id: promptMessageId },
+      ...promptMenu
+    });
+    return;
+  }
+
+  let continuityContent: string | null = null;
+  if (continuityFileName) {
+    continuityContent = await fs
+      .readFile(
+        path.join(config.chatAIResultsDir, continuityFileName),
+        "utf-8",
+      )
+      .catch((err) => {
+        console.error(
+          `[bot] Không đọc được file "${continuityFileName}":`,
+          err,
+        );
+        return null;
+      });
+    if (continuityContent === null) {
+      await ctx.reply(
+        `❌ Không đọc được file "${continuityFileName}", đã huỷ.`,
+        { reply_parameters: { message_id: promptMessageId }, ...promptMenu },
+      );
+      return;
+    }
+  }
+
+  // Quy ước đặt tên CỐ ĐỊNH của job "generateScript"/"generateScriptEpisode":
+  // "<tên_phim>_tap<N>_full.json" — rút lại tên phim + số tập từ CHÍNH file
+  // dòng 2 (nếu có) để tiếp tục ĐÚNG phim đó, không tạo remake mới.
+  let filmBaseName: string;
+  let tapNumber: number;
+  if (continuityFileName) {
+    const continuityBaseName = path.basename(continuityFileName, ".json");
+    const tapMatch = continuityBaseName.match(/^(.*?)_tap(\d+)(?:_full)?$/i);
+    if (tapMatch) {
+      filmBaseName = tapMatch[1];
+      tapNumber = Number(tapMatch[2]) + 1;
+    } else {
+      filmBaseName = continuityBaseName;
+      tapNumber = 2;
+    }
+  } else {
+    const remakeVersion = await resolveNextRemakeVersion(originalSearchTerm);
+    filmBaseName = `${originalSearchTerm}_remake_${remakeVersion}`;
+    tapNumber = 1;
+  }
+  const finalFileBaseName = `${filmBaseName}_tap${tapNumber}_full`;
+
+  const sections: string[] = [
+    masterPrompt,
+    `\n\n## TẬP GỐC (khung kỹ thuật): ${originalFileName}\n\`\`\`json\n${originalContent}\n\`\`\``,
+  ];
+  if (continuityFileName && continuityContent !== null) {
+    sections.push(
+      `\n\n## TẬP MỚI TRƯỚC ĐÓ (tiếp nối/ledger): ${continuityFileName}\n\`\`\`json\n${continuityContent}\n\`\`\``,
+    );
+  }
+
+  await fs.mkdir(config.uploadsDir, { recursive: true });
+  const combinedAttachmentPath = path.join(
+    config.uploadsDir,
+    `${randomUUID()}-generate-script-episode.txt`,
+  );
+  await fs.writeFile(combinedAttachmentPath, sections.join(""), "utf-8");
+
+  const statusMessage = await ctx.reply(
+    `⏳ Đang xử lý (tập gốc: ${originalFileName}${continuityFileName ? `, tiếp nối: ${continuityFileName}` : " — tập đầu tiên"})...`,
+    {
+      reply_parameters: { message_id: promptMessageId },
+      ...promptMenu,
+    },
+  );
+
+  enqueueJob({
+    type: "generateScript",
+    chatId: ctx.chat.id,
+    userId,
+    prompt: GENERATE_SCRIPT_ATTACHMENT_PROMPT,
+    promptMessageId,
+    statusMessageId: statusMessage.message_id,
+    referenceFileNames: continuityFileName
+      ? [originalFileName, continuityFileName]
+      : [originalFileName],
+    promptAttachmentPath: combinedAttachmentPath,
+    remakeBaseName: finalFileBaseName,
+    generatedFolderNameOverride: filmBaseName,
   });
 }
 
@@ -1706,6 +1959,16 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "generateScriptEpisode");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ 1-2 dòng:\nDòng 1 (bắt buộc): tên/1 phần tên file JSON TẬP GỐC (khung kỹ thuật) trong storage/chatai-results.\nDòng 2 (tuỳ chọn, để trống nếu đây là TẬP ĐẦU TIÊN): tên/1 phần tên file JSON TẬP MỚI ngay trước đó (để tiếp nối nhân vật/bối cảnh/mạch truyện).`,
+      promptMenu,
+    );
+  });
+
   bot.hears(UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
@@ -1808,6 +2071,7 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === VIDEO_REFERENCE_BUTTON_LABEL ||
       ctx.message.text === TEST_VIDEO_REFERENCE_BUTTON_LABEL ||
       ctx.message.text === GENERATE_SCRIPT_BUTTON_LABEL ||
+      ctx.message.text === GENERATE_SCRIPT_EPISODE_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_IMAGE_BUTTON_LABEL ||
@@ -1904,6 +2168,12 @@ export function registerHandlers(bot: Telegraf): void {
       );
     } else if (mode === "generateScript") {
       await handleGenerateScriptRequest(
+        ctx,
+        ctx.message.text,
+        ctx.message.message_id,
+      );
+    } else if (mode === "generateScriptEpisode") {
+      await handleGenerateScriptEpisodeRequest(
         ctx,
         ctx.message.text,
         ctx.message.message_id,

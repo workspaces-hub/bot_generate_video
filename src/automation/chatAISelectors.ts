@@ -89,10 +89,24 @@ export const sendButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.getByRole("button", { name: /send prompt/i }),
 ];
 
-/** Nút dừng khi ChatAI đang trả lời (thay chỗ nút gửi) — biến mất khi trả lời xong. */
+/**
+ * Nút dừng khi ChatAI đang trả lời (thay chỗ nút gửi) — biến mất khi trả lời
+ * xong.
+ *
+ * SỬA (xác nhận qua debug thật, job test-chatai-video-ref-1790819501945,
+ * UI "Công việc"/Work mode MỚI của ChatGPT): 2 candidate CŨ đều KHÔNG còn
+ * khớp — DOM thật lúc đó là `<button aria-label="Stop">` (không có
+ * `data-testid="stop-button"`, aria-label chỉ "Stop" chứ không phải "Stop
+ * generating"). Vì CẢ 2 candidate cũ cùng miss, sendMessage() coi nhầm là
+ * "đã xong" dù ảnh debug cho thấy rõ "Working for 24s" + nút Stop (hình vuông
+ * trong khung tròn xanh) vẫn hiện — giữ NGUYÊN 2 candidate cũ (phòng khi UI
+ * cũ vẫn còn dùng ở chế độ/tài khoản khác), chỉ THÊM candidate mới khớp đúng
+ * UI hiện tại.
+ */
 export const stopGeneratingButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.locator('button[data-testid="stop-button"]'),
   () => page.getByRole("button", { name: /stop generating/i }),
+  () => page.getByRole("button", { name: /^stop$/i }),
 ];
 
 /**
@@ -107,9 +121,20 @@ export const stopGeneratingButtonCandidates = (page: Page): Array<() => Locator>
  * có khoảng hở lúc tool call đang chạy (chưa xác nhận chắc nguyên nhân gốc,
  * nhưng tín hiệu "Working for" này rõ ràng/độc lập hơn, dùng làm lưới an
  * toàn thứ 2 để giảm rủi ro false-positive "đã xong").
+ *
+ * SỬA (xác nhận qua debug thật, job test-chatai-video-ref-1790819501945, UI
+ * "Công việc"/Work mode MỚI): wrapper `[data-streaming-response-status]`
+ * KHÔNG còn tồn tại — DOM thật lúc đó chỉ là `<span class="tabular-nums
+ * text-tertiary">Working for 24s</span>` trần, không có attribute đặc biệt
+ * nào bọc ngoài. Thêm 1 locator dò THẲNG theo text "Working for" (class CSS
+ * dạng "tabular-nums"/"text-tertiary" là tên tiện ích chung chung, dễ trùng
+ * phần tử khác — text nội dung ổn định/đặc trưng hơn) làm candidate thứ 2,
+ * OR với locator cũ — giữ nguyên locator cũ phòng khi UI cũ còn tồn tại.
  */
 export const workingIndicatorLocator = (page: Page): Locator =>
-  page.locator("[data-streaming-response-status]");
+  page
+    .locator("[data-streaming-response-status]")
+    .or(page.getByText(/^Working for /i));
 
 /**
  * Khối tin nhắn trả lời của ChatAI (mỗi lượt hỏi/đáp 1 khối riêng, lấy khối
@@ -294,10 +319,23 @@ export const downloadFileLinkLocator = (message: Locator): Locator =>
  * count()=0 và bỏ sót file dù ChatAI đã thật sự đính kèm. Thêm điều kiện
  * OR khớp aria-label BẮT ĐẦU bằng "Tải file" (cụm ChatAI luôn dùng cho mọi
  * nút tải file tiếng Việt, có hoặc không có emoji/tên file ở cuối).
+ *
+ * SỬA THÊM (xác nhận qua debug thật, test-chatai-video-ref-1790794502160,
+ * turn 1 — ChatAI ĐÃ trả lời đúng "Đã hoàn thành" + đính kèm file thật,
+ * nhưng downloadAttachedFiles vẫn báo "panel không mở ra được"): biến thể
+ * "resource card" MỚI (xem workModeResourceCardDownloadButtonLocator) có 1
+ * nút overlay PHỦ TOÀN THẺ `aria-label="Open preview of <filename>.json"` —
+ * chuỗi này CŨNG kết thúc bằng ".json", bị khớp NHẦM vào locator này (tier 3
+ * trong downloadAttachedFiles) TRƯỚC KHI code kịp thử tới tier 4
+ * (workModeResourceCardDownloadButtonLocator — nơi có đúng nút "Download
+ * file" thật). Bấm nhầm nút overlay "Open preview..." không tải được gì,
+ * cũng không mở panel "screen-threadFlyOut" nào — HTML snapshot xác nhận
+ * panelAppeared=false. Loại trừ tường minh aria-label bắt đầu bằng "Open
+ * preview of " (tiếng Anh, không phải file tiếng Việt nào dùng cụm này).
  */
 export const inlineFileLinkLocator = (message: Locator): Locator =>
   message.locator(
-    'button[aria-label$=".json"]:not([class*="group/open-file"]), button[aria-label^="Tải file"]:not([class*="group/open-file"])',
+    'button[aria-label$=".json"]:not([class*="group/open-file"]):not([aria-label^="Open preview of "]), button[aria-label^="Tải file"]:not([class*="group/open-file"])',
   );
 
 /**
@@ -322,11 +360,24 @@ export const downloadButtonCandidates = (page: Page): Array<() => Locator> => [
  * Đây là lỗi THẬT phía ChatAI (không phải do bot chọn sai selector) — bấm
  * Retry thường tự sửa được vì nguyên nhân hay gặp là quá tải server nhất
  * thời.
+ *
+ * SỬA (xác nhận qua debug thật, job 7465be08-0d73-4639-af32-98cc8faaa3c8):
+ * 2 candidate fallback generic (`/^retry$/i`/`/^thử lại$/i`) tìm trên TOÀN
+ * TRANG trước đây bắt NHẦM 1 nút "Retry" hoàn toàn khác — nút tải lại lịch sử
+ * chat ở SIDEBAR (`<nav aria-label="Chat history">...Unable to load
+ * history<button>...Retry</button>`), KHÔNG liên quan gì tới lỗi hội thoại.
+ * Ảnh debug xác nhận lúc đó ChatAI vẫn đang "Thinking" bình thường trong khung
+ * chat chính — sendMessage() cứ bấm nhầm nút sidebar này 15 lần (vô ích) rồi
+ * báo lỗi sai "Something went wrong" dù hội thoại không hề lỗi. Scope 2
+ * candidate fallback vào bên trong `<main>` (landmark bọc khung chat chính,
+ * DOM thật xác nhận tồn tại) để không bao giờ khớp nhầm phần tử trong sidebar
+ * (`<nav>`) nữa — candidate đầu tiên (data-testid cụ thể) không cần scope vì
+ * vốn đã đặc thù, không có nguy cơ trùng.
  */
 export const regenerateErrorButtonCandidates = (page: Page): Array<() => Locator> => [
   () => page.locator('[data-testid="regenerate-thread-error-button"]'),
-  () => page.getByRole("button", { name: /^retry$/i }),
-  () => page.getByRole("button", { name: /^thử lại$/i }),
+  () => page.locator("main").getByRole("button", { name: /^retry$/i }),
+  () => page.locator("main").getByRole("button", { name: /^thử lại$/i }),
 ];
 
 /**

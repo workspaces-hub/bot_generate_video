@@ -70,13 +70,13 @@ const adminTelegram = config.adminsNotify
   : null;
 
 async function notifyAdminUrl(jobId: string, url: string): Promise<void> {
-  if (!adminTelegram || !config.adminsNotify) return;
-  await adminTelegram
-    .sendMessage(
-      config.adminsNotify,
-      `[chatAI] Job ${jobId} — url hội thoại: ${url}`,
-    )
-    .catch(() => {});
+  // if (!adminTelegram || !config.adminsNotify) return;
+  // await adminTelegram
+  //   .sendMessage(
+  //     config.adminsNotify,
+  //     `[chatAI] Job ${jobId} — url hội thoại: ${url}`,
+  //   )
+  //   .catch(() => {});
 }
 
 /**
@@ -164,7 +164,6 @@ function findValueForKey(
  * hạn effort/tool-calling ngầm dù chọn cùng model).
  */
 function attachModelInfoLogger(page: Page, jobId: string): void {
-  return
   let loggedModel = false;
   let loggedPlan = false;
   page.on("response", (response) => {
@@ -348,6 +347,28 @@ async function waitForComposerTilesToSettle(page: Page): Promise<void> {
 const MAX_TURNS_WAITING_FOR_FILE = 4;
 
 /**
+ * SỬA (xác nhận qua debug thật, before-send.png job test-chatai-video-ref-
+ * 1790790822027, 2026-10-01): ChatGPT tự ĐỔI TÊN file đính kèm thành
+ * "<tên>(2).<đuôi>", "<tên>(3).<đuôi>"... khi phát hiện TRÙNG TÊN với file
+ * đã upload trước đó (dù là hội thoại MỚI — có vẻ dedupe ở tầng tài khoản/
+ * cache, không chỉ trong 1 hội thoại) — screenshot xác nhận tile hiện
+ * "test-prompt-1(2).m..." dù code upload đúng "test-prompt-1.mp4". Mọi chỗ
+ * so khớp aria-label THEO ĐÚNG TỪNG CHỮ với tên file gốc (waitForAttachment-
+ * UploadToSettle bên dưới VÀ check xác nhận tile trong uploadAttachment) đều
+ * thất bại im lặng vì lý do này — KHÔNG liên quan gì DOM/cấu trúc. Tách
+ * fileName thành {prefix, suffix} (phần trước/sau đuôi file) để so khớp
+ * DUNG SAI được cả trường hợp bị chèn "(N)" ở giữa, dùng chung cho cả 2 nơi.
+ */
+function splitFileNameForRenameMatch(fileName: string): {
+  prefix: string;
+  suffix: string;
+} {
+  const dotIndex = fileName.lastIndexOf(".");
+  if (dotIndex <= 0) return { prefix: fileName, suffix: "" };
+  return { prefix: fileName.slice(0, dotIndex), suffix: fileName.slice(dotIndex) };
+}
+
+/**
  * Chờ file tile trong composer hết trạng thái "đang upload" — xác nhận qua
  * debug HTML thật (before-click ask.html, job so sánh output_local.json/
  * output_vps.json): file tile lúc CHƯA upload xong là
@@ -361,20 +382,57 @@ const MAX_TURNS_WAITING_FOR_FILE = 4;
  * timeout cố định) tới khi progress ring này biến mất mới coi là upload xong.
  * Tile biến mất hẳn khỏi composer (vd trường hợp hiếm gặp) cũng coi là xong,
  * không chặn vô ích.
+ *
+ * SỬA (xác nhận qua debug thật, test-prompt-1.mp4, 2026-10-01): DOM MỚI HƠN
+ * của ChatGPT KHÔNG còn dùng `role="group"` cho tile đính kèm nữa — tên file
+ * giờ nằm trong `<button aria-label="<tên file>">` (KHÁC hẳn nút "Remove
+ * <tên file>" cạnh đó) nằm trực tiếp trong `<span class="group/composer-
+ * attachment ...">`. Dò CẢ 2 kiểu DOM (role=group CŨ trước, fallback sang
+ * button+wrapper MỚI) để không phụ thuộc đúng 1 phiên bản UI cụ thể.
+ *
+ * SỬA THÊM (xem docstring splitFileNameForRenameMatch): so khớp theo
+ * prefix/suffix (KHÔNG exact-match) để không bỏ sót tile khi ChatGPT đã tự
+ * đổi tên do trùng file.
  */
 async function waitForAttachmentUploadToSettle(
   page: Page,
   fileName: string,
 ): Promise<void> {
+  const { prefix, suffix } = splitFileNameForRenameMatch(fileName);
   await page.waitForFunction(
-    (name) => {
-      const tile = Array.from(document.querySelectorAll('[role="group"]')).find(
-        (g) => g.getAttribute("aria-label") === name,
-      );
-      if (!tile) return true;
-      return tile.querySelector("circle[stroke-dashoffset]") === null;
+    ({ prefix, suffix }) => {
+      // KHÔNG khai báo hàm helper riêng (vd "const matchesName = ...") ở
+      // đây — xác nhận qua lỗi thật (ReferenceError: __name is not defined):
+      // tsx/esbuild (dev) bọc THÊM lệnh gọi __name(...) quanh function
+      // expression gán cho const để giữ tên phục vụ debug, nhưng
+      // page.waitForFunction stringify NGUYÊN VĂN callback này để chạy
+      // TRONG trang (không mang theo runtime helper của bundler) — __name
+      // không tồn tại ở đó, throw ngay khi gọi. Lặp lại logic inline thay vì
+      // tách hàm con.
+      const oldStyleTile = Array.from(
+        document.querySelectorAll('[role="group"]'),
+      ).find((g) => {
+        const label = g.getAttribute("aria-label");
+        return !!label && label.startsWith(prefix) && label.endsWith(suffix);
+      });
+      if (oldStyleTile) {
+        return (
+          oldStyleTile.querySelector("circle[stroke-dashoffset]") === null
+        );
+      }
+
+      const button = Array.from(
+        document.querySelectorAll("button[aria-label]"),
+      ).find((b) => {
+        const label = b.getAttribute("aria-label");
+        return !!label && label.startsWith(prefix) && label.endsWith(suffix);
+      });
+      if (!button) return true;
+      const wrapper =
+        button.closest('[class*="group/composer-attachment"]') ?? button;
+      return wrapper.querySelector("circle[stroke-dashoffset]") === null;
     },
-    fileName,
+    { prefix, suffix },
     { timeout: 0 },
   );
 }
@@ -419,7 +477,11 @@ const attachmentUploadFailedLocator = (page: Page): Locator =>
  * chỉ đọc lại đúng banner chung chung "Failed upload...") để lần lỗi tiếp
  * theo có bằng chứng cụ thể, tránh phải đoán tiếp.
  */
-async function uploadAttachment(page: Page, filePath: string): Promise<void> {
+async function uploadAttachment(
+  page: Page,
+  filePath: string,
+  jobId: string,
+): Promise<void> {
   const fileName = path.basename(filePath);
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -492,6 +554,39 @@ async function uploadAttachment(page: Page, filePath: string): Promise<void> {
     Math.max(1000, Math.round(fileSizeBytes / 1024) * 100),
   );
   await page.waitForTimeout(extraSettleMs);
+
+  // Theo yêu cầu người dùng: xác nhận RÕ RÀNG tile đính kèm còn hiện diện
+  // hoàn chỉnh (đúng tên file, không còn progress ring) trong composer NGAY
+  // TRƯỚC KHI trả về (tức TRƯỚC KHI sendMessage gõ prompt/bấm Send) — log
+  // này cho biết CHẮC CHẮN tại đúng thời điểm sắp submit, tile có thật sự
+  // hiển thị đầy đủ hay không, thay vì chỉ suy luận gián tiếp qua việc
+  // waitForAttachmentUploadToSettle/banner lỗi không throw gì.
+  //
+  // SỬA (xác nhận qua debug thật, test-prompt-1.mp4, 2026-10-01): DOM MỚI
+  // không còn role="group" — tên file nằm trong button[aria-label="<tên
+  // file>"] (khác hẳn nút "Remove <tên file>"). Dò CẢ 2 kiểu DOM, cùng lý do
+  // đã áp dụng ở waitForAttachmentUploadToSettle.
+  //
+  // SỬA THÊM (xem docstring splitFileNameForRenameMatch): so khớp theo
+  // prefix/suffix (^=/$=, KHÔNG exact-match) — ChatGPT có thể đã tự đổi tên
+  // file thành "<tên>(2).<đuôi>" nếu trùng tên với file đã upload trước đó.
+  const { prefix, suffix } = splitFileNameForRenameMatch(fileName);
+  const tile = page
+    .locator(`[role="group"][aria-label^="${prefix}"][aria-label$="${suffix}"]`)
+    .or(page.locator(`button[aria-label^="${prefix}"][aria-label$="${suffix}"]`));
+  const tileVisible = await tile
+    .first()
+    .isVisible({ timeout: 3000 })
+    .catch(() => false);
+  if (tileVisible) {
+    console.log(
+      `[chatAI] askChatAI(${jobId}): đã xác nhận tile đính kèm "${fileName}" (hoặc tên đã bị ChatGPT đổi do trùng, xem console log innerText nếu cần) hiển thị đầy đủ trong composer, sẵn sàng submit.`,
+    );
+  } else {
+    console.warn(
+      `[chatAI] askChatAI(${jobId}): KHÔNG thấy tile đính kèm "${fileName}" (đã thử cả tên bị đổi do trùng file) trong composer lúc chuẩn bị submit — có thể ChatGPT đổi cấu trúc DOM hoặc tile đã bị gỡ vì lý do khác, nên kiểm tra debug snapshot nếu kết quả sau đó bị thiếu file.`,
+    );
+  }
 }
 
 /**
@@ -603,7 +698,6 @@ async function sendMessage(
   // waitForComposerTilesToSettle) — TRƯỚC KHI tìm/kiểm tra nút Send, vì lúc
   // còn spinner nút Send có thể chưa sẵn sàng.
   await waitForComposerTilesToSettle(page);
-  // await captureSnapshot(page, "before-click ask", "before-click ask");
   const sendButton = await firstVisible(sendButtonCandidates(page), 10_000);
   // Xác nhận qua lỗi thật (job b72824b5-7545-4750-9dd4-1532aa4fba99): nút
   // Send có thể vẫn "aria-disabled=true" ngay sau khi các bước dán/gõ ở trên
@@ -626,6 +720,17 @@ async function sendMessage(
       "Nút Send vẫn ở trạng thái disabled dù đã thử dán/gõ lại prompt — có thể ChatGPT đã đổi cấu trúc composer.",
     );
   }
+
+  // Theo yêu cầu người dùng: chụp ảnh debug NGAY TRƯỚC KHI bấm Send — bằng
+  // chứng trực quan CHÍNH XÁC tại thời điểm sắp submit (đã dán prompt xong,
+  // attachment tile (nếu có) đã settle, nút Send đã enabled) để đối chiếu
+  // trực tiếp giữa các lần chạy/môi trường (local vs VPS) khi nghi ngờ kết
+  // quả sơ sài — vd prompt bị cắt/thiếu đoạn, attachment chưa hiện đầy đủ,
+  // model/mode chọn sai... đều lộ rõ qua ảnh này. Đặt tên riêng theo jobId
+  // (KHÔNG trùng snapshot "result" ở cuối) để không bị ghi đè.
+  await logModelAndReasoningState(page, jobId);
+  await captureSnapshot(page, `${jobId}_before-send`, "before-send");
+
   // ChatGPT điều hướng THẬT (từ "/" sang "/c/<id>") khi gửi tin nhắn ĐẦU
   // TIÊN của 1 hội thoại mới — xác nhận qua lỗi thật ("click action done —
   // waiting for scheduled navigations to finish" rồi timeout 30s): click ĐÃ
@@ -1578,6 +1683,53 @@ export async function selectChatMode(page: Page, jobId: string): Promise<void> {
 }
 
 /**
+ * Log model đang chọn (nút toolbar, xem modelSelectorButtonCandidates) và
+ * trạng thái "reasoning effort" (nhãn cạnh đó, xem effortLabelLocator) TRƯỚC
+ * mỗi lần chạy — theo yêu cầu người dùng (đang điều tra vì sao kết quả VPS
+ * sơ sài hơn local dù CÙNG 1 prompt): đối chiếu trực tiếp qua log thật xem 2
+ * lần chạy có đang dùng ĐÚNG CÙNG model/mức effort hay không, thay vì đoán —
+ * model yếu hơn hoặc effort thấp hơn (dù cùng tài khoản) hoàn toàn có thể
+ * khiến câu trả lời sơ sài hơn hẳn mà không có gì báo lỗi rõ ràng. Best-effort
+ * — lỗi/không tìm thấy phần tử chỉ log cảnh báo, KHÔNG throw (đây là bước
+ * quan sát, không phải điều kiện bắt buộc để tiếp tục).
+ */
+async function logModelAndReasoningState(
+  page: Page,
+  jobId: string,
+): Promise<void> {
+  try {
+    const modelButton = await firstVisible(
+      modelSelectorButtonCandidates(page),
+      5000,
+    ).catch(() => null);
+    const modelText = modelButton
+      ? (await modelButton.innerText().catch(() => null))?.replace(
+          /\s+/g,
+          " ",
+        )
+          .trim()
+      : null;
+
+    const effortLabel = effortLabelLocator(page).first();
+    const effortText = (
+      await effortLabel.innerText({ timeout: 3000 }).catch(() => null)
+    )?.replace(/\s+/g, " ").trim();
+    const isMaxEffort = await effortLabel
+      .getAttribute("data-max-effort")
+      .catch(() => null);
+
+    console.log(
+      `[chatAI] askChatAI(${jobId}): model selector = "${modelText ?? "(không tìm thấy nút chọn model)"}", reasoning effort = "${effortText ?? "(không đọc được nhãn effort)"}" (data-max-effort=${isMaxEffort ?? "?"}, config.chatAIMaxEffort=${config.chatAIMaxEffort}).`,
+    );
+  } catch (err) {
+    console.warn(
+      `[chatAI] askChatAI(${jobId}): không log được model/reasoning state (best-effort, bỏ qua):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
  * Chọn mode Chat/Work + model theo config.chatAIMode (CHATAI_MODE) — theo
  * yêu cầu người dùng: dùng chung cho askChatAI/askChatAIWithInlineContent
  * thay vì lặp lại if/else ở cả 2 nơi.
@@ -1899,11 +2051,14 @@ export async function askChatAI(
     // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
     // (CHATAI_MODE) — xem docstring selectChatAIModeFromConfig.
     await selectChatAIModeFromConfig(page, jobId);
+    // Theo yêu cầu người dùng: log model + trạng thái reasoning effort NGAY
+    // SAU khi đã chọn mode — xem docstring logModelAndReasoningState.
+    await logModelAndReasoningState(page, jobId);
     // await captureSnapshot(page, jobId + "_askChatAI-before-send", "askChatAI-before-send", {
     //   includeHtml: true,
     // });
     if (attachmentPath) {
-      await uploadAttachment(page, attachmentPath);
+      await uploadAttachment(page, attachmentPath, jobId);
     }
 
     // Theo yêu cầu người dùng: BỎ bước audit riêng (trước đây bắt buộc thêm
@@ -1974,7 +2129,7 @@ export async function askChatAI(
           // tìm lại trong 1 file lớn (nơi đã bỏ sót lần trước).
           messageToSend = `Bạn báo chưa thấy kịch bản — đây là kịch bản phim đầy đủ (trích từ file đính kèm ban đầu), dùng đúng nội dung này, không cần hỏi lại:\n\n${scriptText}\n\nHãy tiếp tục xử lý theo đúng workflow/quy tắc đã nêu trong file đính kèm ban đầu.`;
         } else if (attachmentPath) {
-          await uploadAttachment(page, attachmentPath);
+          await uploadAttachment(page, attachmentPath, jobId);
           messageToSend =
             "Tôi vừa gửi lại đúng file kịch bản phim ở trên (file đính kèm) — file này CÓ đầy đủ kịch bản, nằm ở cuối file sau phần hướng dẫn/quy tắc xử lý. Hãy đọc lại toàn bộ file đính kèm (kể cả phần cuối) rồi tiếp tục xử lý theo đúng workflow đã nêu, không cần hỏi lại kịch bản nữa.";
         } else {
@@ -2005,7 +2160,7 @@ export async function askChatAI(
         if (fileContent) {
           messageToSend = `Bạn báo không đọc được file đính kèm (lỗi môi trường/công cụ xử lý file phía bạn) — đây là TOÀN BỘ nội dung file đó, dán trực tiếp vào đây, dùng đúng nội dung này để tiếp tục xử lý, không cần đọc lại file đính kèm nữa:\n\n${fileContent}`;
         } else if (attachmentPath) {
-          await uploadAttachment(page, attachmentPath);
+          await uploadAttachment(page, attachmentPath, jobId);
           messageToSend =
             "Tôi vừa gửi lại file đính kèm ở trên — hãy thử đọc lại và tiếp tục xử lý theo đúng workflow/quy tắc đã nêu trong đó.";
         } else {
@@ -2070,8 +2225,8 @@ export async function askChatAI(
             downloadedFiles,
             result.downloadedFiles,
           );
-        }
         break;
+        }
       }
 
       // Chưa hoàn thiện (isComplete = false) — file(s) vừa tải ở lượt này (nếu
@@ -2537,11 +2692,11 @@ export async function verifyVideo(
     // Upload video trước (liền trước, nếu có) → video hiện tại → rồi từng
     // ảnh tham chiếu ĐÚNG THỨ TỰ trong refs — theo yêu cầu người dùng.
     if (previousVideoPath) {
-      await uploadAttachment(page, previousVideoPath);
+      await uploadAttachment(page, previousVideoPath, id);
     }
-    await uploadAttachment(page, videoPath);
+    await uploadAttachment(page, videoPath, id);
     for (const ref of refs) {
-      await uploadAttachment(page, ref.path);
+      await uploadAttachment(page, ref.path, id);
     }
 
     const template = await fs.promises.readFile(
@@ -2674,8 +2829,8 @@ export async function compareOriginalWithFinalVideo(
 
     // Upload video GỐC trước, rồi video MỚI — thứ tự khớp đúng với thứ tự
     // nêu trong message bên dưới ("ĐÚNG THEO THỨ TỰ đính kèm").
-    await uploadAttachment(page, originalVideoPath);
-    await uploadAttachment(page, finalVideoPath);
+    await uploadAttachment(page, originalVideoPath, jobId);
+    await uploadAttachment(page, finalVideoPath, jobId);
 
     const message = `Bạn nhận được 2 video, ĐÚNG THEO THỨ TỰ đính kèm:
 1. Video GỐC (video tham chiếu thật do người dùng cung cấp).

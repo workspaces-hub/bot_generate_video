@@ -66,6 +66,20 @@ export const UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL =
  */
 export const GENERATE_SCRIPT_BUTTON_LABEL = "Tạo kịch bản mới";
 /**
+ * Bản KHÁC GENERATE_SCRIPT_BUTTON_LABEL ở trên — thay vì tham chiếu CẢ PHIM
+ * (mọi tập) rồi sinh lại toàn bộ trong 1 lần, nút này sinh ĐÚNG 1 TẬP/lần
+ * (dùng prompt_generate_script_episode.txt, config.promptGenerateScriptEpisode):
+ * user gõ tên/1 phần tên file JSON TẬP GỐC (bắt buộc, dòng 1) dùng làm khung
+ * kỹ thuật, và TUỲ CHỌN tên/1 phần tên file JSON TẬP MỚI ngay trước đó (dòng
+ * 2, nếu đây là tập tiếp nối) để giữ nhất quán nhân vật/bối cảnh/mạch truyện
+ * — xem handleGenerateScriptEpisodeRequest trong handlers.ts. Không có dòng 2
+ * = coi đây là tập đầu tiên của 1 phim mới (tự tính remake version mới, cùng
+ * cơ chế resolveNextRemakeVersion với GENERATE_SCRIPT_BUTTON_LABEL). Có dòng 2
+ * = tiếp nối đúng phim/tên đã tạo ở tập trước (giữ nguyên folder generated/,
+ * chỉ tăng số tập).
+ */
+export const GENERATE_SCRIPT_EPISODE_BUTTON_LABEL = "Tạo kịch bản theo từng tập";
+/**
  * Bất kỳ ai trong nhóm được phép dùng bot (isAllowedGroup, KHÔNG giới hạn
  * admin — theo yêu cầu người dùng) đều bấm được — user upload 1 file .txt
  * để GHI ĐÈ master prompt prompt_generate_script.txt (dùng cho
@@ -147,9 +161,10 @@ export const REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL = "Gen lại video lỗi";
 export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
+  [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL],
   [CONTINUE_IMAGE_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
   [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
-  // [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
+  [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   [MERGE_VIDEO_BUTTON_LABEL, REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL],
   [STOP_ALL_BUTTON_LABEL],
   // [IMAGE_BUTTON_LABEL, PROMPT_BUTTON_LABEL],

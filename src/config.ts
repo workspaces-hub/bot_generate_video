@@ -168,6 +168,14 @@ export const config = {
   // thể phải nhất quán xuyên các tập (xem prompt_generate_script.txt, mục
   // "ASSET LEDGER DÙNG CHUNG XUYÊN SUỐT CÁC TẬP").
   promptGenerateScript: "prompt_generate_script.txt",
+  // Master prompt cho tính năng "Tạo kịch bản theo từng tập" (nút
+  // GENERATE_SCRIPT_EPISODE_BUTTON_LABEL) — KHÁC promptGenerateScript ở trên:
+  // sinh ĐÚNG 1 tập/lần thay vì cả phim cùng lúc, tham chiếu 1 tập gốc (khung
+  // kỹ thuật) + TUỲ CHỌN tập MỚI ngay trước đó (nguồn ledger/mạch truyện) để
+  // tiếp nối đúng nhân vật/bối cảnh/cốt truyện — xem
+  // handleGenerateScriptEpisodeRequest trong handlers.ts,
+  // prompt_generate_script_episode.txt.
+  promptGenerateScriptEpisode: "prompt_generate_script_episode.txt",
 
   // Theo yêu cầu người dùng: bản clone của askChatAIAboutReferenceVideo dùng
   // API Qwen (qua OpenRouter, KHÔNG phải browser automation) thay vì

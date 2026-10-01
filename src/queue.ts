@@ -16,7 +16,7 @@ import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
 // (xem nhánh job.verifyPromptTest bên dưới) — GPT thật (KHÁC Qwen ở trên,
 // theo yêu cầu người dùng dùng model khác để đánh giá, tránh thiên vị) so
 // sánh video gốc với video cuối cùng do pipeline tái tạo ra.
-import { compareOriginalWithFinalVideo } from "./automation/chatAI";
+import { askChatAI, compareOriginalWithFinalVideo, askChatAIAboutReferenceVideo } from "./automation/chatAI";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import {
@@ -191,6 +191,20 @@ export interface GenerateScriptJob extends BaseJob {
    * "_tapN..." nếu có, phân biệt nhiều tập) trước khi copy vào generated/.
    */
   remakeBaseName: string;
+  /**
+   * CHỈ dùng cho "Tạo kịch bản theo từng tập" (GENERATE_SCRIPT_EPISODE_BUTTON_LABEL,
+   * xem handleGenerateScriptEpisodeRequest) — job đó truyền remakeBaseName
+   * ĐÃ KÈM hậu tố "_tapN_full" riêng cho ĐÚNG file của tập đang sinh (vì mỗi
+   * lần bấm nút chỉ sinh 1 tập, không phải cả phim), nên KHÔNG thể dùng thẳng
+   * remakeBaseName làm job.generatedFolderName như "Tạo kịch bản mới" (sẽ
+   * tách mỗi tập ra 1 folder riêng thay vì gộp chung theo phim). Field này,
+   * khi có, LÀ tên phim (KHÔNG kèm hậu tố tập) dùng làm generatedFolderName
+   * thay thế — để mọi tập của CÙNG 1 phim (sinh qua nhiều lần bấm nút khác
+   * nhau) tiếp tục dùng CHUNG 1 folder generated/<tên phim>/, chia sẻ được
+   * ảnh nhân vật/bối cảnh đã gen từ tập trước. Để trống/undefined (job "Tạo
+   * kịch bản mới" bình thường) = hành vi cũ, dùng thẳng remakeBaseName.
+   */
+  generatedFolderNameOverride?: string;
 }
 
 /**
@@ -2768,7 +2782,7 @@ async function processChatAIQueue(): Promise<void> {
       try {
         let downloadedFiles: string[];
         if (job.type === "scriptReferenceVideo") {
-          ({ downloadedFiles } = await askQwenAboutReferenceVideo(
+          ({ downloadedFiles } = await askChatAIAboutReferenceVideo(
             job.videoPath,
             jobId,
             job.videoFileName,
@@ -2776,7 +2790,7 @@ async function processChatAIQueue(): Promise<void> {
             job.masterPromptPath,
           ));
           console.log(
-            `[queue] processChatAIQueue(${jobId}): askQwenAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
+            `[queue] processChatAIQueue(${jobId}): askChatAIAboutReferenceVideo xong, tải được ${downloadedFiles.length} file.`,
           );
         } else {
           // Theo yêu cầu người dùng: đổi sang askQwen (Qwen qua OpenRouter,
@@ -2785,14 +2799,14 @@ async function processChatAIQueue(): Promise<void> {
           // thẳng nội dung file làm text, xem docstring askQwen), nên không
           // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
           // fileAccessError kiểu ChatGPT để mà fallback).
-          ({ downloadedFiles } = await askQwen(
+          ({ downloadedFiles } = await askChatAI(
             job.prompt,
             jobId,
             job.promptFileName,
             job.promptAttachmentPath,
           ));
           console.log(
-            `[queue] processChatAIQueue(${jobId}): askQwen xong, tải được ${downloadedFiles.length} file.`,
+            `[queue] processChatAIQueue(${jobId}): askChatAI xong, tải được ${downloadedFiles.length} file.`,
           );
         }
 
@@ -2856,7 +2870,8 @@ async function processChatAIQueue(): Promise<void> {
                 .catch(() => {});
             }
           }
-          job.generatedFolderName = job.remakeBaseName;
+          job.generatedFolderName =
+            job.generatedFolderNameOverride ?? job.remakeBaseName;
         }
 
         // Gửi NGAY file JSON storyboard vừa tải về cho user, TRƯỚC KHI bắt
