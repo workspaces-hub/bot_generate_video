@@ -2834,15 +2834,37 @@ async function processChatAIQueue(): Promise<void> {
             .map((f, i) => ({ f, i }))
             .filter(({ f }) => path.extname(f).toLowerCase() === ".json");
 
-          for (const { f: oldPath, i } of jsonFileIndexes) {
+          // SỬA (xác nhận qua lỗi thật, job ee876ee2-4806-4ede-8713-d1903a135338):
+          // trước đây chỉ giữ hậu tố đúng dạng "_tapN" — ChatGPT đặt tên tập
+          // kiểu khác ("_ep01", "_episode02"...) thì MỌI file bị đổi về CÙNG 1
+          // tên "<remakeBaseName>.json": file sau ghi đè file trước (mất tập)
+          // và downloadedFiles lặp cùng 1 path → runStoryboardPipelinePollo
+          // copy + xoá bản gốc ở lần đầu, lần sau copy lại path đó → ENOENT.
+          // Giờ: nhận diện số tập qua nhiều cách viết, chuẩn hoá về
+          // "_tap<N>_full"; file không rõ số tập mà job có nhiều file thì đánh
+          // số theo thứ tự; và KHÔNG BAO GIỜ để 2 file trùng tên đích.
+          // Job "Tạo kịch bản theo từng tập" (generatedFolderNameOverride) đã
+          // có sẵn tên đích đầy đủ trong remakeBaseName, không thêm hậu tố.
+          const usedTargets = new Set<string>();
+          for (const [order, { f: oldPath, i }] of jsonFileIndexes.entries()) {
             const dir = path.dirname(oldPath);
             const oldWithoutExt = path.basename(oldPath, ".json");
-            const tapSuffixMatch = oldWithoutExt.match(/(_tap\d+.*)$/i);
-            const tapSuffix = tapSuffixMatch ? tapSuffixMatch[1] : "";
-            const newPath = path.join(
-              dir,
-              `${job.remakeBaseName}${tapSuffix}.json`,
-            );
+            let suffix = "";
+            if (!job.generatedFolderNameOverride) {
+              const episodeMatch = oldWithoutExt.match(
+                /(?:_|-|\b)(?:tap|t[aậ]p|ep|episode)[_\-\s]*0*(\d+)/i,
+              );
+              if (episodeMatch) {
+                suffix = `_tap${Number(episodeMatch[1])}_full`;
+              } else if (jsonFileIndexes.length > 1) {
+                suffix = `_tap${order + 1}_full`;
+              }
+            }
+            let newPath = path.join(dir, `${job.remakeBaseName}${suffix}.json`);
+            for (let n = 2; usedTargets.has(newPath); n++) {
+              newPath = path.join(dir, `${job.remakeBaseName}${suffix}-${n}.json`);
+            }
+            usedTargets.add(newPath);
             if (newPath !== oldPath) {
               await fsp.rename(oldPath, newPath);
             }
@@ -3255,10 +3277,16 @@ async function runStoryboardPipelinePollo(
       ? await ensureGeneratedFolderForName(job.generatedFolderName)
       : null;
 
+  // Phòng thủ: cùng 1 path xuất hiện 2 lần → lần 2 copy file đã bị xoá ở
+  // lần 1 (xem unlink bên dưới) → ENOENT, làm hỏng cả job.
+  const seenPaths = new Set<string>();
   for (const filePath of downloadedFiles) {
     if (path.extname(filePath).toLowerCase() !== ".json") {
       continue;
     }
+    const resolvedPath = path.resolve(filePath);
+    if (seenPaths.has(resolvedPath)) continue;
+    seenPaths.add(resolvedPath);
     processedJsonCount++;
 
     let generatedFilePath: string;
