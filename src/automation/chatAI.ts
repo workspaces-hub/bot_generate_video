@@ -344,7 +344,7 @@ async function waitForComposerTilesToSettle(page: Page): Promise<void> {
 }
 
 /** Chặn lặp vô hạn nếu vì lý do gì đó ChatAI không bao giờ đính kèm file. */
-const MAX_TURNS_WAITING_FOR_FILE = 10;
+const MAX_TURNS_WAITING_FOR_FILE = 5;
 
 /**
  * SỬA (xác nhận qua debug thật, before-send.png job test-chatai-video-ref-
@@ -1139,6 +1139,31 @@ async function downloadAttachedFiles(
       const downloadPromise = page
         .waitForEvent("download", { timeout: 15_000 })
         .catch(() => null);
+      // SỬA (nghi vấn qua debug thật, job 39c0ef52-9fee-42c4-8c20-06140a1a6385
+      // VÀ 005ffccc-5530-4273-9467-cf8e0bb4e501 — cả 2 đều "panel không mở ra
+      // được" ở đúng tier resource-card): nút Download thật ở tier này
+      // (workModeResourceCardDownloadButtonLocator) mặc định "pointer-events:
+      // none; opacity: 0", chỉ chuyển "pointer-events: auto; opacity: 100"
+      // khi phần tử CHA (group/resource-row) ở trạng thái CSS :hover/:focus-
+      // within thật sự — click({force:true}) bỏ qua hẳn bước kiểm tra
+      // actionability (kể cả "receives pointer events") nên KHÔNG tự kích
+      // hoạt trạng thái :hover thật của trình duyệt trước khi bấm, khác hẳn
+      // thao tác chuột thật của người dùng (luôn di chuột qua rồi mới bấm).
+      // Chưa xác nhận chắc đây là nguyên nhân DUY NHẤT (click force vẫn có
+      // thể ăn trên phần tử ẩn), nhưng hover thật trước khi click là thao tác
+      // RẺ/AN TOÀN, giống hệt người dùng thật — thêm vào trước khi click để
+      // loại trừ khả năng này.
+      if (isResourceCardTier) {
+        await workModeResourceCardRowLocator(message)
+          .nth(i)
+          .hover({ timeout: 3000 })
+          .catch((err) => {
+            console.warn(
+              `[chatAI] downloadAttachedFiles (index ${i}): hover vào resource-row trước khi bấm Download lỗi (bỏ qua, vẫn thử click):`,
+              err instanceof Error ? err.message : err,
+            );
+          });
+      }
       // force: true — DOM thật xác nhận: nút "Download <filename>"
       // (aria-label bắt đầu bằng "Download ") đôi khi là 1 icon nhỏ chỉ hiện
       // khi hover, NẰM ĐÈ LÊN bởi chính thẻ "card" file (aria-label=tên file,
