@@ -2845,17 +2845,32 @@ async function processChatAIQueue(): Promise<void> {
           // số theo thứ tự; và KHÔNG BAO GIỜ để 2 file trùng tên đích.
           // Job "Tạo kịch bản theo từng tập" (generatedFolderNameOverride) đã
           // có sẵn tên đích đầy đủ trong remakeBaseName, không thêm hậu tố.
+          const episodePattern =
+            /(?:_|-|\b)(?:tap|t[aậ]p|ep|episode)[_\-\s]*0*(\d+)/i;
+          // Số tập của các file THAM CHIẾU đầu vào (đã sắp theo thứ tự tập ở
+          // handleGenerateScriptRequest) — vd tham chiếu "ep03_skyisland.json"
+          // thì bản remake phải là tập 3, không phải tập 1. Chỉ dùng khi số
+          // file đầu ra khớp số file tham chiếu (map 1-1 theo thứ tự).
+          const referenceEpisodes = job.referenceFileNames.map((name) => {
+            const m = path.basename(name, ".json").match(episodePattern);
+            return m ? Number(m[1]) : null;
+          });
+          const canMapToReferences =
+            referenceEpisodes.length === jsonFileIndexes.length;
           const usedTargets = new Set<string>();
           for (const [order, { f: oldPath, i }] of jsonFileIndexes.entries()) {
             const dir = path.dirname(oldPath);
             const oldWithoutExt = path.basename(oldPath, ".json");
             let suffix = "";
             if (!job.generatedFolderNameOverride) {
-              const episodeMatch = oldWithoutExt.match(
-                /(?:_|-|\b)(?:tap|t[aậ]p|ep|episode)[_\-\s]*0*(\d+)/i,
-              );
+              const episodeMatch = oldWithoutExt.match(episodePattern);
+              const referenceEpisode = canMapToReferences
+                ? referenceEpisodes[order]
+                : null;
               if (episodeMatch) {
                 suffix = `_tap${Number(episodeMatch[1])}_full`;
+              } else if (referenceEpisode !== null) {
+                suffix = `_tap${referenceEpisode}_full`;
               } else if (jsonFileIndexes.length > 1) {
                 suffix = `_tap${order + 1}_full`;
               }
