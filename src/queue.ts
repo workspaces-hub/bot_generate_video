@@ -3456,7 +3456,7 @@ async function runStoryboardPipelinePollo(
         },
       },
     );
-    await sleep(300); // tránh gửi quá nhanh nhiều tin nhắn xác nhận liên tiếp (Telegram lỗi)
+    await sleep(3000); // tránh gửi quá nhanh nhiều tin nhắn xác nhận liên tiếp (Telegram lỗi)
     confirmPromptsSent++;
   }
 
@@ -3584,7 +3584,7 @@ async function notifyStoryboardVideoResultComfy(
         `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
         { reply_parameters: { message_id: job.promptMessageId } },
       );
-      await sleep(300); // tránh gửi quá nhanh nhiều tin nhắn xác nhận liên tiếp (Telegram lỗi)
+      await sleep(3000); // tránh gửi quá nhanh nhiều tin nhắn xác nhận liên tiếp (Telegram lỗi)
     }
     if (job.mergeAfterSuccess && result.failed === 0) {
       const jsonFileName = path.basename(job.jsonPath, ".json");
