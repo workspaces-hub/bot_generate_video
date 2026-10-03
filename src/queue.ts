@@ -19,6 +19,7 @@ import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
 import { askChatAI, compareOriginalWithFinalVideo, askChatAIAboutReferenceVideo } from "./automation/chatAI";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
+import { publishFileTemporarily } from "./automation/qwenFileServer";
 import {
   getPolloBrowserContext,
   getPolloImageBrowserContext,
@@ -360,6 +361,12 @@ export interface StoryboardVideoComfyJob extends BaseJob {
   jsonPath: string;
   /** Cùng ý nghĩa với StoryboardVideoPolloJob.entryIds. */
   entryIds?: string[];
+  /**
+   * Theo yêu cầu người dùng (nút "Gen lại video lỗi"): gen xong mà KHÔNG có
+   * clip nào lỗi thì tự ghép toàn bộ video của file JSON (giống nút "Nối
+   * video") rồi gửi link cho user — xem notifyStoryboardVideoResultComfy.
+   */
+  mergeAfterSuccess?: boolean;
 }
 
 /**
@@ -1145,6 +1152,115 @@ function isComfyStoryboardJobQueued(jsonPath: string, entryId?: string): boolean
     if (!job.entryIds || job.entryIds.length === 0) return true;
     return job.entryIds.includes(entryId);
   });
+}
+
+/**
+ * Bước "Tạo video" (Comfy, cả file) sau khi ảnh xong không lỗi — theo
+ * config.confirmVideoGeneration: true thì gửi nút xác nhận như cũ, false thì
+ * đẩy thẳng job "storyboardVideoComfy" (bỏ qua nếu đã có job cả file cho CÙNG
+ * file đang chờ, chưa chạy).
+ */
+async function requestComfyVideoGeneration(job: BaseJob & { jsonPath: string }): Promise<void> {
+  if (!config.confirmVideoGeneration) {
+    const resolvedPath = path.resolve(job.jsonPath);
+    const alreadyPending = comfyVideoJobs.some(
+      (queued) =>
+        queued !== currentComfyVideoJob &&
+        path.resolve(queued.jsonPath) === resolvedPath &&
+        (!queued.entryIds || queued.entryIds.length === 0),
+    );
+    if (!alreadyPending) {
+      enqueueJob({
+        type: "storyboardVideoComfy",
+        chatId: job.chatId,
+        userId: job.userId,
+        prompt: "",
+        promptMessageId: job.promptMessageId,
+        jsonPath: job.jsonPath,
+      });
+    }
+    await telegram!.sendMessage(
+      job.chatId,
+      `▶️ Đã thêm vào hàng đợi tạo video (${path.basename(job.jsonPath)})`,
+      { reply_parameters: { message_id: job.promptMessageId } },
+    );
+    return;
+  }
+  const confirmId = createVideoConfirmationComfy(
+    job.chatId,
+    job.userId,
+    job.promptMessageId,
+    job.jsonPath,
+  );
+  await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
+    reply_parameters: { message_id: job.promptMessageId },
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "Tạo video",
+            callback_data: `confirmVideoComfy:${confirmId}`,
+          },
+        ],
+      ],
+    },
+  });
+}
+
+/**
+ * Nút "Gen lại video lỗi": đẩy job "storyboardVideoComfy" cả file kèm
+ * mergeAfterSuccess. Nếu đã có job cả file (không entryIds) cho CÙNG file
+ * đang CHỜ (chưa chạy) thì chỉ bật cờ trên job đó thay vì đẩy trùng — job
+ * đang chạy dở thì không tính (có thể đã đọc JSON trước khi các clip mới bị
+ * đánh dấu success=false), vẫn đẩy job mới.
+ */
+export function enqueueComfyRegenerateWithMerge(
+  base: Pick<StoryboardVideoComfyJob, "chatId" | "userId" | "promptMessageId" | "jsonPath">,
+): void {
+  const resolvedPath = path.resolve(base.jsonPath);
+  const pending = comfyVideoJobs.find(
+    (job) =>
+      job !== currentComfyVideoJob &&
+      path.resolve(job.jsonPath) === resolvedPath &&
+      (!job.entryIds || job.entryIds.length === 0),
+  );
+  if (pending) {
+    pending.mergeAfterSuccess = true;
+    persistComfyVideoJobs();
+    return;
+  }
+  enqueueJob({
+    type: "storyboardVideoComfy",
+    prompt: "",
+    ...base,
+    mergeAfterSuccess: true,
+  });
+}
+
+/**
+ * Ghép toàn bộ video của 1 file JSON theo thứ tự shot/clip (mergeVideosForFile)
+ * vào file tạm rồi publish ra QWEN_PUBLIC_BASE_URL (không cleanup — link xem
+ * lâu dài, xem chú thích nhánh "mergeVideo" trong handlers.ts). Dùng chung cho
+ * nút "Nối video" và tự ghép sau "Gen lại video lỗi".
+ */
+export async function mergeVideosAndPublish(
+  jsonPath: string,
+  publicBaseName: string,
+): Promise<{ url: string; videoCount: number }> {
+  const tempMergedPath = path.join(
+    config.debugDir,
+    `${publicBaseName}_merge_${randomUUID()}.mp4`,
+  );
+  try {
+    const { videoCount } = await mergeVideosForFile(jsonPath, tempMergedPath);
+    const { url } = await publishFileTemporarily(
+      tempMergedPath,
+      `${publicBaseName}.mp4`,
+    );
+    return { url, videoCount };
+  } finally {
+    await fsp.unlink(tempMergedPath).catch(() => {});
+  }
 }
 
 /**
@@ -2421,25 +2537,7 @@ async function processPolloImageQueue(): Promise<void> {
             // tránh lẫn 2 provider khác nhau ở cùng 1 bước xác nhận. Entry đã
             // auto-push xong ("success": true) sẽ tự bị generateVideosForFileComfyUI
             // bỏ qua, không sinh trùng.
-            const confirmId = createVideoConfirmationComfy(
-              job.chatId,
-              job.userId,
-              job.promptMessageId,
-              job.jsonPath,
-            );
-            await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
-              reply_parameters: { message_id: job.promptMessageId },
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "Tạo video",
-                      callback_data: `confirmVideoComfy:${confirmId}`,
-                    },
-                  ],
-                ],
-              },
-            });
+            await requestComfyVideoGeneration(job);
           }
 
           if (refResult.failed > 0) {
@@ -2491,25 +2589,7 @@ async function processPolloImageQueue(): Promise<void> {
             // tránh lẫn 2 provider khác nhau ở cùng 1 bước xác nhận. Entry đã
             // auto-push xong ("success": true) sẽ tự bị generateVideosForFileComfyUI
             // bỏ qua, không sinh trùng.
-            const confirmId = createVideoConfirmationComfy(
-              job.chatId,
-              job.userId,
-              job.promptMessageId,
-              job.jsonPath,
-            );
-            await telegram!.sendMessage(job.chatId, "Xác nhận tạo video", {
-              reply_parameters: { message_id: job.promptMessageId },
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "Tạo video",
-                      callback_data: `confirmVideoComfy:${confirmId}`,
-                    },
-                  ],
-                ],
-              },
-            });
+            await requestComfyVideoGeneration(job);
           }
 
           if (sceneResult.failed > 0) {
@@ -3329,6 +3409,26 @@ async function runStoryboardPipelinePollo(
       );
     });
 
+    // Theo yêu cầu người dùng: CONFIRM_IMAGE_GENERATION=false thì đẩy thẳng
+    // job tạo ảnh (Pollo), không gửi nút xác nhận.
+    if (!config.confirmImageGeneration) {
+      enqueueJob({
+        type: "storyboardImagesPollo",
+        chatId: job.chatId,
+        userId: job.userId,
+        prompt: "",
+        promptMessageId: job.promptMessageId,
+        jsonPath: generatedFilePath,
+      });
+      await telegram!.sendMessage(
+        job.chatId,
+        `▶️ Đã thêm vào hàng đợi tạo ảnh (${path.basename(generatedFilePath)})`,
+        { reply_parameters: { message_id: job.promptMessageId } },
+      );
+      confirmPromptsSent++;
+      continue;
+    }
+
     const confirmId = createImageConfirmationPollo(
       job.chatId,
       job.userId,
@@ -3414,6 +3514,7 @@ async function notifyStoryboardVideoResult(
     if (result.succeeded > 0 && result.failed === 0) {
       await telegram.sendMessage(job.chatId, `✅ Đã tạo video xong`, {
         reply_parameters: { message_id: job.promptMessageId },
+        ...promptMenu
       });
     }
   } catch (err) {
@@ -3450,6 +3551,7 @@ async function notifyStoryboardVideoResultPollo(
     if (result.succeeded > 0 && result.failed === 0) {
       await telegram.sendMessage(job.chatId, `✅ Đã tạo video xong`, {
         reply_parameters: { message_id: job.promptMessageId },
+        ...promptMenu
       });
     }
   } catch (err) {
@@ -3483,7 +3585,33 @@ async function notifyStoryboardVideoResultComfy(
       );
       
     }
-    if (result.succeeded > 0 && result.failed === 0) {
+    if (job.mergeAfterSuccess && result.failed === 0) {
+      const jsonFileName = path.basename(job.jsonPath, ".json");
+      try {
+        const { url, videoCount } = await mergeVideosAndPublish(
+          job.jsonPath,
+          jsonFileName,
+        );
+        await telegram.sendMessage(
+          job.chatId,
+          `✅ Đã gen lại xong và nối ${videoCount} video từ "${jsonFileName}", theo đúng thứ tự shot/clip.\n\n🔗 Xem tại: ${url}`,
+          {
+            reply_parameters: { message_id: job.promptMessageId },
+            ...promptMenu,
+          },
+        );
+      } catch (err) {
+        console.error(`[queue] Nối video "${jsonFileName}" sau khi gen lại thất bại:`, err);
+        await telegram.sendMessage(
+          job.chatId,
+          `⚠️ Đã gen lại xong nhưng nối video "${jsonFileName}" thất bại: ${err instanceof Error ? err.message : String(err)}`,
+          {
+            reply_parameters: { message_id: job.promptMessageId },
+            ...promptMenu,
+          },
+        );
+      }
+    } else if (result.succeeded > 0 && result.failed === 0) {
       await telegram.sendMessage(job.chatId, `✅ Đã tạo video xong`, {
         reply_parameters: { message_id: job.promptMessageId },
         ...promptMenu
@@ -3894,3 +4022,5 @@ async function notifyAdmins(err: unknown): Promise<void> {
   } catch (e) {}
 }
 
+
+// compareOriginalWithFinalVideo('test-prompt-1.mp4', 'storage/qwen-public-tmp/test-prompt-1.mp4','job').then(console.log)

@@ -844,6 +844,8 @@ async function sendMessage(
   // trả lời có thể đã lỗi thời, giống lần trước với nút Send).
   let neverGeneratingPollCount = 0;
   let stuckSnapshotTaken = false;
+  // Text khối trả lời mới ở lần poll trước khi đã thấy file — xem hasFileReady.
+  let fileReadyText: string | null = null;
   while (true) {
     const retryButton = await firstVisible(
       regenerateErrorButtonCandidates(page),
@@ -928,17 +930,35 @@ async function sendMessage(
       // kiện KHÔNG có workingIndicatorVisible (tool-call mới) mới cho phép
       // hasFileReady ghi đè — nếu còn shimmer/"Working for" thật, luôn ưu
       // tiên chờ tiếp, dù đã có file cũ.
+      // SỬA THÊM (xác nhận qua debug thật, job f1e0af5b-5a78-41a4-9a8e-bdb2362c58b9):
+      // ngay sau khi gửi lượt mới, khối trả lời MỚI chưa kịp render và
+      // "Working for" chưa hiện → .last() vẫn là tin nhắn của LƯỢT TRƯỚC (đã
+      // có file) → return ngay dù nút Stop còn hiện, text lượt mới còn đang
+      // stream. Chỉ chấp nhận file trong khối trả lời MỚI (count >
+      // messageCountBeforeSend), VÀ text khối đó không đổi giữa 2 lần poll
+      // liên tiếp (file card có thể hiện trước khi text stream xong).
       const latestMessages = assistantMessageLocator(page);
+      const isNewTurn =
+        (await latestMessages.count()) > messageCountBeforeSend;
       const hasFileReady =
-        (await latestMessages.count()) > 0 &&
+        isNewTurn &&
         (await fileAttachmentLocator(latestMessages.last())
           .count()
           .catch(() => 0)) > 0;
       if (hasFileReady && !workingIndicatorVisible) {
-        console.log(
-          "[chatAI] sendMessage: nút Stop vẫn hiện nhưng tin nhắn mới nhất đã có file đính kèm (và KHÔNG có tool-call mới nào đang chạy) — coi như xong (không chờ Stop biến mất).",
-        );
-        return;
+        const text = await latestMessages
+          .last()
+          .innerText()
+          .catch(() => "");
+        if (fileReadyText !== null && text === fileReadyText) {
+          console.log(
+            "[chatAI] sendMessage: nút Stop vẫn hiện nhưng tin nhắn trả lời MỚI đã có file đính kèm, text ổn định (và KHÔNG có tool-call mới nào đang chạy) — coi như xong (không chờ Stop biến mất).",
+          );
+          return;
+        }
+        fileReadyText = text;
+      } else {
+        fileReadyText = null;
       }
       hasSeenGenerating = true;
       // Xác nhận qua log lỗi thật (job 3b19ebae, model "High" reasoning

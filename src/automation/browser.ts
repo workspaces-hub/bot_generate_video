@@ -49,6 +49,10 @@ export function createBrowserContextManager(
   disableGpu = true,
 ): BrowserContextGetter {
   let contextPromise: Promise<BrowserContext> | null = null;
+  // Mốc lần gần nhất có nơi lấy context — xem close(): khoảng giữa lúc 1 nơi
+  // gọi getContext() và lúc nó kịp newPage() thì context.pages() vẫn = 0.
+  let lastAcquiredAt = 0;
+  const RECENT_ACQUIRE_GRACE_MS = 60_000;
 
   async function launchNewContext(): Promise<BrowserContext> {
     const browser = await launchRealChrome(
@@ -102,6 +106,7 @@ export function createBrowserContextManager(
     if (!contextPromise) {
       contextPromise = launchNewContext();
     }
+    lastAcquiredAt = Date.now();
     return contextPromise;
   }
 
@@ -109,6 +114,18 @@ export function createBrowserContextManager(
     if (!contextPromise) return;
     const current = contextPromise;
     const context = await current.catch(() => null);
+    // Xác nhận qua log thật ("browserContext.newPage: Target page, context or
+    // browser has been closed" ở compareOriginalWithFinalVideo ngay lúc bot
+    // khởi động): nơi A vừa getContext() (Chrome đang launch/vừa xong) nhưng
+    // CHƯA kịp newPage() → pages().length = 0 → hàng đợi B gọi close() lúc
+    // đó qua được check bên dưới và đóng mất Chrome của A. Bỏ qua đóng nếu
+    // vừa có nơi lấy context gần đây — lần close() sau sẽ đóng.
+    if (Date.now() - lastAcquiredAt < RECENT_ACQUIRE_GRACE_MS) {
+      console.warn(
+        `[${logLabel}] Bỏ qua đóng Chrome — vừa có nơi lấy context trong ${RECENT_ACQUIRE_GRACE_MS / 1000}s gần đây (có thể sắp mở page).`,
+      );
+      return;
+    }
     // SỬA (xác nhận qua debug thật, bật DEBUG=pw:browser,pw:channel — xem
     // lịch sử xoá close() ở processChatAIQueue): context này có thể ĐANG
     // ĐƯỢC DÙNG bởi 1 hàng đợi KHÁC tại đúng lúc hàng đợi gọi close() vừa

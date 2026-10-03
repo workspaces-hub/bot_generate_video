@@ -10,14 +10,12 @@ import {
 import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
 import { SCRIPT_SECTION_MARKER } from "../automation/chatAI";
 import { downloadTelegramMediaViaMTProto } from "../automation/telegramMTProto";
-import { publishFileTemporarily } from "../automation/qwenFileServer";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import {
   buildVideoTimeline,
   findVideoEntriesInTimeRange,
   generatedDirFor,
   generatedImageDirFor,
-  mergeVideosForFile,
   resolveNextRemakeVersion,
   sanitizeId,
   type StoryboardEntry,
@@ -31,8 +29,10 @@ import {
   confirmVideoGeneration,
   confirmVideoGenerationComfy,
   confirmVideoGenerationPollo,
+  enqueueComfyRegenerateWithMerge,
   enqueueJob,
   isStoryboardJobQueued,
+  mergeVideosAndPublish,
   stopAll,
 } from "../queue";
 import {
@@ -2265,16 +2265,7 @@ export function registerHandlers(bot: Telegraf): void {
           // QWEN_PUBLIC_BASE_URL rồi xoá file tạm ngay sau — nơi lưu trữ
           // DUY NHẤT của video ghép là config.qwenFileServeDir (qua
           // publishFileTemporarily), không còn bản nào trong generated/.
-          const tempMergedPath = path.join(
-            config.debugDir,
-            `${jsonFileName}_merge_${randomUUID()}.mp4`,
-          );
           try {
-            const { videoCount } = await mergeVideosForFile(
-              jsonPath,
-              tempMergedPath,
-            );
-
             // Gửi LINK xem trực tiếp thay vì gửi nguyên file qua Telegram —
             // publish video vừa ghép ra QWEN_PUBLIC_BASE_URL (qwenFileServer.ts,
             // CÙNG static file server đang dùng để OpenRouter/Qwen tải video,
@@ -2286,12 +2277,11 @@ export function registerHandlers(bot: Telegraf): void {
             // tức thời. File publish trong config.qwenFileServeDir sẽ tồn
             // tại vĩnh viễn (tới khi bị dọn tay) — đây là nơi lưu trữ DUY
             // NHẤT của video ghép (không còn bản nào trong generated/).
-            const { url } = await publishFileTemporarily(
-              tempMergedPath,
-              `${jsonFileName}.mp4`,
+            // (ghép + publish dùng chung mergeVideosAndPublish, queue.ts).
+            const { url, videoCount } = await mergeVideosAndPublish(
+              jsonPath,
+              jsonFileName,
             );
-
-            await fs.unlink(tempMergedPath).catch(() => {});
 
             await ctx.telegram
               .deleteMessage(chatId, statusMessage.message_id)
@@ -2307,7 +2297,6 @@ export function registerHandlers(bot: Telegraf): void {
             );
           } catch (err) {
             console.error(`[bot] Nối video "${jsonFileName}" thất bại:`, err);
-            await fs.unlink(tempMergedPath).catch(() => {});
             await ctx.telegram
               .deleteMessage(chatId, statusMessage.message_id)
               .catch(() => {});
@@ -2461,21 +2450,19 @@ export function registerHandlers(bot: Telegraf): void {
         }
       }
 
-      const jobType = storyboardJobTypeForEntryType("VIDEO");
-      if (jobType && !isStoryboardJobQueued(jobType, jsonPath)) {
-        enqueueJob({
-          type: jobType,
-          chatId: ctx.chat.id,
-          userId: ctx.from.id,
-          prompt: "",
-          promptMessageId: ctx.message.message_id,
-          jsonPath,
-        });
-      }
+      // Theo yêu cầu người dùng: gen xong không lỗi thì tự nối video của
+      // file JSON và gửi link (giống nút "Nối video") — xem
+      // mergeAfterSuccess/notifyStoryboardVideoResultComfy trong queue.ts.
+      enqueueComfyRegenerateWithMerge({
+        chatId: ctx.chat.id,
+        userId: ctx.from.id,
+        promptMessageId: ctx.message.message_id,
+        jsonPath,
+      });
 
       await ctx.reply(
         [
-          `✅ Đã đánh dấu gen lại ${matchedIds.size} clip trong "${jsonFileName}":`,
+          `✅ Đã đánh dấu gen lại ${matchedIds.size} clip trong "${jsonFileName}" (gen xong không lỗi sẽ tự nối video và gửi link):`,
           ...reportLines,
         ].join("\n"),
         {

@@ -247,6 +247,14 @@ export const config = {
   chatAIMaxEffort:
     (process.env.CHATAI_MAX_EFFORT ?? "false").toLowerCase() === "true",
 
+  // Theo yêu cầu người dùng: true (mặc định, giữ hành vi cũ) thì gửi nút xác
+  // nhận "Tạo ảnh"/"Tạo video" như trước; false thì đẩy thẳng job vào hàng đợi
+  // tạo ảnh/video, không cần bấm nút (xem queue.ts).
+  confirmImageGeneration:
+    (process.env.CONFIRM_IMAGE_GENERATION ?? "true").toLowerCase() !== "false",
+  confirmVideoGeneration:
+    (process.env.CONFIRM_VIDEO_GENERATION ?? "true").toLowerCase() !== "false",
+
   // Theo yêu cầu người dùng: chọn mode "Công việc"/Work hay "Trò chuyện"/Chat
   // cho askChatAI/askChatAIWithInlineContent (chatAI.ts) — CHATAI_MODE=work
   // thì chọn mode Work + model "GPT-6 Astra" (mức effort Medium, xem

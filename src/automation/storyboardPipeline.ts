@@ -438,7 +438,8 @@ async function saveEntries(
   entries: StoryboardEntry[],
 ): Promise<void> {
   const json = JSON.stringify(entries, null, 2);
-  const run = (): Promise<void> => fs.promises.writeFile(inputPath, json, "utf-8");
+  const run = (): Promise<void> =>
+    fs.promises.writeFile(inputPath, json, "utf-8");
   const result = saveEntriesLockTail.then(run, run);
   saveEntriesLockTail = result.then(
     () => {},
@@ -805,10 +806,7 @@ export async function ensureGeneratedFolder(
 export async function ensureGeneratedFolderForName(
   folderName: string,
 ): Promise<string> {
-  const outputDir = path.resolve(
-    "./storage/generated",
-    sanitizeId(folderName),
-  );
+  const outputDir = path.resolve("./storage/generated", sanitizeId(folderName));
   await archiveExistingGeneratedFiles(outputDir);
   await fs.promises.mkdir(outputDir, { recursive: true });
   return outputDir;
@@ -916,7 +914,13 @@ export async function generateReferenceImagesForFile(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
+      if (
+        e.type !== "CHARACTER" &&
+        e.type !== "LOCATION" &&
+        e.type !== "PROP" &&
+        e.type !== "OBJECT"
+      )
+        return false;
       // Chỉ gen khi "prompt" là string thật — entry thiếu id, hoặc prompt bị
       // sai kiểu (số/object/null từ JSON input lỗi) đều bỏ qua thay vì gọi
       // generateReferenceImage với giá trị không phải string.
@@ -1029,7 +1033,13 @@ export async function generateReferenceImagesForFileViaAIVideo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
+      if (
+        e.type !== "CHARACTER" &&
+        e.type !== "LOCATION" &&
+        e.type !== "PROP" &&
+        e.type !== "OBJECT"
+      )
+        return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -1173,7 +1183,13 @@ export async function generateReferenceImagesForFileViaPollo(
       e,
     ): e is Required<Pick<StoryboardEntry, "type" | "id" | "prompt">> &
       StoryboardEntry => {
-      if (e.type !== "CHARACTER" && e.type !== "LOCATION" && e.type !== "PROP" && e.type !== "OBJECT") return false;
+      if (
+        e.type !== "CHARACTER" &&
+        e.type !== "LOCATION" &&
+        e.type !== "PROP" &&
+        e.type !== "OBJECT"
+      )
+        return false;
       if (!e.id || typeof e.prompt !== "string" || !e.prompt) {
         return false;
       }
@@ -1222,7 +1238,9 @@ export async function generateReferenceImagesForFileViaPollo(
       try {
         const { filePaths: imagePaths, polloResultId } =
           await generateWithContentViolationRetry(entry, jobId, () =>
-            withPolloTaskSlot(() => generateImagePollo(entry.prompt!, {}, jobId)),
+            withPolloTaskSlot(() =>
+              generateImagePollo(entry.prompt!, {}, jobId),
+            ),
           );
         if (imagePaths.length === 0) {
           throw new Error("Không tạo được ảnh nào");
@@ -1693,11 +1711,7 @@ export async function verifyVideos(
     let previousVideoPath: string | undefined;
     if (shotClip) {
       const prev = lastVideoPathByShot.get(shotClip.shot);
-      if (
-        prev &&
-        prev.clip === shotClip.clip - 1 &&
-        fs.existsSync(prev.path)
-      ) {
+      if (prev && prev.clip === shotClip.clip - 1 && fs.existsSync(prev.path)) {
         previousVideoPath = prev.path;
       }
     }
@@ -1983,7 +1997,7 @@ export async function generateVideosForFileComfyUI(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
-
+  let i = 0;
   for (const entry of targets) {
     if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
@@ -2097,6 +2111,8 @@ export async function generateVideosForFileComfyUI(
       failedEntries.push({ id: entry.id, type: "VIDEO" });
     }
     await saveEntries(inputPath, entries);
+    i++;
+    if (i == 2) break;
   }
 
   return { outputDir, succeeded, failed, failedEntries };
