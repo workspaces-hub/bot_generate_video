@@ -1,5 +1,5 @@
 import os from "node:os";
-import { Telegraf } from "telegraf";
+import { Telegraf, Telegram, TelegramError } from "telegraf";
 import { config } from "./config";
 import { registerHandlers } from "./bot/handlers";
 import { startQwenFileServerEagerly } from "./automation/qwenFileServer";
@@ -50,6 +50,40 @@ process.on("uncaughtException", (err) => {
 // 10 phút — đủ dư cho cả trường hợp chậm nhất, vẫn hữu hạn (không dùng
 // Infinity) để 1 handler thật sự bị treo (bug khác) không giữ mãi vô thời hạn.
 const bot = new Telegraf(config.botToken, { handlerTimeout: 600_000 });
+
+// Xác nhận qua log thật ("TelegramError: 429: Too Many Requests: retry after
+// 42" ở runStoryboardPipelinePollo — nhiều tập liên tiếp gửi nhiều tin "Xác
+// nhận tạo ảnh"): Telegram giới hạn tốc độ gửi theo chat, 1 lần 429 làm hỏng
+// cả job ChatAI. Bọc callApi trên Telegram.prototype (ctx.telegram là
+// instance MỚI tạo cho từng update, khác bot.telegram — xem handleUpdate
+// trong telegraf.js) — gặp 429 thì chờ đúng retry_after rồi gửi lại.
+// Gửi file luôn dùng { source: <path> } nên gửi lại an toàn (đọc lại file).
+const TELEGRAM_429_MAX_RETRIES = 5;
+const TELEGRAM_429_MAX_WAIT_SEC = 300;
+const originalCallApi = Telegram.prototype.callApi;
+Telegram.prototype.callApi = async function (this: Telegram, method, payload, options) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await originalCallApi.call(this, method, payload, options);
+    } catch (err) {
+      const retryAfter =
+        err instanceof TelegramError && err.code === 429
+          ? (err.parameters?.retry_after ?? 5)
+          : null;
+      if (
+        retryAfter === null ||
+        attempt >= TELEGRAM_429_MAX_RETRIES ||
+        retryAfter > TELEGRAM_429_MAX_WAIT_SEC
+      ) {
+        throw err;
+      }
+      console.warn(
+        `[bot] Telegram 429 (${method}) — chờ ${retryAfter}s rồi gửi lại (lần ${attempt + 1}/${TELEGRAM_429_MAX_RETRIES}).`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, (retryAfter + 1) * 1000));
+    }
+  }
+} as typeof Telegram.prototype.callApi;
 
 // QUAN TRỌNG: Telegraf mặc định (không có bot.catch) sẽ "throw err" lại sau
 // khi console.error (xem handleError trong telegraf.js) — bất kỳ lỗi nào

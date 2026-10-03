@@ -1882,7 +1882,7 @@ const pendingImageConfirmationsPollo = new Map<
   PendingImageConfirmation
 >();
 
-function loadPersistedPendingImageConfirmationsPollo(): void {
+export function loadPersistedPendingImageConfirmationsPollo(): void {
   try {
     if (!fs.existsSync(PENDING_IMAGE_CONFIRMATIONS_POLLO_FILE)) return;
     const restored: [string, PendingImageConfirmation][] = JSON.parse(
@@ -4024,4 +4024,4 @@ async function notifyAdmins(err: unknown): Promise<void> {
 }
 
 
-compareOriginalWithFinalVideo('test-prompt-1.mp4', 'storage/qwen-public-tmp/test-prompt-1.mp4','job').then(console.log)
+// compareOriginalWithFinalVideo('test-prompt-1.mp4', 'storage/qwen-public-tmp/test-prompt-1.mp4','job').then(console.log)
