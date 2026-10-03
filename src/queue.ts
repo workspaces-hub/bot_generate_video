@@ -3456,6 +3456,7 @@ async function runStoryboardPipelinePollo(
         },
       },
     );
+    await sleep(300); // tránh gửi quá nhanh nhiều tin nhắn xác nhận liên tiếp (Telegram lỗi)
     confirmPromptsSent++;
   }
 
@@ -3583,7 +3584,7 @@ async function notifyStoryboardVideoResultComfy(
         `⚠️ Không tạo được video cho ${result.failedEntries.length} entry:\n${formatFailedEntries(result.failedEntries)}`,
         { reply_parameters: { message_id: job.promptMessageId } },
       );
-      
+      await sleep(300); // tránh gửi quá nhanh nhiều tin nhắn xác nhận liên tiếp (Telegram lỗi)
     }
     if (job.mergeAfterSuccess && result.failed === 0) {
       const jsonFileName = path.basename(job.jsonPath, ".json");
@@ -4023,4 +4024,4 @@ async function notifyAdmins(err: unknown): Promise<void> {
 }
 
 
-// compareOriginalWithFinalVideo('test-prompt-1.mp4', 'storage/qwen-public-tmp/test-prompt-1.mp4','job').then(console.log)
+compareOriginalWithFinalVideo('test-prompt-1.mp4', 'storage/qwen-public-tmp/test-prompt-1.mp4','job').then(console.log)
