@@ -164,6 +164,7 @@ function findValueForKey(
  * hạn effort/tool-calling ngầm dù chọn cùng model).
  */
 function attachModelInfoLogger(page: Page, jobId: string): void {
+  return
   let loggedModel = false;
   let loggedPlan = false;
   page.on("response", (response) => {
@@ -728,8 +729,8 @@ async function sendMessage(
   // quả sơ sài — vd prompt bị cắt/thiếu đoạn, attachment chưa hiện đầy đủ,
   // model/mode chọn sai... đều lộ rõ qua ảnh này. Đặt tên riêng theo jobId
   // (KHÔNG trùng snapshot "result" ở cuối) để không bị ghi đè.
-  await logModelAndReasoningState(page, jobId);
-  await captureSnapshot(page, `${jobId}_before-send`, "before-send");
+  // await logModelAndReasoningState(page, jobId);
+  // await captureSnapshot(page, `${jobId}_before-send`, "before-send");
 
   // ChatGPT điều hướng THẬT (từ "/" sang "/c/<id>") khi gửi tin nhắn ĐẦU
   // TIÊN của 1 hội thoại mới — xác nhận qua lỗi thật ("click action done —
@@ -2157,7 +2158,7 @@ export async function askChatAI(
     await selectChatAIModeFromConfig(page, jobId);
     // Theo yêu cầu người dùng: log model + trạng thái reasoning effort NGAY
     // SAU khi đã chọn mode — xem docstring logModelAndReasoningState.
-    await logModelAndReasoningState(page, jobId);
+    // await logModelAndReasoningState(page, jobId);
     // await captureSnapshot(page, jobId + "_askChatAI-before-send", "askChatAI-before-send", {
     //   includeHtml: true,
     // });

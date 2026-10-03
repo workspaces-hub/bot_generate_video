@@ -2885,10 +2885,10 @@ async function attemptGenerateVideo(
           .count()
           .catch(() => 0)) > 0;
       if (!composerStillAlive) {
-        await captureSnapshot(page, `${jobId}_ref-check`, "composer-gone", {
-          fullPage: true,
-          includeHtml: true,
-        });
+        // await captureSnapshot(page, `${jobId}_ref-check`, "composer-gone", {
+        //   fullPage: true,
+        //   includeHtml: true,
+        // });
         throw new GenerationError(
           "Trang đã rơi về bản marketing/SEO chưa hydrate NGAY GIỮA lúc đang upload/mention ảnh tham chiếu (mất hết composer/prompt) — JS chunks lỗi tải (CDN/mạng chập chờn hoặc anti-bot, KHÔNG chắc do proxy — xem docstring waitForGenerateButtonEnabled), không phải lỗi mention.",
         );
@@ -2938,9 +2938,9 @@ async function attemptGenerateVideo(
 console.log(
       `[pollo-video] Unlimited switch NGAY TRƯỚC khi bấm Generate: aria-checked="${unlimitedCheckedBeforeGenerate}"`,
     );
-    await captureSnapshot(page, `${jobId}_before-generate`, "before-generate", {
-      includeHtml: true,
-    });
+    // await captureSnapshot(page, `${jobId}_before-generate`, "before-generate", {
+    //   includeHtml: true,
+    // });
 
     const baseline = await captureResultBaseline(page);
     const generateButton = generateButtonLocator(page).first();
