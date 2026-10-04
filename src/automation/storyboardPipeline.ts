@@ -1997,7 +1997,6 @@ export async function generateVideosForFileComfyUI(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
-  let i = 0;
   for (const entry of targets) {
     if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
@@ -2111,8 +2110,6 @@ export async function generateVideosForFileComfyUI(
       failedEntries.push({ id: entry.id, type: "VIDEO" });
     }
     await saveEntries(inputPath, entries);
-    i++;
-    if (i == 2) break;
   }
 
   return { outputDir, succeeded, failed, failedEntries };
