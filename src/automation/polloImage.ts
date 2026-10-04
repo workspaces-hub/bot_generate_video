@@ -7,6 +7,7 @@ import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
   captureResultId,
   dismissBlockingOverlays,
+  dismissLateOverlays,
   enableUnlimitedIfNotEnoughCredit,
   ensureComposerReadyOrThrow,
   ensureUploadDialogOpen,
@@ -311,13 +312,11 @@ async function attemptGenerateImage(
     // generateVideo bên pollo.ts (job microdrama_co_dau_phan_boi_twist_prompt):
     // mạng/site chậm thoáng qua không nên làm rớt cả job.
     await gotoPolloWithRetry(page, url, { waitUntil: "domcontentloaded", timeout: 0 });
-    await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
-    await page.waitForTimeout(2000);
-    await dismissBlockingOverlays(page);
-
+    // Không chờ networkidle — xem chú thích cùng chỗ trong generateVideo (pollo.ts).
     await ensureComposerReadyOrThrow(page, url, "tạo ảnh");
+    await dismissLateOverlays(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 1000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {

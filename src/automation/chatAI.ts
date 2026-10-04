@@ -5,6 +5,7 @@ import { Telegram } from "telegraf";
 import { config } from "../config";
 import {
   dismissCloudflareChallengeIfPresent,
+  waitForChatAIComposer,
   getChatAIBrowserContext,
   getChatAIReviseBrowserContext,
 } from "./chatAIBrowser";
@@ -2129,7 +2130,7 @@ export async function askChatAI(
     });
     await dismissCloudflareChallengeIfPresent(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 5000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
@@ -2138,11 +2139,10 @@ export async function askChatAI(
       );
     }
 
-    // domcontentloaded fire sớm với SPA — chờ mạng rảnh trước khi tìm ô nhập
-    // prompt, cùng lý do đã áp dụng cho AIVideo (xem generateVideo).
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
+    // domcontentloaded fire sớm với SPA — chờ ô nhập prompt hiện ra (KHÔNG
+    // chờ networkidle: ChatGPT giữ kết nối nền nên lần nào cũng hết 30s, xem
+    // docstring waitForChatAIComposer).
+    await waitForChatAIComposer(page);
 
     // Theo yêu cầu người dùng: log tên tài khoản/gói (Plus/Pro/Free...) —
     // xem docstring logAccountInfo. Kết quả phân tích chênh lệch RẤT nhiều
@@ -2563,7 +2563,7 @@ async function attemptAskChatAIWithInlineContent(
     });
     await dismissCloudflareChallengeIfPresent(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 5000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
@@ -2572,9 +2572,7 @@ async function attemptAskChatAIWithInlineContent(
       );
     }
 
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
+    await waitForChatAIComposer(page);
 
     // Theo yêu cầu người dùng: log tài khoản/gói đang dùng — xem docstring
     // logAccountInfo (đối chiếu VPS vs local).
@@ -2770,7 +2768,7 @@ export async function verifyVideo(
     });
     await dismissCloudflareChallengeIfPresent(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 5000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
@@ -2779,9 +2777,7 @@ export async function verifyVideo(
       );
     }
 
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
+    await waitForChatAIComposer(page);
 
     // Theo yêu cầu người dùng: chọn Work/Chat + model theo config.chatAIMode
     // — cùng helper dùng chung với askChatAI/askChatAIWithInlineContent, xem
@@ -2911,7 +2907,7 @@ export async function compareOriginalWithFinalVideo(
     });
     await dismissCloudflareChallengeIfPresent(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 5000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
@@ -2920,9 +2916,7 @@ export async function compareOriginalWithFinalVideo(
       );
     }
 
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
+    await waitForChatAIComposer(page);
 
     await selectChatAIModeFromConfig(page, jobId);
 
@@ -3052,7 +3046,7 @@ export async function reviseGenerationPrompt(
     });
     await dismissCloudflareChallengeIfPresent(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 5000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
@@ -3061,9 +3055,7 @@ export async function reviseGenerationPrompt(
       );
     }
 
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
+    await waitForChatAIComposer(page);
 
     await selectWorkMode(page, jobId);
     if (config.chatAIMaxEffort) {

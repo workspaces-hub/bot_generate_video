@@ -116,8 +116,46 @@ async function isCloudflareChallengePage(page: Page): Promise<boolean> {
  * nên cookie cf_clearance sau khi pass 1 lần thường được giữ lại cho các job
  * sau trong CÙNG lần chạy bot.
  */
+/** Ô nhập prompt ChatGPT đã hiện — trang đã render xong, không bị Cloudflare chặn. */
+async function isChatAIComposerVisible(page: Page): Promise<boolean> {
+  return page
+    .locator('textarea[name="prompt-textarea"], #prompt-textarea')
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
+/**
+ * Chờ ô nhập prompt ChatGPT hiện ra (tối đa timeoutMs) — thay cho
+ * waitForLoadState("networkidle") trước đây: ChatGPT luôn giữ kết nối nền
+ * (SSE/websocket/telemetry) nên networkidle hầu như không bao giờ tới, lần
+ * nào cũng chờ HẾT 30s timeout dù trang đã dùng được từ lâu (theo phản ánh
+ * người dùng: "load url khá lâu mới bắt đầu upload và nhập prompt").
+ */
+export async function waitForChatAIComposer(
+  page: Page,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isChatAIComposerVisible(page)) return;
+    await page.waitForTimeout(500);
+  }
+  console.warn(
+    `[chatAI-browser] Chưa thấy ô nhập prompt sau ${timeoutMs / 1000}s — vẫn tiếp tục.`,
+  );
+}
+
 export async function dismissCloudflareChallengeIfPresent(page: Page): Promise<void> {
-  await page.waitForTimeout(10_000);
+  // Trước đây chờ CỨNG 10s mỗi lần mở trang (chờ challenge kịp hiện) — giờ
+  // poll: thấy ô nhập prompt (trang thật đã render, không có challenge) thì
+  // đi tiếp NGAY; thấy challenge thì xử lý như cũ; tối đa vẫn 10s.
+  const detectDeadline = Date.now() + 10_000;
+  while (Date.now() < detectDeadline) {
+    if (await isCloudflareChallengePage(page)) break;
+    if (await isChatAIComposerVisible(page)) return;
+    await page.waitForTimeout(500);
+  }
   if (!(await isCloudflareChallengePage(page))) return;
 
   console.warn(

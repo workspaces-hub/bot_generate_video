@@ -17,6 +17,8 @@ import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
 // theo yêu cầu người dùng dùng model khác để đánh giá, tránh thiên vị) so
 // sánh video gốc với video cuối cùng do pipeline tái tạo ra.
 import { askChatAI, compareOriginalWithFinalVideo, askChatAIAboutReferenceVideo } from "./automation/chatAI";
+import { askGemini, askGeminiAboutReferenceVideo } from "./automation/geminiAI";
+import { getGeminiBrowserContext } from "./automation/geminiBrowser";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import { publishFileTemporarily } from "./automation/qwenFileServer";
@@ -2862,7 +2864,12 @@ async function processChatAIQueue(): Promise<void> {
       try {
         let downloadedFiles: string[];
         if (job.type === "scriptReferenceVideo") {
-          ({ downloadedFiles } = await askChatAIAboutReferenceVideo(
+          // CHATAI_PROVIDER=gemini → dùng Gemini web (geminiAI.ts) thay ChatGPT.
+          const askReferenceVideo =
+            config.chatAIProvider === "gemini"
+              ? askGeminiAboutReferenceVideo
+              : askChatAIAboutReferenceVideo;
+          ({ downloadedFiles } = await askReferenceVideo(
             job.videoPath,
             jobId,
             job.videoFileName,
@@ -2879,7 +2886,8 @@ async function processChatAIQueue(): Promise<void> {
           // thẳng nội dung file làm text, xem docstring askQwen), nên không
           // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
           // fileAccessError kiểu ChatGPT để mà fallback).
-          ({ downloadedFiles } = await askChatAI(
+          const ask = config.chatAIProvider === "gemini" ? askGemini : askChatAI;
+          ({ downloadedFiles } = await ask(
             job.prompt,
             jobId,
             job.promptFileName,
@@ -3232,6 +3240,7 @@ async function processChatAIQueue(): Promise<void> {
     // này) đang mở page xử lý dở, sẽ tự bỏ qua lần đóng này thay vì đóng mù
     // làm gãy job đang chạy ở hàng đợi kia.
     await getChatAIBrowserContext.close();
+    await getGeminiBrowserContext.close();
   } finally {
     chatAIProcessing = false;
   }

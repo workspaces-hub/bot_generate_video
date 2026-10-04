@@ -87,6 +87,24 @@ export function resolveDownloadExtension(
 }
 
 /**
+ * Sau khi composer sẵn sàng, quét + đóng overlay liên tục trong windowMs (mặc
+ * định 5s) — theo yêu cầu người dùng: banner/modal của pollo.ai có thể hiện
+ * MUỘN vài giây sau khi trang hydrate (đã bỏ chờ networkidle), quét 1 lần
+ * duy nhất sẽ lỡ mất popup hiện muộn rồi chặn thao tác sau đó.
+ */
+export async function dismissLateOverlays(
+  page: Page,
+  windowMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + windowMs;
+  while (true) {
+    await dismissBlockingOverlays(page).catch(() => {});
+    if (Date.now() >= deadline) return;
+    await page.waitForTimeout(Math.min(1000, deadline - Date.now()));
+  }
+}
+
+/**
  * Đóng popup che composer (chặn click, vd "... subtree intercepts pointer
  * events") — best-effort, không throw nếu không có gì để đóng.
  *
@@ -2221,8 +2239,11 @@ async function findRecentVideoViaCreatePage(
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
-    await checkPage
-      .waitForLoadState("networkidle", { timeout: 20_000 })
+    // Chờ thẻ video đầu tiên của lịch sử hiện ra thay vì networkidle (tối đa
+    // 20s như cũ — tài khoản chưa có video nào thì vẫn chờ hết 20s).
+    await resultVideoLocator(checkPage)
+      .first()
+      .waitFor({ state: "attached", timeout: 20_000 })
       .catch(() => {});
     await checkPage.waitForTimeout(1500);
     await dismissBlockingOverlays(checkPage);
@@ -2501,15 +2522,16 @@ async function attemptGenerateVideo(
       waitUntil: "domcontentloaded",
       timeout: 0,
     });
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
-    await page.waitForTimeout(2000);
-    await dismissBlockingOverlays(page);
-
+    // KHÔNG chờ networkidle nữa (theo phản ánh người dùng: mở trang lâu mới
+    // bắt đầu upload/nhập prompt) — pollo.ai giữ kết nối nền nên networkidle
+    // thường chờ hết 30s; ensureComposerReadyOrThrow đã tự chờ đúng tín hiệu
+    // thật (editor ProseMirror hydrate xong). Đóng overlay SAU khi composer
+    // sẵn sàng (banner/modal chỉ hiện sau khi trang hydrate, có thể muộn tới
+    // vài giây — xem dismissLateOverlays).
     await ensureComposerReadyOrThrow(page, url, "tạo video");
+    await dismissLateOverlays(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 5000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {

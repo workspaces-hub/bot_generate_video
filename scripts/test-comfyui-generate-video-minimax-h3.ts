@@ -25,12 +25,33 @@ async function main(): Promise<void> {
   // const [refImagePathsArg, prompt, durationArg, aspectRatioArg] =
   //   process.argv.slice(2);
   const referenceImagePaths: string[] = [
-    "./storage/generated/6_babies-WESTERN_MASTER_PROMPT/CHAR_ADRIAN_CROSS.png",
-    "./storage/generated/6_babies-WESTERN_MASTER_PROMPT/CHAR_EXECUTIVE_SECRETARY.png",
-    "./storage/generated/6_babies-WESTERN_MASTER_PROMPT/LOC_CROSS_DOMINION_EXECUTIVE_CORRIDOR.png",
+    "./storage/generated/test_audio_remake_5/LOC_HARROW_SALE_PAVILION.png",
+    "./storage/generated/test_audio_remake_5/CHAR_EVAN_HARROW.png",
   ]
-  const prompt = "<Picture 1> is Adrian Cross (CHAR_ADRIAN_CROSS), the exact character identity reference. <Picture 2> is Adrian's executive secretary (CHAR_EXECUTIVE_SECRETARY), the exact character identity reference. <Picture 3> is Cross Dominion executive corridor (LOC_CROSS_DOMINION_EXECUTIVE_CORRIDOR), the exact location/environment reference. Preserve all referenced character identities, environment layouts and prop/object designs exactly. Premium stylized 3D animated cinematic film, fully CGI characters, props and locations, unmistakably stylized Western feature-animation geometry, Western/European-descended human cast, Western Manhattan cultural world, NOT live-action, NOT photoreal humans, NOT real objects. Duration exactly 5 seconds, 9:16 vertical, 24 fps, virtual CGI cinematography. ENGLISH-ONLY SPOKEN AUDIO; use the exact English dialogue and voice-over written below; no language switching. ACTIVE CHARACTERS: Adrian Cross, the executive secretary. No other person may become hero-readable or receive camera focus. The clip opens with this exact physical state: Adrian Cross (CHAR_ADRIAN_CROSS) is walking east along the corridor centerline 4.5 m from the elevator bank with right foot in forward stride, torso and gaze still aimed east; the executive secretary (CHAR_EXECUTIVE_SECRETARY) walks 0.6 m to his north side and half a step behind, tablet held at mid-torso, turning her eyes toward Adrian while keeping pace; the office door remains 11.5 m farther east. Across the clip: The secretary turns her eyes toward Adrian while keeping pace and says immediately, SPEECH START 0.05 s: \"Mr. Cross, there's a very large package in your office.\" Adrian does not stop; he flicks his eyes north toward her while his head stays aimed east. SPEECH START 2.8 s: Adrian asks, \"Sender?\" The secretary answers at 3.35 s, \"No name.\" Adrian's brows tighten and jaw sets as they approach the office door. Use alternating 65 mm clean singles with one 0.5 s tablet insert; SFX FOOTSTEPS and TABLET TAP. SPEECH END 4.0 s. MAXIMUM AUDIO GAP 0.2 s. AUDIO BRIDGE: footsteps continue to the doorway. The clip ends on this exact physical state: Adrian Cross (CHAR_ADRIAN_CROSS) has reached a point 1.2 m west of his office door on the east wall, still on the corridor centerline, shoulders squared east; the executive secretary (CHAR_EXECUTIVE_SECRETARY) is 0.6 m north of him and half a step behind, tablet held against her torso; Adrian's brows are drawn together and both are about to enter the office. Preserve exact face, hair, body proportions, current costume state, prop count and ownership, location geography, lighting direction, eyelines, screen direction and natural stylized physics. Keep at least 90% of visual time in ECU/CU/MCU unless the described geography insert is necessary. Use controlled high-energy microdrama editing, meaningful hard cuts only, no slow motion, no empty reaction tail.  No jump cuts, no hidden scene change, no extra events, no modern elements."
-  const durationArg = '5'
+  const prompt = `<Picture 1> is LOC_HARROW_SALE_PAVILION. <Picture 2> is CHAR_EVAN_HARROW.
+
+CLIP SPEC: 5s, 9:16 vertical, 24fps, live-action photorealistic Western microdrama.
+
+IMPORTANT AUDIO REQUIREMENT: THIS SCENE HAS CONTINUOUS CINEMATIC BACKGROUND MUSIC WHILE THE CHARACTER SPEAKS. DO NOT GENERATE A VOICE-ONLY SOUNDTRACK.
+
+BACKGROUND SCORE: A clearly audible dramatic instrumental score is playing continuously from the very first frame to the very last frame. The score uses a repeating mid-register hammered-dulcimer motif, sustained cello harmony, and a steady frame-drum pulse. The music remains obviously audible during all dialogue.
+
+CAST AND VOICE: SPEECH MODE: SPOKEN_DIALOGUE. SINGLE VISIBLE CHARACTER: CHAR_EVAN_HARROW. SOLE VOICE OWNER: CHAR_EVAN_HARROW. No other human voice.
+
+START FRAME: Clean medium close-up of Evan alone against pale oak and cream stone. Background music is already clearly playing before he starts speaking.
+
+ACTION AND PERFORMANCE: Evan holds a brief recognition beat, then speaks in stunned disbelief. His eyes narrow and his voice hardens into accusation.
+
+SPEECH: EXACT SPOKEN TEXT: "You vanished over Red Hollow on that horse. Who the hell are you?"
+
+AUDIO: Keep BOTH Evan's dialogue AND the cinematic instrumental score audible at the same time. Do not generate dialogue alone. Do not stop, mute, or remove the music during speech. The instrumental motif must remain clearly heard underneath every word. Dialogue is intelligible, but music stays strong and obvious.
+
+As Evan becomes accusatory, strengthen the frame-drum pulse and cello tension slightly.
+
+ROOM SOUND: extremely low room tone only.
+
+END FRAME: Evan finishes with jaw set while the same instrumental score is still clearly playing.`
+  const durationArg = '6'
   const aspectRatioArg = '9:16'
 
 
@@ -64,10 +85,10 @@ async function main(): Promise<void> {
 
   const jobId = `test-comfyui-minimax-h3-${randomUUID()}`;
   console.log("Bắt đầu generate video qua ComfyUI (MiniMax H3), jobId:", jobId);
-  console.log("referenceImagePaths:", referenceImagePaths);
-  console.log("prompt:", prompt);
-  console.log("duration:", duration, "giây");
-  console.log("aspectRatio:", aspectRatio ?? "(mặc định 16:9)");
+  // console.log("referenceImagePaths:", referenceImagePaths);
+  // console.log("prompt:", prompt);
+  // console.log("duration:", duration, "giây");
+  // console.log("aspectRatio:", aspectRatio ?? "(mặc định 16:9)");
 
   const t0 = Date.now();
   const { filePath, promptId } = await generateVideoComfyMiniMaxH3(

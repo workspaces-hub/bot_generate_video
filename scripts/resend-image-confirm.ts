@@ -59,7 +59,8 @@ function parseArgs(argv: string[]) {
   }
   const chatId = Number(names.shift());
   if (!Number.isFinite(chatId) || names.length === 0) usage();
-  if (!Number.isInteger(replyTo) || replyTo <= 0 || !Number.isFinite(userId)) usage();
+  if (!Number.isInteger(replyTo) || replyTo <= 0 || !Number.isFinite(userId))
+    usage();
   return { chatId, names, replyTo, userId };
 }
 
@@ -69,7 +70,10 @@ function isFile(p: string): boolean {
 
 /** Trả về danh sách path JSON khớp <tên> (rỗng nếu không thấy). */
 function resolveJsonPaths(rawName: string): string[] {
-  const name = rawName.trim().replace(/ +/g, "_").replace(/\.json$/i, "");
+  const name = rawName
+    .trim()
+    .replace(/ +/g, "_")
+    .replace(/\.json$/i, "");
 
   // Rule 1: storage/generated/<file>/<file>.json
   const direct = path.join(GENERATED_ROOT, name, `${name}.json`);
@@ -112,59 +116,40 @@ function writePending(entries: [string, PendingImageConfirmation][]): void {
 
 async function main(): Promise<void> {
   loadPersistedPendingImageConfirmationsPollo();
-  const { chatId, names, replyTo, userId } = {
-      "names": ["bat_mi_khoi_nghiep_full.json"],
-      "chatId": -1002155511871,
-      "userId": 7201084840,
-      "replyTo": 1534
-    }
-
-  const jsonPaths: string[] = [];
-  for (const name of names) {
-    const found = resolveJsonPaths(name);
-    if (found.length === 0) {
-      console.warn(`⚠️ Không tìm thấy "${name}" trong storage/generated/ — bỏ qua.`);
-    }
-    for (const p of found) if (!jsonPaths.includes(p)) jsonPaths.push(p);
-  }
-  if (jsonPaths.length === 0) {
-    console.error("Không có file JSON nào để gửi.");
-    process.exit(1);
-  }
 
   const telegram = new Telegram(config.botToken);
   let sent = 0;
-  for (const jsonPath of jsonPaths) {
-    const confirmId = randomUUID();
-    // Ghi lượt xác nhận TRƯỚC khi gửi — gửi xong mới ghi thì user có thể bấm
-    // nút trước khi file kịp có id.
-    writePending([
-      ...readPending(),
-      [confirmId, { jsonPath, chatId, userId, promptMessageId: replyTo }],
-    ]);
-    try {
-      await telegram.sendMessage(
-        chatId,
-        `Xác nhận tạo ảnh (${path.basename(jsonPath)})`,
-        {
-          reply_parameters: { message_id: replyTo },
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "Tạo ảnh", callback_data: `confirmImagesPollo:${confirmId}` }],
+  const confirmId = "43598954-34d8-44a3-adbc-767250e1c927";
+  // Ghi lượt xác nhận TRƯỚC khi gửi — gửi xong mới ghi thì user có thể bấm
+  // nút trước khi file kịp có id.
+  try {
+    await telegram.sendMessage(
+      -1004356603432,
+      `Xác nhận tạo ảnh (matewithdragonlord_remake_1_tap10_full.json)`,
+      {
+        reply_parameters: { message_id: 3626 },
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "Tạo ảnh",
+                callback_data: `confirmImagesPollo:${confirmId}`,
+              },
             ],
-          },
+          ],
         },
-      );
-      sent++;
-      console.log(`✅ Đã gửi: ${jsonPath}`);
-    } catch (err) {
-      writePending(readPending().filter(([id]) => id !== confirmId));
-      console.error(`❌ Gửi thất bại: ${jsonPath} —`, err instanceof Error ? err.message : err);
-    }
-    // Giãn cách tránh Telegram 429 khi gửi nhiều tập liên tiếp vào cùng chat.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+      },
+    );
+    sent++;
+  } catch (err) {
+    writePending(readPending().filter(([id]) => id !== confirmId));
+    console.error(
+      `❌ Gửi thất bại:  —`,
+      err instanceof Error ? err.message : err,
+    );
   }
-  console.log(`Xong: ${sent}/${jsonPaths.length} tin xác nhận.`);
+  // Giãn cách tránh Telegram 429 khi gửi nhiều tập liên tiếp vào cùng chat.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
 }
 
 main().catch((err) => {

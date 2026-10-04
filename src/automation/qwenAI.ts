@@ -100,7 +100,7 @@ function extractJsonFromText(text: string): string | null {
  * thực sự trả về, rồi merge nhất quán theo đúng kiểu đó cho các lượt sau —
  * hỗ trợ CẢ 2 kiểu mà không cần biết trước đang dùng master prompt nào.
  */
-interface MergeState {
+export interface MergeState {
   kind: "unset" | "array" | "object";
   items: unknown[];
   obj: Record<string, unknown>;
@@ -114,7 +114,7 @@ interface MergeState {
 // phải — processChatAIQueue chỉ gọi ĐÚNG 1 trong 2 hàm cho mỗi job). Bỏ tên
 // hàm cụ thể, chỉ giữ "[qwenAI]" + jobId — vẫn đối chiếu được với dòng log
 // của đúng hàm đang gọi (in ngay trước/sau) nhờ CÙNG jobId.
-function mergeJsonPartAuto(
+export function mergeJsonPartAuto(
   state: MergeState,
   part: unknown,
   jobId: string,
@@ -463,7 +463,7 @@ async function callOpenRouterWithProviderRetry(
  * đâu (điểm neo: số item/id cuối cho array, hoặc danh sách key + số phần tử
  * mỗi key cho object) khi tiếp tục 1 kết quả dài, không lặp/không bỏ sót.
  */
-function describeMergeState(state: MergeState): string {
+export function describeMergeState(state: MergeState): string {
   if (state.kind === "unset") return "(chưa có dữ liệu nào)";
 
   if (state.kind === "array") {

@@ -4,6 +4,7 @@ import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import {
   dismissCloudflareChallengeIfPresent,
+  waitForChatAIComposer,
   getChatAIImageBrowserContext,
 } from "./chatAIBrowser";
 import { gotoChatAIWithRetry } from "./chatAI";
@@ -383,7 +384,7 @@ async function attemptGenerateReferenceImage(
     });
     await dismissCloudflareChallengeIfPresent(page);
 
-    const signedOut = await firstVisible(signInIndicatorCandidates(page), 3000)
+    const signedOut = await firstVisible(signInIndicatorCandidates(page), 5000)
       .then(() => true)
       .catch(() => false);
     if (signedOut) {
@@ -394,9 +395,7 @@ async function attemptGenerateReferenceImage(
 
     // domcontentloaded fire sớm với SPA — chờ mạng rảnh trước khi tìm ô nhập
     // prompt, cùng lý do đã áp dụng cho AIVideo (xem generateVideo).
-    await page
-      .waitForLoadState("networkidle", { timeout: 30_000 })
-      .catch(() => {});
+    await waitForChatAIComposer(page);
 
     if (refImagePaths && refImagePaths.length > 0) {
       await uploadReferenceImages(page, refImagePaths);

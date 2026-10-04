@@ -103,6 +103,30 @@ export const config = {
     process.env.CHATAI_RESULTS_DIR ?? "./storage/chatai-results",
   ),
 
+  // Theo yêu cầu người dùng: clone askChatAI sang Gemini web (gemini.google.com,
+  // Playwright — xem geminiAI.ts). CHATAI_PROVIDER=gemini thì job ChatAI
+  // (prompt/file, "Tạo kịch bản mới") và "Tham chiếu video"/"Tham chiếu kịch
+  // bản" dùng Gemini thay ChatGPT; mặc định "chatgpt" (giữ hành vi cũ).
+  chatAIProvider:
+    (process.env.CHATAI_PROVIDER ?? "chatgpt").toLowerCase() === "gemini"
+      ? ("gemini" as const)
+      : ("chatgpt" as const),
+  geminiBaseUrl: process.env.GEMINI_BASE_URL ?? "https://gemini.google.com/app",
+  // Session RIÊNG cho tài khoản Google dùng Gemini — đăng nhập bằng
+  // `npm run login-gemini` (scripts/login-gemini.ts).
+  geminiStorageStatePath: path.resolve(
+    process.env.GEMINI_STORAGE_STATE_PATH ?? "./storage/gemini-session.json",
+  ),
+  // Text (khớp 1 phần, không phân biệt hoa thường) của model cần chọn trong
+  // menu chọn model của Gemini, vd "2.5 Pro" / "Pro". Để trống = giữ model
+  // đang mặc định của tài khoản.
+  geminiModelLabel: process.env.GEMINI_MODEL_LABEL ?? "",
+  // Số lượt tối đa gom JSON nhiều phần (mỗi lượt Gemini gửi 1 phần + marker
+  // "ĐÃ HOÀN THÀNH" ở lượt cuối, xem askGemini).
+  geminiMaxTurns: Number(process.env.GEMINI_MAX_TURNS ?? 20),
+  // Có đi qua proxy như ChatGPT không (mặc định có — dùng chung PROXY_*).
+  geminiUseProxy: (process.env.GEMINI_USE_PROXY ?? "true").toLowerCase() !== "false",
+
   headless: (process.env.HEADLESS ?? "false").toLowerCase() === "true",
   generationTimeoutMs: Number(process.env.GENERATION_TIMEOUT_MS ?? 10800_000),
 
