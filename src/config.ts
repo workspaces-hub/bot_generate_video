@@ -134,6 +134,9 @@ export const config = {
   // gửi NHIỀU item nhất có thể trong mức này. Đo thật: khối 10–21k ký tự vẫn
   // hợp lệ; khối hỏng xảy ra cả ở 500 ký tự (do mất ngữ cảnh, không phải độ dài).
   geminiMaxCharsPerTurn: Number(process.env.GEMINI_MAX_CHARS_PER_TURN ?? 20000),
+  // Số lần thử upload file (video/kịch bản) lên Gemini trước khi chịu thua —
+  // chờ tăng dần giữa các lần (xem uploadFileWithRetry trong geminiAI.ts).
+  geminiUploadMaxAttempts: Number(process.env.GEMINI_UPLOAD_MAX_ATTEMPTS ?? 2),
   // Có đi qua proxy như ChatGPT không (mặc định có — dùng chung PROXY_*).
   geminiUseProxy: (process.env.GEMINI_USE_PROXY ?? "true").toLowerCase() !== "false",
 

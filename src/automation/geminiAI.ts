@@ -196,6 +196,54 @@ export async function uploadFile(page: Page, filePath: string, jobId: string): P
 }
 
 /** Nội dung snackbar Gemini đang hiện (nếu có) — dùng kèm thông báo lỗi. */
+/**
+ * Theo yêu cầu người dùng: upload file (video) lên Gemini lỗi thì THỬ LẠI và
+ * chờ tới khi upload thành công — tối đa config.geminiUploadMaxAttempts lần,
+ * chờ tăng dần 15s → 30s → 60s → 120s (tối đa) giữa các lần. Từ lần thử thứ 3
+ * tải lại trang Gemini trước (trang có thể kẹt menu/hộp chọn file) — chỉ dùng
+ * ở lượt ĐẦU (chưa có hội thoại nào bị mất khi tải lại).
+ */
+export async function uploadFileWithRetry(
+  page: Page,
+  filePath: string,
+  jobId: string,
+  options: { allowReload?: boolean } = {},
+): Promise<void> {
+  const maxAttempts = Math.max(1, config.geminiUploadMaxAttempts);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await uploadFile(page, filePath, jobId);
+      if (attempt > 1) {
+        console.log(`[gemini] (${jobId}) upload "${path.basename(filePath)}" thành công ở lần thử ${attempt}.`);
+      }
+      return;
+    } catch (err) {
+      if (attempt >= maxAttempts) {
+        throw new GeminiError(
+          `Upload "${path.basename(filePath)}" lên Gemini thất bại sau ${maxAttempts} lần thử: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const delayMs = Math.min(120_000, 15_000 * 2 ** (attempt - 1));
+      console.warn(
+        `[gemini] (${jobId}) upload "${path.basename(filePath)}" lỗi (lần ${attempt}/${maxAttempts}) — chờ ${delayMs / 1000}s rồi thử lại:`,
+        err instanceof Error ? err.message : err,
+      );
+      await captureSnapshot(page, `${jobId}_gemini-upload-fail-${attempt}`, `gemini-upload-fail-${attempt}`, {
+        fullPage: false,
+      });
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(delayMs);
+      if (options.allowReload && attempt >= 2) {
+        console.warn(`[gemini] (${jobId}) tải lại trang Gemini trước khi upload lại.`);
+        await page
+          .goto(config.geminiBaseUrl, { waitUntil: "domcontentloaded", timeout: 60_000 })
+          .catch(() => {});
+        await firstVisible(geminiPromptInputCandidates(page), 30_000).catch(() => {});
+      }
+    }
+  }
+}
+
 export async function readSnackbarText(page: Page): Promise<string> {
   const texts = await geminiSnackbarLocator(page)
     .allInnerTexts()
@@ -319,7 +367,7 @@ export async function sendAndWait(
         fullPage: false,
       });
       for (const filePath of options.attachmentPaths!.slice(present)) {
-        await uploadFile(page, filePath, jobId);
+        await uploadFileWithRetry(page, filePath, jobId);
       }
     }
   }
@@ -351,20 +399,45 @@ export async function sendAndWait(
     snackbarTexts.size > 0 ? ` Gemini báo: "${[...snackbarTexts].join(" | ")}"` : "";
 
   let sent = false;
-  for (let attempt = 0; attempt < 2 && !sent; attempt++) {
-    if (attempt === 1) {
-      console.warn(`[gemini] (${jobId}) bấm Gửi nhưng tin chưa đi — thử nhấn Enter.`);
-      await input.focus().catch(() => {});
-      await page.keyboard.press("Enter");
-    }
-    const sentDeadline = Date.now() + 20_000;
+  if (expectedAttachments > 0) {
+    // SỬA (xác nhận qua debug thật, job d84a63fa-b38c-426f-b9ae-c8cef484ee42):
+    // lượt có file đính kèm KHÔNG được nhấn Enter dự phòng — bấm Gửi "không ăn"
+    // lúc Gemini còn xử lý video (nút trông vẫn bật), nhưng Enter thì GỬI ĐƯỢC
+    // và chỉ gửi CHỮ, BỎ video → Gemini đòi video suốt 8 lượt rồi job lỗi.
+    // Thay vào đó cứ 5s bấm lại nút Gửi tới khi tin đi (tối đa UPLOAD_TIMEOUT_MS).
+    const sentDeadline = Date.now() + UPLOAD_TIMEOUT_MS;
+    let nextLogAt = Date.now() + 30_000;
     while (Date.now() < sentDeadline) {
-      await collectSnackbar();
-      if (await hasMessageBeenSent(page, input, countBefore)) {
-        sent = true;
-        break;
+      for (let i = 0; i < 5 && !sent; i++) {
+        await collectSnackbar();
+        sent = await hasMessageBeenSent(page, input, countBefore);
+        if (!sent) await page.waitForTimeout(1000);
       }
-      await page.waitForTimeout(1000);
+      if (sent) break;
+      if (Date.now() >= nextLogAt) {
+        nextLogAt += 30_000;
+        console.log(
+          `[gemini] (${jobId}) tin có file đính kèm chưa gửi được (Gemini có thể còn xử lý file) — bấm Gửi lại...`,
+        );
+      }
+      await sendButton.click({ timeout: 10_000 }).catch(() => {});
+    }
+  } else {
+    for (let attempt = 0; attempt < 2 && !sent; attempt++) {
+      if (attempt === 1) {
+        console.warn(`[gemini] (${jobId}) bấm Gửi nhưng tin chưa đi — thử nhấn Enter.`);
+        await input.focus().catch(() => {});
+        await page.keyboard.press("Enter");
+      }
+      const sentDeadline = Date.now() + 20_000;
+      while (Date.now() < sentDeadline) {
+        await collectSnackbar();
+        if (await hasMessageBeenSent(page, input, countBefore)) {
+          sent = true;
+          break;
+        }
+        await page.waitForTimeout(1000);
+      }
     }
   }
   if (!sent) {
@@ -453,6 +526,25 @@ export async function sendAndWait(
         console.log(
           `[gemini] (${jobId}) Gemini đã trả lời xong (${responseText.length} ký tự${images.total > 0 ? `, ${images.loaded}/${images.total} ảnh` : ""}, ${Math.round((Date.now() - start) / 1000)}s).`,
         );
+        if (expectedAttachments > 0) {
+          // Tin vừa gửi có THỰC SỰ kèm file không (job d84a63fa: gửi đi chỉ
+          // có chữ). Chờ Gemini trả lời xong mới báo để lần gửi lại không đụng
+          // lượt trả lời đang chạy.
+          const sentFiles = await page
+            .locator("user-query")
+            .last()
+            .locator("user-query-file-preview")
+            .count()
+            .catch(() => 0);
+          if (sentFiles < expectedAttachments) {
+            await captureSnapshot(page, `${jobId}_gemini-attachment-dropped`, "gemini-attachment-dropped", {
+              fullPage: false,
+            });
+            throw new GeminiSendRejectedError(
+              `Tin đã gửi nhưng Gemini chỉ nhận ${sentFiles}/${expectedAttachments} file đính kèm — gửi lại kèm file.`,
+            );
+          }
+        }
         return latest;
       }
     }
@@ -771,7 +863,11 @@ export async function askGemini(
     ? path.basename(promptFileName, path.extname(promptFileName))
     : jobId;
   try {
-    if (attachmentPath) await uploadFile(page, attachmentPath, jobId);
+    // Upload lỗi thì thử lại tới khi thành công (xem uploadFileWithRetry) —
+    // lượt đầu nên được phép tải lại trang.
+    if (attachmentPath) {
+      await uploadFileWithRetry(page, attachmentPath, jobId, { allowReload: true });
+    }
     // await captureSnapshot(page, `${jobId}_gemini-before-send`, "gemini-before-send");
 
     const state: MergeState = { kind: "unset", items: [], obj: {} };
