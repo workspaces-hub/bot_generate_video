@@ -18,7 +18,10 @@ import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
 // sánh video gốc với video cuối cùng do pipeline tái tạo ra.
 import { askChatAI, compareOriginalWithFinalVideo, askChatAIAboutReferenceVideo } from "./automation/chatAI";
 import { askGemini, askGeminiAboutReferenceVideo } from "./automation/geminiAI";
-import { getGeminiBrowserContext } from "./automation/geminiBrowser";
+import {
+  getGeminiBrowserContext,
+  getGeminiImageBrowserContext,
+} from "./automation/geminiBrowser";
 import { getImageBrowserContext, getVideoBrowserContext } from "./automation/browser";
 import { getChatAIBrowserContext } from "./automation/chatAIBrowser";
 import { publishFileTemporarily } from "./automation/qwenFileServer";
@@ -2632,6 +2635,9 @@ async function processPolloImageQueue(): Promise<void> {
       }
     }
     await getPolloImageBrowserContext.close();
+    // Fallback tạo ảnh bằng Gemini (POLLO_IMAGE_FALLBACK=gemini) chạy Chrome
+    // riêng — đóng luôn khi hàng đợi ảnh rỗng (no-op nếu chưa từng mở).
+    await getGeminiImageBrowserContext.close();
   } finally {
     polloImageProcessing = false;
   }

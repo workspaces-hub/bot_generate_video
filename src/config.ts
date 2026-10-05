@@ -137,6 +137,15 @@ export const config = {
   // Có đi qua proxy như ChatGPT không (mặc định có — dùng chung PROXY_*).
   geminiUseProxy: (process.env.GEMINI_USE_PROXY ?? "true").toLowerCase() !== "false",
 
+  // Theo yêu cầu người dùng: gen ảnh bằng pollo.ai lỗi thì fallback sang
+  // provider nào (xem generateImage trong polloImage.ts): "gpt" (mặc định,
+  // ChatGPT — generateReferenceImage), "gemini" (generateImageGemini), "none"
+  // (không fallback, báo lỗi luôn).
+  polloImageFallback: (() => {
+    const value = (process.env.POLLO_IMAGE_FALLBACK ?? "gpt").toLowerCase();
+    return value === "gemini" || value === "none" ? value : "gpt";
+  })() as "gpt" | "gemini" | "none",
+
   headless: (process.env.HEADLESS ?? "false").toLowerCase() === "true",
   generationTimeoutMs: Number(process.env.GENERATION_TIMEOUT_MS ?? 10800_000),
 

@@ -22,7 +22,7 @@ export interface BrowserContextGetter {
    * dễ chạm ngưỡng crash "Target crashed"/OOM, xem launch.ts). Best-effort —
    * lỗi khi đóng (nếu có) chỉ log, không throw.
    */
-  close: () => Promise<void>;
+  close: (options?: { force?: boolean }) => Promise<void>;
   /**
    * Ghi session (cookies/localStorage) của context hiện tại ngược lại vào
    * storageStatePath — chỉ có tác dụng khi bật persistSession (xem
@@ -169,7 +169,7 @@ export function createBrowserContextManager(
     return contextPromise;
   }
 
-  async function close(): Promise<void> {
+  async function close(options?: { force?: boolean }): Promise<void> {
     if (!contextPromise) return;
     const current = contextPromise;
     const context = await current.catch(() => null);
@@ -179,7 +179,9 @@ export function createBrowserContextManager(
     // CHƯA kịp newPage() → pages().length = 0 → hàng đợi B gọi close() lúc
     // đó qua được check bên dưới và đóng mất Chrome của A. Bỏ qua đóng nếu
     // vừa có nơi lấy context gần đây — lần close() sau sẽ đóng.
-    if (Date.now() - lastAcquiredAt < RECENT_ACQUIRE_GRACE_MS) {
+    // force: nơi gọi CHẮC CHẮN vừa dùng xong (vd tạo ảnh Gemini — đóng ngay
+    // sau mỗi ảnh) — bỏ qua khoảng chờ này, vẫn giữ kiểm tra page đang mở.
+    if (!options?.force && Date.now() - lastAcquiredAt < RECENT_ACQUIRE_GRACE_MS) {
       console.warn(
         `[${logLabel}] Bỏ qua đóng Chrome — vừa có nơi lấy context trong ${RECENT_ACQUIRE_GRACE_MS / 1000}s gần đây (có thể sắp mở page).`,
       );

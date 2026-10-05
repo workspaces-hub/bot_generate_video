@@ -213,7 +213,35 @@ async function isSendButtonEnabled(button: Locator): Promise<boolean> {
 }
 
 /** Gõ prompt, bấm Gửi, chờ Gemini trả lời XONG. Trả về locator lượt trả lời mới. */
-export async function sendAndWait(page: Page, text: string, jobId: string): Promise<Locator> {
+export interface SendAndWaitOptions {
+  /**
+   * Bật debug: cứ mỗi debugEveryMs ms trong lúc chờ Gemini trả lời thì log
+   * trạng thái + chụp snapshot storage/debug/<jobId>_<debugLabel>-<giây>s
+   * (theo yêu cầu người dùng — dùng cho tạo ảnh, xem geminiImage.ts).
+   */
+  debugEveryMs?: number;
+  debugLabel?: string;
+}
+
+/** Số ảnh do Gemini tạo trong 1 lượt trả lời (tổng / đã tải xong). */
+async function countGeneratedImages(response: Locator): Promise<{ total: number; loaded: number }> {
+  return response
+    .locator("generated-image img")
+    .evaluateAll((els) => ({
+      total: els.length,
+      loaded: els.filter(
+        (el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 64,
+      ).length,
+    }))
+    .catch(() => ({ total: 0, loaded: 0 }));
+}
+
+export async function sendAndWait(
+  page: Page,
+  text: string,
+  jobId: string,
+  options: SendAndWaitOptions = {},
+): Promise<Locator> {
   const responses = geminiResponseLocator(page);
   const countBefore = await responses.count();
 
@@ -262,6 +290,19 @@ export async function sendAndWait(page: Page, text: string, jobId: string): Prom
   const start = Date.now();
   let lastText = "";
   let stableSince: number | null = null;
+  let nextDebugAt = options.debugEveryMs ? start + options.debugEveryMs : Infinity;
+  const debug = async (status: string): Promise<void> => {
+    if (Date.now() < nextDebugAt) return;
+    nextDebugAt += options.debugEveryMs!;
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    console.log(`[gemini] (${jobId}) [debug ${elapsed}s] ${status}`);
+    await captureSnapshot(
+      page,
+      `${jobId}_${options.debugLabel ?? "gemini-wait"}-${elapsed}s`,
+      `${options.debugLabel ?? "gemini-wait"}-${elapsed}s`,
+      { fullPage: false },
+    );
+  };
   while (true) {
     if (Date.now() - start > RESPONSE_TIMEOUT_MS) {
       throw new GeminiError(
@@ -274,6 +315,7 @@ export async function sendAndWait(page: Page, text: string, jobId: string): Prom
       .isVisible()
       .catch(() => false);
     if (count <= countBefore) {
+      await debug(`chờ Gemini bắt đầu trả lời — nút Stop: ${stopVisible ? "có" : "không"}, số lượt trả lời: ${count}.`);
       if (!stopVisible && Date.now() - start > RESPONSE_START_TIMEOUT_MS) {
         throw new GeminiError(
           "Đã bấm Gửi nhưng Gemini không bắt đầu trả lời (không có lượt trả lời mới, không có nút Stop).",
@@ -283,17 +325,29 @@ export async function sendAndWait(page: Page, text: string, jobId: string): Prom
       continue;
     }
     const latest = responses.last();
-    const text = await geminiResponseContentLocator(latest)
+    const responseText = await geminiResponseContentLocator(latest)
       .innerText()
       .catch(() => "");
-    if (stopVisible || text !== lastText || text.trim() === "") {
+    // Câu trả lời CHỈ có ảnh (tạo ảnh) thì phần chữ có thể rỗng — tính cả số
+    // ảnh đã tải xong vào "nội dung", nếu không vòng chờ sẽ coi là chưa có gì
+    // và đợi tới hết RESPONSE_TIMEOUT_MS.
+    const images = await countGeneratedImages(latest);
+    const text = `${responseText}${images.total > 0 ? `\n[ảnh ${images.loaded}/${images.total}]` : ""}`;
+    await debug(
+      `đang chờ trả lời xong — nút Stop: ${stopVisible ? "có" : "không"}, chữ: ${responseText.length} ký tự, ảnh: ${images.loaded}/${images.total} đã tải, ổn định: ${stableSince === null ? "chưa" : `${Math.round((Date.now() - stableSince) / 1000)}s`}.`,
+    );
+    if (
+      stopVisible ||
+      text !== lastText ||
+      (responseText.trim() === "" && images.loaded === 0)
+    ) {
       stableSince = null;
       lastText = text;
     } else {
       stableSince ??= Date.now();
       if (Date.now() - stableSince >= RESPONSE_STABLE_MS) {
         console.log(
-          `[gemini] (${jobId}) Gemini đã trả lời xong (${text.length} ký tự, ${Math.round((Date.now() - start) / 1000)}s).`,
+          `[gemini] (${jobId}) Gemini đã trả lời xong (${responseText.length} ký tự${images.total > 0 ? `, ${images.loaded}/${images.total} ảnh` : ""}, ${Math.round((Date.now() - start) / 1000)}s).`,
         );
         return latest;
       }

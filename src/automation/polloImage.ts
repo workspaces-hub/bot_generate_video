@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { config } from "../config";
 import { generateReferenceImage } from "./chatAIImage";
+import { generateImageGemini } from "./geminiImage";
 import { getPolloImageBrowserContext } from "./polloBrowser";
 import {
   captureResultId,
@@ -273,22 +274,33 @@ export async function generateImage(
       // = jobId, cùng quy ước đặt tên tạm mà attemptGenerateImage đang dùng
       // (xem downloadViaMediaUrl) — caller (storyboardPipeline.ts) tự rename/
       // move file này vào đúng chỗ, không quan tâm tên tạm ở bước này.
+      // Provider fallback chọn qua POLLO_IMAGE_FALLBACK (gpt/gemini/none) —
+      // xem config.polloImageFallback.
+      const fallbackProvider = config.polloImageFallback;
+      if (fallbackProvider === "none") throw err;
+      const fallbackLabel =
+        fallbackProvider === "gemini"
+          ? "Gemini (generateImageGemini)"
+          : "ChatAI (generateReferenceImage)";
       console.warn(
-        `[polloImage] generateImage lỗi trên pollo.ai — fallback sang ChatAI (generateReferenceImage):`,
+        `[polloImage] generateImage lỗi trên pollo.ai — fallback sang ${fallbackLabel}:`,
         err instanceof Error ? err.message : err,
       );
       try {
-        const fallback = await generateReferenceImage(
-          prompt,
-          config.downloadDir,
-          jobId,
-          jobId,
-          options.referenceImagePaths,
-        );
+        const fallback =
+          fallbackProvider === "gemini"
+            ? await generateImageGemini(prompt, jobId, options.referenceImagePaths)
+            : await generateReferenceImage(
+                prompt,
+                config.downloadDir,
+                jobId,
+                jobId,
+                options.referenceImagePaths,
+              );
         return { filePaths: [fallback.path], polloResultId: null };
       } catch (fallbackErr) {
         console.error(
-          `[polloImage] Fallback ChatAI (generateReferenceImage) cũng lỗi:`,
+          `[polloImage] Fallback ${fallbackLabel} cũng lỗi:`,
           fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
         );
         // Ném lại lỗi GỐC của pollo.ai (không phải lỗi fallback) — đây mới
