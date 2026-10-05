@@ -3045,6 +3045,143 @@ async function finalizeReferenceVideoBatch(batch: ReferenceVideoBatch): Promise<
 }
 
 /**
+ * Theo yêu cầu người dùng: "Tạo kịch bản mới" nhiều tập bằng Gemini làm
+ * TUẦN TỰ từng tập, mỗi tập 1 cuộc chat Gemini MỚI. Xác nhận qua debug thật
+ * (hội thoại gemini-05dee6b46cfb2d1f, 19 tập trong 1 cuộc chat): chỉ ~3 tập
+ * đầu đúng, từ tập 04 Gemini mất ngữ cảnh file đính kèm và BỊA nội dung không
+ * liên quan ("VID_001", "character_scene", "desert dunes"...).
+ *
+ * Mỗi tập dùng đúng định dạng nút "Tạo kịch bản theo từng tập"
+ * (prompt_generate_script_episode.txt): TẬP GỐC (khung kỹ thuật) = file tham
+ * chiếu của tập đó; TẬP MỚI TRƯỚC ĐÓ = JSON tập mới vừa tạo ngay trước (nối
+ * mạch truyện + ledger); thêm SỔ TÀI SẢN tích luỹ từ MỌI tập đã tạo (nhân
+ * vật/bối cảnh xuất hiện ở tập xa hơn tập ngay trước vẫn giữ đúng mô tả).
+ * Kết quả đặt tên sẵn "<remakeBaseName>_tap<N>_full.json" — bước đổi tên/hậu
+ * kiểm Asset Ledger/gửi nút phía sau (processChatAIQueue) dùng lại nguyên vẹn.
+ *
+ * Tập lỗi thì thử lại 1 lần (cuộc chat mới); vẫn lỗi thì DỪNG (các tập sau
+ * cần tập này để nối mạch) — trả về các tập đã xong, báo user tập còn thiếu.
+ */
+async function generateScriptEpisodesWithGemini(
+  job: GenerateScriptJob,
+  jobId: string,
+): Promise<string[]> {
+  const masterPrompt = await fsp.readFile(config.promptGenerateScriptEpisode, "utf-8");
+  const total = job.referenceFileNames.length;
+  const outputs: string[] = [];
+  const ledger = new Map<string, unknown>();
+  let previousOutput: { name: string; content: string } | null = null;
+
+  const updateStatus = async (text: string): Promise<void> => {
+    if (!telegram || !job.statusMessageId) return;
+    await telegram
+      .editMessageText(job.chatId, job.statusMessageId, undefined, text)
+      .catch(() => {});
+  };
+
+  for (const [index, referenceName] of job.referenceFileNames.entries()) {
+    const tap = index + 1;
+    const targetName = `${job.remakeBaseName}_tap${tap}_full.json`;
+    const referenceContent = await fsp.readFile(
+      path.join(config.chatAIResultsDir, path.basename(referenceName)),
+      "utf-8",
+    );
+    const sections = [
+      masterPrompt,
+      `\n\n## VỊ TRÍ TRONG BỘ PHIM\nĐây là TẬP ${tap}/${total} của bộ phim mới.`,
+      `\n\n## TẬP GỐC (khung kỹ thuật): ${referenceName}\n\`\`\`json\n${referenceContent}\n\`\`\``,
+    ];
+    if (previousOutput) {
+      sections.push(
+        `\n\n## TẬP MỚI TRƯỚC ĐÓ (tiếp nối/ledger): ${previousOutput.name}\n\`\`\`json\n${previousOutput.content}\n\`\`\``,
+      );
+    }
+    if (ledger.size > 0) {
+      sections.push(
+        `\n\n## SỔ TÀI SẢN ĐÃ CHỐT TỪ CÁC TẬP TRƯỚC (dùng lại ĐÚNG id + mô tả nếu thực thể xuất hiện lại)\n\`\`\`json\n${JSON.stringify([...ledger.values()], null, 2)}\n\`\`\``,
+      );
+    }
+    await fsp.mkdir(config.uploadsDir, { recursive: true });
+    const attachmentPath = path.join(
+      config.uploadsDir,
+      `${randomUUID()}-generate-script-tap${tap}.txt`,
+    );
+    await fsp.writeFile(attachmentPath, sections.join(""), "utf-8");
+
+    let savedPath: string | null = null;
+    try {
+      for (let attempt = 1; attempt <= 2 && !savedPath; attempt++) {
+        await updateStatus(
+          `⏳ Đang tạo tập ${tap}/${total} (Gemini, tham chiếu ${referenceName})${attempt > 1 ? ` — thử lại lần ${attempt}` : ""}...`,
+        );
+        try {
+          const { downloadedFiles } = await askGemini(
+            job.prompt,
+            `${jobId}-tap${tap}`,
+            targetName,
+            attachmentPath,
+          );
+          const produced = downloadedFiles.find((f) => f.toLowerCase().endsWith(".json"));
+          if (!produced) throw new Error("Gemini không trả về file JSON nào.");
+          const target = path.join(config.chatAIResultsDir, targetName);
+          if (path.resolve(produced) !== path.resolve(target)) {
+            await fsp.rename(produced, target);
+          }
+          for (const extra of downloadedFiles) {
+            if (path.resolve(extra) !== path.resolve(produced)) {
+              await fsp.unlink(extra).catch(() => {});
+            }
+          }
+          savedPath = target;
+        } catch (err) {
+          console.error(
+            `[queue] generateScriptEpisodesWithGemini(${jobId}): tập ${tap}/${total} lỗi (lần ${attempt}/2):`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    } finally {
+      await fsp.unlink(attachmentPath).catch(() => {});
+    }
+
+    if (!savedPath) {
+      if (telegram) {
+        await telegram
+          .sendMessage(
+            job.chatId,
+            `⚠️ Không tạo được tập ${tap}/${total} (tham chiếu ${referenceName}) bằng Gemini — dừng lại (các tập sau cần tập này để nối mạch truyện). Đã xong ${outputs.length}/${total} tập; có thể làm tiếp bằng nút "Tạo kịch bản theo từng tập".`,
+            { reply_parameters: { message_id: job.promptMessageId } },
+          )
+          .catch(() => {});
+      }
+      break;
+    }
+
+    outputs.push(savedPath);
+    const content = await fsp.readFile(savedPath, "utf-8");
+    previousOutput = { name: targetName, content };
+    try {
+      const entries = JSON.parse(content);
+      for (const entry of Array.isArray(entries) ? entries : []) {
+        if (entry && typeof entry === "object" && entry.type !== "VIDEO" && entry.id && !ledger.has(entry.id)) {
+          ledger.set(entry.id, entry);
+        }
+      }
+    } catch {
+      // JSON lạ — bỏ qua phần ledger, vẫn giữ file.
+    }
+    console.log(
+      `[queue] generateScriptEpisodesWithGemini(${jobId}): xong tập ${tap}/${total} → ${targetName} (ledger ${ledger.size} tài sản).`,
+    );
+  }
+
+  if (outputs.length === 0) {
+    throw new Error("Gemini không tạo được tập nào.");
+  }
+  return outputs;
+}
+
+/**
  * Theo yêu cầu người dùng: "Tạo kịch bản mới" KHÔNG được làm mất file JSON
  * tham chiếu gốc trong config.chatAIResultsDir. File kết quả ChatGPT/Gemini
  * cũng lưu vào CHÍNH thư mục đó — trùng tên với file tham chiếu (model hay đặt
@@ -3133,8 +3270,16 @@ async function processChatAIQueue(): Promise<void> {
             job.type === "generateScript" && !job.generatedFolderNameOverride
               ? job.referenceFileNames.length
               : undefined;
-          ({ downloadedFiles } =
-            config.chatAIProvider === "gemini"
+          // Gemini + "Tạo kịch bản mới" NHIỀU tập: làm TUẦN TỰ từng tập, mỗi
+          // tập 1 cuộc chat mới — xem generateScriptEpisodesWithGemini.
+          const geminiSequential =
+            config.chatAIProvider === "gemini" &&
+            job.type === "generateScript" &&
+            !job.generatedFolderNameOverride &&
+            job.referenceFileNames.length > 1;
+          ({ downloadedFiles } = geminiSequential && job.type === "generateScript"
+            ? { downloadedFiles: await generateScriptEpisodesWithGemini(job, jobId) }
+            : config.chatAIProvider === "gemini"
               ? await askGemini(
                   job.prompt,
                   jobId,

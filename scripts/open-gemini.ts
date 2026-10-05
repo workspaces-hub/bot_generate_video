@@ -1,11 +1,12 @@
 /**
  * Mở 1 hội thoại Gemini (URL in trong log "[gemini] askGemini(...): url hội
  * thoại: ...") bằng session của bot (GEMINI_STORAGE_STATE_PATH) để xem lại.
- * Cuộn lên tải HẾT các lượt cũ, lưu toàn bộ HTML + ảnh chụp vào storage/debug/,
- * in tóm tắt từng lượt (số khối code, JSON hợp lệ hay hỏng, có "ĐÃ HOÀN THÀNH"
- * không). Trình duyệt giữ mở tới khi nhấn Enter (chạy với HEADLESS=false để xem).
+ * Mở xong CHỜ nhấn Enter (để xem/thao tác trên trình duyệt trước, chạy với
+ * HEADLESS=false) — nhấn Enter mới cuộn lên tải HẾT các lượt cũ, in tóm tắt
+ * từng lượt (số khối code, JSON hợp lệ hay hỏng, có "ĐÃ HOÀN THÀNH" không),
+ * lưu toàn bộ HTML + ảnh chụp vào storage/debug/ rồi đóng. --no-wait: lưu ngay.
  *
- *   npx tsx scripts/open-gemini.ts <url> [--no-wait]
+ *   npx tsx scripts/open-gemini.ts [url] [--no-wait]
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -15,7 +16,10 @@ import { getGeminiBrowserContext } from "../src/automation/geminiBrowser";
 const DONE_MARKER = "ĐÃ HOÀN THÀNH";
 
 async function main(): Promise<void> {
-  const url = 'https://gemini.google.com/u/9/app/82105d327ab826a4?hl=vi';
+  // URL truyền qua tham số; không truyền thì dùng URL mặc định gán sẵn.
+  const url =
+    process.argv.slice(2).find((arg) => /^https?:\/\//.test(arg)) ??
+    'https://gemini.google.com/u/9/app/05dee6b46cfb2d1f';
   const noWait = process.argv.includes("--no-wait");
   if (!url || !/^https?:\/\//.test(url)) {
     console.error("Cách dùng: npx tsx scripts/open-gemini.ts <url hội thoại Gemini> [--no-wait]");
@@ -30,6 +34,16 @@ async function main(): Promise<void> {
     .first()
     .waitFor({ state: "attached", timeout: 60_000 })
     .catch(() => console.warn("⚠️ Chưa thấy lượt trả lời nào (sai URL/chưa đăng nhập?)."));
+
+  // Theo yêu cầu người dùng: nhấn Enter mới lưu debug (xem/thao tác trên
+  // trình duyệt trước).
+  if (!noWait) {
+    console.log("\nĐã mở hội thoại — nhấn Enter để lưu debug (HTML + ảnh chụp + tóm tắt) rồi đóng...");
+    await new Promise<void>((resolve) => {
+      process.stdin.resume();
+      process.stdin.once("data", () => resolve());
+    });
+  }
 
   // Hội thoại dài chỉ render các lượt gần nhất — cuộn lên đầu tới khi số lượt
   // không tăng nữa để tải hết.
@@ -90,14 +104,6 @@ async function main(): Promise<void> {
   fs.writeFileSync(htmlPath, await page.content(), "utf-8");
   await page.screenshot({ path: pngPath }).catch(() => {});
   console.log(`\nĐã lưu HTML: ${htmlPath}\nẢnh chụp: ${pngPath}`);
-
-  if (!noWait) {
-    console.log("\nTrình duyệt đang mở — nhấn Enter để đóng...");
-    await new Promise<void>((resolve) => {
-      process.stdin.resume();
-      process.stdin.once("data", () => resolve());
-    });
-  }
   await page.close().catch(() => {});
   await getGeminiBrowserContext.close();
   process.exit(0);

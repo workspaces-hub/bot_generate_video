@@ -850,6 +850,14 @@ function buildFirstTurnInstruction(): string {
 interface ItemSchema {
   video?: string[];
   asset?: string[];
+  /**
+   * Giá trị "type" hợp lệ (đọc từ "type":"CHARACTER"|"LOCATION" và
+   * "type":"VIDEO" trong dòng schema). Xác nhận qua lỗi thật (hội thoại
+   * gemini-05dee6b46cfb2d1f): Gemini mất ngữ cảnh, bịa item
+   * {"type":"character_scene","ref":"scene_01",...} — đủ 5 khoá nên lọt qua
+   * nếu chỉ kiểm tra tên khoá.
+   */
+  types?: string[];
 }
 
 function extractItemSchema(text: string): ItemSchema | null {
@@ -859,6 +867,10 @@ function extractItemSchema(text: string): ItemSchema | null {
     const topLevel = m[2].replace(/\[[^\]]*\]/g, "[]");
     const keys = [...new Set([...topLevel.matchAll(/"([A-Za-z_]+)"\s*:/g)].map((k) => k[1]))];
     if (keys.length === 0) continue;
+    const typeValues = topLevel.match(/"type"\s*:\s*((?:"[A-Z_]+"\s*\|?\s*)+)/)?.[1];
+    for (const t of typeValues?.matchAll(/"([A-Z_]+)"/g) ?? []) {
+      schema.types = [...new Set([...(schema.types ?? []), t[1]])];
+    }
     if (m[1].toUpperCase() === "VIDEO") schema.video = keys;
     else schema.asset = keys;
   }
@@ -870,8 +882,18 @@ function missingItemKeys(item: unknown, schema: ItemSchema): string[] {
   if (!item || typeof item !== "object" || Array.isArray(item)) return [];
   const record = item as Record<string, unknown>;
   const required = record.type === "VIDEO" ? schema.video : schema.asset;
-  if (!required) return [];
+  if (!required) {
+    return schema.types && !schema.types.includes(String(record.type))
+      ? [`type "${String(record.type)}" không hợp lệ`]
+      : [];
+  }
   const missing = required.filter((key) => !(key in record));
+  if (schema.types && !schema.types.includes(String(record.type))) {
+    missing.push(`type "${String(record.type)}" không hợp lệ (chỉ nhận ${schema.types.join("/")})`);
+  }
+  if ("ref" in record && required.includes("ref") && !Array.isArray(record.ref)) {
+    missing.push("ref phải là mảng");
+  }
   if ("prompt" in record && required.includes("prompt") && typeof record.prompt === "string" && record.prompt.trim() === "") {
     missing.push("prompt (rỗng)");
   }
@@ -976,6 +998,21 @@ export interface AskGeminiOptions {
   expectedSourceNames?: string[];
 }
 
+/** Số lượt liên tiếp không thêm được item hợp lệ nào thì coi là Gemini kẹt. */
+const STUCK_TURN_LIMIT = 3;
+
+/** Tổng số item đã gom (array: số item; object: tổng phần tử các mảng + số key không phải mảng). */
+function countMergedItems(state: MergeState): number {
+  if (state.kind === "array") return state.items.length;
+  if (state.kind === "object") {
+    return Object.values(state.obj).reduce<number>(
+      (sum, value) => sum + (Array.isArray(value) ? value.length : 1),
+      0,
+    );
+  }
+  return 0;
+}
+
 /** Số file JSON đã gom (key "*.json" của kết quả object). */
 function collectedFileKeys(state: MergeState): string[] {
   return state.kind === "object"
@@ -1035,6 +1072,11 @@ export async function askGemini(
         : "";
     let messageToSend = `${prompt}\n\n${buildFirstTurnInstruction()}${fileCountNote}`;
     let done = false;
+    // Phát hiện kẹt: STUCK_TURN_LIMIT lượt liên tiếp không có thêm item hợp lệ
+    // nào (vd hội thoại gemini-05dee6b46cfb2d1f: 27 lượt liền Gemini lặp item
+    // rác "VID_024" thiếu field) → dừng cuộc chat này thay vì lặp tới hết
+    // geminiMaxTurns (nơi gọi có thể thử lại bằng cuộc chat mới).
+    let turnsWithoutProgress = 0;
     for (let turn = 1; turn <= config.geminiMaxTurns; turn++) {
       console.log(
         `[gemini] askGemini(${jobId}): lượt ${turn}/${config.geminiMaxTurns} — gửi, đang chờ Gemini trả lời...`,
@@ -1052,6 +1094,7 @@ export async function askGemini(
       const { salvagedCount } = parsedResponse;
       let { invalidCount } = parsedResponse;
       const incompleteItems: string[] = [];
+      const itemCountBefore = countMergedItems(state);
       for (const value of parsedResponse.values) {
         const { value: complete, dropped } = itemSchema
           ? dropIncompleteItems(value, itemSchema)
@@ -1067,6 +1110,13 @@ export async function askGemini(
       }
       // Theo yêu cầu người dùng: chấp nhận cả "Đã hoàn thành" (và mọi kiểu
       // viết hoa/thường khác) — Gemini hay không viết đúng nguyên văn in hoa.
+      if (countMergedItems(state) > itemCountBefore) {
+        turnsWithoutProgress = 0;
+      } else if (++turnsWithoutProgress >= STUCK_TURN_LIMIT) {
+        throw new GeminiError(
+          `Gemini kẹt: ${STUCK_TURN_LIMIT} lượt liên tiếp không có thêm item hợp lệ nào (lượt ${turn}) — dừng cuộc chat này.`,
+        );
+      }
       const sawDone = text
         .normalize("NFC")
         .toLowerCase()
