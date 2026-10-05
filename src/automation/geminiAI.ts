@@ -185,14 +185,8 @@ export async function uploadFile(page: Page, filePath: string, jobId: string): P
       `Gemini không nhận file "${fileName}" — không thấy thẻ file trong ô nhập sau 60s.${await readSnackbarText(page)}`,
     );
   }
-  // Chờ hết spinner upload.
-  const settleDeadline = Date.now() + UPLOAD_TIMEOUT_MS;
-  while (Date.now() < settleDeadline) {
-    const loading = await geminiAttachmentLoadingLocator(page).count().catch(() => 0);
-    if (loading === 0) break;
-    await page.waitForTimeout(2000);
-  }
-  console.log(`[gemini] (${jobId}) đã đính kèm "${fileName}".`);
+  await waitForComposerUploadsDone(page, jobId);
+  console.log(`[gemini] (${jobId}) đã đính kèm "${fileName}" (upload xong).`);
 }
 
 /** Nội dung snackbar Gemini đang hiện (nếu có) — dùng kèm thông báo lỗi. */
@@ -241,6 +235,45 @@ export async function uploadFileWithRetry(
         await firstVisible(geminiPromptInputCandidates(page), 30_000).catch(() => {});
       }
     }
+  }
+}
+
+/**
+ * Chờ tới khi KHÔNG còn spinner upload nào đang hiện trong ô nhập (thẻ file
+ * upload xong) — phải vắng spinner LIÊN TỤC UPLOAD_SETTLE_MS (spinner có thể
+ * hiện trễ vài giây sau khi thẻ file xuất hiện). Theo yêu cầu người dùng —
+ * bấm Gửi lúc video chưa upload xong thì "không ăn"/gửi thiếu video (job
+ * d84a63fa). Quá UPLOAD_TIMEOUT_MS vẫn còn spinner thì báo lỗi (để
+ * uploadFileWithRetry thử lại).
+ */
+const UPLOAD_SETTLE_MS = 3000;
+async function waitForComposerUploadsDone(page: Page, jobId: string): Promise<void> {
+  const start = Date.now();
+  let idleSince: number | null = null;
+  let nextLogAt = start + 30_000;
+  while (true) {
+    const uploading = await geminiAttachmentLoadingLocator(page)
+      .filter({ visible: true })
+      .count()
+      .catch(() => 0);
+    if (uploading === 0) {
+      idleSince ??= Date.now();
+      if (Date.now() - idleSince >= UPLOAD_SETTLE_MS) return;
+    } else {
+      idleSince = null;
+      if (Date.now() >= nextLogAt) {
+        nextLogAt += 30_000;
+        console.log(
+          `[gemini] (${jobId}) file đính kèm vẫn đang upload (${Math.round((Date.now() - start) / 1000)}s)...`,
+        );
+      }
+    }
+    if (Date.now() - start > UPLOAD_TIMEOUT_MS) {
+      throw new GeminiError(
+        `File đính kèm vẫn đang upload (còn spinner) sau ${UPLOAD_TIMEOUT_MS / 60_000} phút.`,
+      );
+    }
+    await page.waitForTimeout(1000);
   }
 }
 
@@ -373,6 +406,8 @@ export async function sendAndWait(
   }
 
   // Nút Gửi bị disable trong lúc file đính kèm (video) còn đang xử lý.
+  // Không bấm Gửi khi thẻ file còn spinner upload (xem waitForComposerUploadsDone).
+  await waitForComposerUploadsDone(page, jobId);
   const sendButton = await firstVisible(geminiSendButtonCandidates(page), 30_000);
   const enableDeadline = Date.now() + UPLOAD_TIMEOUT_MS;
   while (!(await isSendButtonEnabled(sendButton))) {

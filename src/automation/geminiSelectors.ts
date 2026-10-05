@@ -76,9 +76,20 @@ export const geminiSnackbarLocator = (page: Page): Locator =>
   page.locator(".mat-mdc-snack-bar-label, simple-snack-bar, mat-snack-bar-container");
 
 /** Dấu hiệu file đính kèm còn đang upload/xử lý (spinner/progress trong thẻ file). */
+// DOM thật (người dùng gửi): thẻ file đang upload hiện spinner
+// <mat-progress-spinner> class "mdc-circular-progress" (bên trong có
+// .mdc-circular-progress__spinner-layer). Dò trong thẻ file VÀ trong cả khung
+// ô nhập (.text-input-field) — KHÔNG dò toàn trang (thanh bên cũng có spinner
+// "Đang tải các Gem").
 export const geminiAttachmentLoadingLocator = (page: Page): Locator =>
-  geminiAttachmentPreviewLocator(page).locator(
-    'mat-progress-spinner, [role="progressbar"], .loading, .spinner',
+  page.locator(
+    [
+      "uploader-file-preview .mdc-circular-progress",
+      "uploader-file-preview mat-progress-spinner",
+      ".text-input-field .mdc-circular-progress",
+      ".text-input-field mat-progress-spinner",
+      '.text-input-field [role="progressbar"]',
+    ].join(", "),
   );
 
 /** Dấu hiệu CHƯA đăng nhập (nút/link "Sign in" của Google). */
