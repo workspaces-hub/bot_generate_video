@@ -48,6 +48,19 @@ export const geminiCodeBlockLocator = (response: Locator): Locator =>
     .locator('code-block code, [data-test-id="code-content"]')
     .or(response.locator("pre code"));
 
+/**
+ * Canvas — DOM thật (debug test-gemini-86834d87): Gemini hay đưa JSON dài vào
+ * Canvas thay vì khối code. Trong lượt trả lời chỉ còn 1 thẻ
+ * <immersive-entry-chip> (tiêu đề + nút "Mở"); nội dung đầy đủ nằm ở khung
+ * Canvas bên cạnh: <immersive-editor> > div.ProseMirror (aria-label "Trình
+ * chỉnh sửa Canvas"), mỗi dòng JSON là 1 <p>.
+ */
+export const geminiCanvasChipLocator = (response: Locator): Locator =>
+  response.locator("immersive-entry-chip");
+
+export const geminiCanvasEditorLocator = (page: Page): Locator =>
+  page.locator("immersive-editor .ProseMirror");
+
 /** Nút mở menu đính kèm (dấu "+" cạnh ô nhập). */
 export const geminiUploadMenuButtonCandidates = (page: Page): Array<() => Locator> => [
   // DOM thật (job 38917089): nút "+" có aria-label "Nội dung tải lên và công cụ".

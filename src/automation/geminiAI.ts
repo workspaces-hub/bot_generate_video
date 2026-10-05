@@ -8,6 +8,8 @@ import { getGeminiBrowserContext } from "./geminiBrowser";
 import {
   geminiAttachmentLoadingLocator,
   geminiAttachmentPreviewLocator,
+  geminiCanvasChipLocator,
+  geminiCanvasEditorLocator,
   geminiCodeBlockLocator,
   geminiModelMenuButtonCandidates,
   geminiModelOptionLocator,
@@ -588,13 +590,96 @@ export async function sendAndWait(
 }
 
 /** Đọc text + mọi khối code (theo đúng thứ tự xuất hiện) của 1 lượt trả lời. */
-async function readResponse(response: Locator): Promise<{ text: string; codeBlocks: string[] }> {
+async function readResponse(
+  page: Page,
+  response: Locator,
+  jobId: string,
+): Promise<{ text: string; codeBlocks: string[] }> {
   const text = await geminiResponseContentLocator(response).innerText().catch(() => "");
   const blocks = await geminiCodeBlockLocator(response)
     .evaluateAll((els) => els.map((el) => el.textContent ?? ""))
     .catch(() => [] as string[]);
   const codeBlocks = blocks.map((b) => b.trim()).filter(Boolean);
+  if (codeBlocks.length === 0) {
+    const canvasText = await readCanvasText(page, response, jobId);
+    if (canvasText) codeBlocks.push(canvasText);
+  }
   return { text, codeBlocks };
+}
+
+/**
+ * Lượt trả lời đưa kết quả vào Canvas (không có khối code) — bấm mở ĐÚNG
+ * Canvas của lượt này rồi đọc toàn bộ chữ trong trình soạn thảo Canvas. Xác
+ * nhận qua debug thật (test-gemini-86834d87): chạy tay và bot đều ra Canvas;
+ * bot không đọc Canvas nên coi như "không có JSON", gửi "Tiếp tục xử lý" →
+ * Gemini hiểu thành làm tập 2, tập 3... rồi bot báo kẹt.
+ */
+async function readCanvasText(
+  page: Page,
+  response: Locator,
+  jobId: string,
+): Promise<string | null> {
+  const chip = geminiCanvasChipLocator(response).last();
+  if ((await chip.count().catch(() => 0)) === 0) return null;
+  const editor = geminiCanvasEditorLocator(page).last();
+  // Luôn bấm thẻ Canvas của CHÍNH lượt này — khung Canvas đang mở có thể là
+  // của lượt trước.
+  await chip
+    .locator(".inline-preview-container, .title")
+    .first()
+    .click({ timeout: 10_000 })
+    .catch(() => chip.click({ timeout: 10_000 }).catch(() => {}));
+  await editor.waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
+  // Chờ nội dung Canvas đứng yên (còn đang tải/stream thì đọc lại).
+  let previous = "";
+  for (let i = 0; i < 15; i++) {
+    const current = (await editor.innerText().catch(() => "")).trim();
+    if (current && current === previous) break;
+    previous = current;
+    await page.waitForTimeout(1000);
+  }
+  if (!previous) {
+    console.warn(`[gemini] (${jobId}) lượt trả lời có Canvas nhưng không đọc được nội dung Canvas.`);
+    return null;
+  }
+  const repaired = repairCanvasJson(previous);
+  console.log(
+    `[gemini] (${jobId}) đọc kết quả từ Canvas (${previous.length} ký tự${repaired !== previous ? ", đã sửa dấu ngoặc kép bị mất escape" : ""}).`,
+  );
+  return repaired;
+}
+
+/**
+ * Canvas là tài liệu markdown — JSON dán vào đó MẤT ký tự escape của dấu ngoặc
+ * kép bên trong chuỗi (DOM thật, test-gemini-86834d87: ...ELENA (spoken):
+ * "This time..." thay vì \"This time...\"), JSON.parse lỗi. JSON trong Canvas
+ * mỗi thuộc tính nằm 1 dòng → sửa theo dòng: dòng dạng `"khoá": "giá trị",`
+ * thì escape mọi dấu " CHƯA escape nằm giữa 2 dấu " bao ngoài. Parse được
+ * ngay thì giữ nguyên; sửa xong vẫn lỗi thì trả bản gốc (để cơ chế cứu item
+ * trọn vẹn xử lý tiếp).
+ */
+function repairCanvasJson(raw: string): string {
+  try {
+    JSON.parse(raw);
+    return raw;
+  } catch {
+    // sửa bên dưới
+  }
+  const repaired = raw
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^(\s*"[^"\\]+"\s*:\s*")(.*)("\s*,?\s*)$/);
+      if (!match) return line;
+      const inner = match[2].replace(/(?<!\\)"/g, '\\"');
+      return `${match[1]}${inner}${match[3]}`;
+    })
+    .join("\n");
+  try {
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    return raw;
+  }
 }
 
 /**
@@ -833,11 +918,13 @@ function buildFirstTurnInstruction(): string {
 - Giữ ĐÚNG schema mà yêu cầu phía trên mô tả (JSON ARRAY hoặc JSON OBJECT) và NHẤT QUÁN kiểu đó qua mọi lượt.
 - Nếu yêu cầu phía trên cần NHIỀU FILE JSON (vd nhiều tập), trả 1 JSON OBJECT có key là TÊN FILE (kết thúc bằng ".json"), value là nội dung đầy đủ của file đó.
 - KHÔNG cố xuất toàn bộ trong 1 lượt: chia NHIỀU LƯỢT, mỗi lượt ĐÚNG MỘT khối code JSON HỢP LỆ, ĐÃ ĐÓNG NGOẶC ĐẦY ĐỦ, chỉ chứa phần MỚI chưa gửi (array: các item tiếp theo; object: các key mới, hoặc key là mảng thì chỉ các phần tử mới của mảng đó).
-- KÍCH THƯỚC MỖI LƯỢT: gửi NHIỀU item mới nhất có thể (gộp trên mọi key/file) nhưng khối JSON KHÔNG vượt quá khoảng ${config.geminiMaxCharsPerTurn} ký tự. Sắp chạm mức đó thì dừng ở item TRỌN VẸN gần nhất, đóng ngoặc, phần còn lại gửi ở lượt sau.
+- KÍCH THƯỚC MỖI LƯỢT: mỗi khối JSON KHÔNG vượt quá khoảng ${config.geminiMaxCharsPerTurn} ký tự — đây CHỈ là giới hạn để CHIA LƯỢT, KHÔNG phải giới hạn độ dài kết quả. Sắp chạm mức đó thì dừng ở item TRỌN VẸN gần nhất, đóng ngoặc, phần còn lại gửi ở lượt sau.
+- TUYỆT ĐỐI KHÔNG rút gọn, gộp clip, bỏ bớt shot/clip/VIDEO hay viết ngắn prompt lại để cho vừa giới hạn — kết quả cuối cùng phải ĐẦY ĐỦ đúng như yêu cầu phía trên (vd giữ đủ số shot/clip/VIDEO theo khung kỹ thuật), dài bao nhiêu thì chia bấy nhiêu lượt.
 - KHÔNG viết thêm bất kỳ câu chữ nào BÊN TRONG khối code ngoài JSON.
 - Ưu tiên tuyệt đối việc đóng JSON hợp lệ: nếu sắp hết chỗ, dừng ở item trước đó và gửi tiếp ở lượt sau.
 - Ở CUỐI câu trả lời của LƯỢT CUỐI CÙNG (đã gửi đủ toàn bộ), sau khối code, viết đúng nguyên văn: ${DONE_MARKER}
-- TUYỆT ĐỐI KHÔNG viết "${DONE_MARKER}" khi vẫn còn phần chưa gửi.`;
+- TUYỆT ĐỐI KHÔNG viết "${DONE_MARKER}" khi vẫn còn phần chưa gửi.
+- Lượt nào khối JSON đã chạm/vượt ~${config.geminiMaxCharsPerTurn} ký tự thì lượt đó KHÔNG ĐƯỢC viết "${DONE_MARKER}" hay "Đã hoàn thành" (kể cả câu tổng kết "Đã hoàn thành ..." mà yêu cầu phía trên quy định) — dừng ở item trọn vẹn, chờ tin nhắn "Tiếp tục xử lý" rồi gửi phần còn lại. Câu "${DONE_MARKER}"/tổng kết CHỈ được viết ở lượt cuối cùng, khi đã THẬT SỰ gửi hết toàn bộ nội dung.`;
 }
 
 /**
@@ -1013,6 +1100,10 @@ function countMergedItems(state: MergeState): number {
   return 0;
 }
 
+function buildOversizeDoneMessage(state: MergeState, turnJsonChars: number): string {
+  return `Tiếp tục xử lý — lượt vừa rồi khối JSON dài ${turnJsonChars} ký tự (vượt giới hạn ~${config.geminiMaxCharsPerTurn} ký tự/lượt) nên CHƯA được coi là hoàn thành. Nếu còn BẤT KỲ phần nào chưa gửi (item/VIDEO/shot/clip còn thiếu so với yêu cầu), gửi tiếp NGAY SAU item cuối đã gửi (1 khối \`\`\`json\`\`\` hợp lệ, không quá ~${config.geminiMaxCharsPerTurn} ký tự). Nếu đã gửi ĐỦ TOÀN BỘ thật sự, chỉ trả lời đúng "${DONE_MARKER}" (không gửi lại JSON). ${describeMergeState(state).replace(/\n/g, " ")}`;
+}
+
 /** Số file JSON đã gom (key "*.json" của kết quả object). */
 function collectedFileKeys(state: MergeState): string[] {
   return state.kind === "object"
@@ -1071,6 +1162,7 @@ export async function askGemini(
         ? `\n- Kết quả lần này gồm ĐÚNG ${expectedFileCount} FILE JSON (mỗi tập tham chiếu 1 file) — trả JSON OBJECT với ${expectedFileCount} key TÊN FILE; làm lần lượt từng tập, CHỈ viết "${DONE_MARKER}" sau khi đã gửi đủ cả ${expectedFileCount} file.`
         : "";
     let messageToSend = `${prompt}\n\n${buildFirstTurnInstruction()}${fileCountNote}`;
+    // let messageToSend = `${prompt}`;
     let done = false;
     // Phát hiện kẹt: STUCK_TURN_LIMIT lượt liên tiếp không có thêm item hợp lệ
     // nào (vd hội thoại gemini-05dee6b46cfb2d1f: 27 lượt liền Gemini lặp item
@@ -1089,7 +1181,7 @@ export async function askGemini(
       }
       await captureSnapshot(page, `${jobId}_gemini-turn-${turn}`, `gemini-turn-${turn}`);
 
-      const { text, codeBlocks } = await readResponse(response);
+      const { text, codeBlocks } = await readResponse(page, response, jobId);
       const parsedResponse = parseJsonFromResponse(codeBlocks, text);
       const { salvagedCount } = parsedResponse;
       let { invalidCount } = parsedResponse;
@@ -1131,6 +1223,20 @@ export async function askGemini(
       // vào kết quả, phải để Gemini gửi lại.
       const missingFiles =
         expectedFileCount > 1 && collectedFileKeys(state).length < expectedFileCount;
+      // Theo yêu cầu người dùng: lượt có JSON chạm/vượt geminiMaxCharsPerTurn
+      // thì KHÔNG được coi là xong dù có "Đã hoàn thành" — xác nhận qua debug
+      // thật (test-gemini-27a9cf06 lượt 1: 18/25 VIDEO trong 1 khối 21.650 ký
+      // tự kèm "Đã hoàn thành"). Nhắc gửi tiếp; nếu đã đủ thật thì lượt sau
+      // Gemini chỉ cần trả lời "ĐÃ HOÀN THÀNH" (khối JSON nhỏ/không có).
+      const turnJsonChars = codeBlocks.reduce((sum, block) => sum + block.length, 0);
+      const oversizeTurn = turnJsonChars >= config.geminiMaxCharsPerTurn;
+      if (sawDone && invalidCount === 0 && oversizeTurn && !missingFiles) {
+        console.warn(
+          `[gemini] askGemini(${jobId}): lượt ${turn} có JSON ${turnJsonChars} ký tự (≥ ${config.geminiMaxCharsPerTurn}) mà báo "${DONE_MARKER}" — chưa chấp nhận, nhắc gửi tiếp phần còn lại.`,
+        );
+        messageToSend = buildOversizeDoneMessage(state, turnJsonChars);
+        continue;
+      }
       if (sawDone && invalidCount === 0 && hasData(state) && !missingFiles) {
         done = true;
         break;
