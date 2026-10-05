@@ -7,7 +7,7 @@ import {
   GeminiError,
   openGeminiPage,
   readSnackbarText,
-  sendAndWait,
+  sendAndWaitWithRetry,
   uploadFile,
 } from "./geminiAI";
 import { getGeminiImageBrowserContext } from "./geminiBrowser";
@@ -207,7 +207,7 @@ async function attemptGenerateImageGemini(
     const instruction = `Tạo 1 ảnh minh hoạ theo ĐÚNG NGUYÊN VĂN mô tả sau đây (dùng chính xác mô tả này làm prompt vẽ ảnh, không hỏi lại, không diễn giải lại bằng lời, không thêm bớt nội dung).${refNote}\n\n${prompt}`;
 
     // Theo yêu cầu người dùng: debug mỗi 15s trong lúc chờ Gemini tạo ảnh.
-    const response = await sendAndWait(page, instruction, jobId, {
+    const response = await sendAndWaitWithRetry(page, instruction, jobId, {
       attachmentPaths: refImagePaths,
       debugEveryMs: IMAGE_DEBUG_EVERY_MS,
       debugLabel: "gemini-image-wait",

@@ -39,6 +39,18 @@ import { firstVisible } from "./selectors";
 
 export class GeminiError extends Error {}
 
+/**
+ * Gemini KHÔNG nhận tin vừa gửi: tin bị trả nguyên về ô nhập (thường kèm 1
+ * snackbar báo lỗi thoáng qua). Xác nhận qua debug thật (job
+ * f002fd08-8abf-47ab-9991-75ce8a0e998a, b5a93ba9): ô nhập trống thoáng qua rồi
+ * chữ bị trả lại (file đính kèm thì KHÔNG được trả lại), không có lượt trả
+ * lời mới. Lỗi tạm thời phía Gemini — askGemini chờ rồi gửi lại.
+ */
+export class GeminiSendRejectedError extends GeminiError {}
+
+/** Chờ sau khi Gemini trả tin về ô nhập, trước khi gửi lại. */
+const SEND_REJECTED_RETRY_DELAYS_MS = [30_000, 90_000];
+
 const DONE_MARKER = "ĐÃ HOÀN THÀNH";
 /**
  * Tin nhắn gửi tiếp khi lượt trả lời chưa có DONE_MARKER — mở đầu đúng "Tiếp
@@ -252,6 +264,31 @@ async function countGeneratedImages(response: Locator): Promise<{ total: number;
     .catch(() => ({ total: 0, loaded: 0 }));
 }
 
+/**
+ * sendAndWait + gửi lại khi Gemini trả tin về ô nhập (GeminiSendRejectedError)
+ * — chờ SEND_REJECTED_RETRY_DELAYS_MS rồi gửi lại ĐÚNG tin đó (sendAndWait tự
+ * xoá ô nhập, gõ lại, upload lại file đính kèm bị mất nếu có attachmentPaths).
+ */
+export async function sendAndWaitWithRetry(
+  page: Page,
+  text: string,
+  jobId: string,
+  options: SendAndWaitOptions = {},
+): Promise<Locator> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await sendAndWait(page, text, jobId, options);
+    } catch (err) {
+      const delay = SEND_REJECTED_RETRY_DELAYS_MS[attempt];
+      if (!(err instanceof GeminiSendRejectedError) || delay === undefined) throw err;
+      console.warn(
+        `[gemini] (${jobId}) ${err.message} — chờ ${delay / 1000}s rồi gửi lại (lần ${attempt + 1}/${SEND_REJECTED_RETRY_DELAYS_MS.length}).`,
+      );
+      await page.waitForTimeout(delay);
+    }
+  }
+}
+
 export async function sendAndWait(
   page: Page,
   text: string,
@@ -301,6 +338,18 @@ export async function sendAndWait(
   // Xác nhận tin đã THỰC SỰ gửi đi (job 38917089: bấm Gửi xong prompt vẫn
   // nằm nguyên trong ô nhập, bot chờ 5 phút mới báo lỗi). Chưa gửi thì thử
   // nhấn Enter 1 lần, vẫn không được thì báo lỗi ngay kèm thông báo Gemini.
+  // Ghi lại MỌI snackbar hiện ra sau khi gửi — snackbar lỗi chỉ hiện vài giây,
+  // tới lúc chụp debug snapshot đã tắt mất.
+  const snackbarTexts = new Set<string>();
+  const collectSnackbar = async (): Promise<void> => {
+    const texts = await geminiSnackbarLocator(page)
+      .allInnerTexts()
+      .catch(() => [] as string[]);
+    for (const t of texts) if (t.trim()) snackbarTexts.add(t.trim());
+  };
+  const snackbarNote = (): string =>
+    snackbarTexts.size > 0 ? ` Gemini báo: "${[...snackbarTexts].join(" | ")}"` : "";
+
   let sent = false;
   for (let attempt = 0; attempt < 2 && !sent; attempt++) {
     if (attempt === 1) {
@@ -310,6 +359,7 @@ export async function sendAndWait(
     }
     const sentDeadline = Date.now() + 20_000;
     while (Date.now() < sentDeadline) {
+      await collectSnackbar();
       if (await hasMessageBeenSent(page, input, countBefore)) {
         sent = true;
         break;
@@ -322,8 +372,9 @@ export async function sendAndWait(
       expectedAttachments > 0
         ? ` Thẻ file trong ô nhập: ${await countComposerAttachments(page)}/${expectedAttachments}.`
         : "";
-    throw new GeminiError(
-      `Đã bấm Gửi nhưng Gemini không nhận tin nhắn (prompt vẫn còn trong ô nhập).${attachmentNote}${await readSnackbarText(page)}`,
+    await collectSnackbar();
+    throw new GeminiSendRejectedError(
+      `Đã bấm Gửi nhưng Gemini không nhận tin nhắn (prompt vẫn còn trong ô nhập).${attachmentNote}${snackbarNote()}`,
     );
   }
 
@@ -356,9 +407,22 @@ export async function sendAndWait(
       .catch(() => false);
     if (count <= countBefore) {
       await debug(`chờ Gemini bắt đầu trả lời — nút Stop: ${stopVisible ? "có" : "không"}, số lượt trả lời: ${count}.`);
+      await collectSnackbar();
+      // Tin bị trả về ô nhập (ô nhập trống thoáng qua rồi có chữ lại), không
+      // có lượt trả lời mới, không có nút Stop → Gemini đã từ chối nhận tin.
+      // Phát hiện sớm (sau 10s) thay vì chờ hết RESPONSE_START_TIMEOUT_MS.
+      const restoredText = (await input.innerText().catch(() => "")).trim();
+      if (!stopVisible && restoredText !== "" && Date.now() - start > 10_000) {
+        await captureSnapshot(page, `${jobId}_gemini-send-rejected`, "gemini-send-rejected", {
+          fullPage: false,
+        });
+        throw new GeminiSendRejectedError(
+          `Gemini trả tin nhắn về lại ô nhập, không trả lời (lỗi tạm thời phía Gemini?).${snackbarNote()}`,
+        );
+      }
       if (!stopVisible && Date.now() - start > RESPONSE_START_TIMEOUT_MS) {
         throw new GeminiError(
-          "Đã bấm Gửi nhưng Gemini không bắt đầu trả lời (không có lượt trả lời mới, không có nút Stop).",
+          `Đã bấm Gửi nhưng Gemini không bắt đầu trả lời (không có lượt trả lời mới, không có nút Stop).${snackbarNote()}`,
         );
       }
       await page.waitForTimeout(2000);
@@ -722,7 +786,7 @@ export async function askGemini(
       console.log(
         `[gemini] askGemini(${jobId}): lượt ${turn}/${config.geminiMaxTurns} — gửi, đang chờ Gemini trả lời...`,
       );
-      const response = await sendAndWait(page, messageToSend, jobId, {
+      const response = await sendAndWaitWithRetry(page, messageToSend, jobId, {
         attachmentPaths: turn === 1 && attachmentPath ? [attachmentPath] : undefined,
       });
       if (turn === 1) {
