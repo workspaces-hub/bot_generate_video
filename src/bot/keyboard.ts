@@ -94,6 +94,18 @@ export const UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL =
 /**
  * GIỐNG UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL HỆT (không giới hạn
  * admin, cùng cơ chế sao lưu bản cũ bằng nextBackupVersion trước khi ghi
+ * đè, xem handleUpdateMasterPromptUpload) nhưng ghi đè master prompt
+ * prompt_generate_script_episode.txt (config.promptGenerateScriptEpisode,
+ * dùng cho GENERATE_SCRIPT_EPISODE_BUTTON_LABEL — sinh 1 TẬP/lần) thay vì
+ * prompt_generate_script.txt (dùng cho GENERATE_SCRIPT_BUTTON_LABEL — sinh
+ * CẢ PHIM/lần) — RIÊNG nút/mode theo đúng quy ước mỗi master prompt 1 nút
+ * cập nhật của dự án, không gộp chung rồi chọn file qua tham số.
+ */
+export const UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL =
+  "Cập nhật prompt tạo kịch bản theo từng tập";
+/**
+ * GIỐNG UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL HỆT (không giới hạn
+ * admin, cùng cơ chế sao lưu bản cũ bằng nextBackupVersion trước khi ghi
  * đè) nhưng ghi đè master prompt prompt_video_reference.txt (dùng cho
  * VIDEO_REFERENCE_BUTTON_LABEL) thay vì prompt_generate_script.txt — RIÊNG
  * nút/mode theo đúng quy ước clone-theo-provider của dự án, không gộp
@@ -161,7 +173,7 @@ export const REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL = "Gen lại video lỗi";
 export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
-  [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL],
+  [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL],
   [CONTINUE_IMAGE_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
   [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   // [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],

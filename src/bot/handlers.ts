@@ -54,6 +54,7 @@ import {
   SCRIPT_REFERENCE_BUTTON_LABEL,
   STOP_ALL_BUTTON_LABEL,
   TEST_VIDEO_REFERENCE_BUTTON_LABEL,
+  UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL,
   UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL,
   UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL,
   UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL,
@@ -81,6 +82,7 @@ type PendingMode =
   | "mergeVideo"
   | "regenerateVideoByTime"
   | "updateGenerateScriptPrompt"
+  | "updateGenerateScriptEpisodePrompt"
   | "updateVideoReferencePrompt"
   | "updateTestVideoReferencePrompt";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
@@ -2140,6 +2142,16 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "updateGenerateScriptEpisodePrompt");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config.promptGenerateScriptEpisode}"`,
+      promptMenu
+    );
+  });
+
   bot.hears(UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
@@ -2240,6 +2252,7 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === MERGE_VIDEO_BUTTON_LABEL ||
       ctx.message.text === REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL ||
       ctx.message.text === UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL ||
+      ctx.message.text === UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL ||
       ctx.message.text === UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL ||
       ctx.message.text === UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL
     ) {
@@ -2733,6 +2746,7 @@ export function registerHandlers(bot: Telegraf): void {
       }
     } else if (
       mode === "updateGenerateScriptPrompt" ||
+      mode === "updateGenerateScriptEpisodePrompt" ||
       mode === "updateVideoReferencePrompt" ||
       mode === "updateTestVideoReferencePrompt"
     ) {
@@ -3019,6 +3033,17 @@ export function registerHandlers(bot: Telegraf): void {
         ctx.message.document.file_name,
         ctx.message.message_id,
         config.promptGenerateScript,
+      );
+      return;
+    }
+    if (waitingMode.get(userId) === "updateGenerateScriptEpisodePrompt") {
+      waitingMode.delete(userId);
+      await handleUpdateMasterPromptUpload(
+        ctx,
+        ctx.message.document.file_id,
+        ctx.message.document.file_name,
+        ctx.message.message_id,
+        config.promptGenerateScriptEpisode,
       );
       return;
     }
