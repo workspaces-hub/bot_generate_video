@@ -208,6 +208,7 @@ async function attemptGenerateImageGemini(
 
     // Theo yêu cầu người dùng: debug mỗi 15s trong lúc chờ Gemini tạo ảnh.
     const response = await sendAndWait(page, instruction, jobId, {
+      attachmentPaths: refImagePaths,
       debugEveryMs: IMAGE_DEBUG_EVERY_MS,
       debugLabel: "gemini-image-wait",
     });

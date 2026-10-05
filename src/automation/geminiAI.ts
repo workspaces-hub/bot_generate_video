@@ -221,6 +221,22 @@ export interface SendAndWaitOptions {
    */
   debugEveryMs?: number;
   debugLabel?: string;
+  /**
+   * File đã đính kèm cho lượt này (chỉ lượt đầu) — trước khi bấm Gửi kiểm tra
+   * thẻ file còn đủ trong ô nhập, thiếu thì upload lại 1 lần. Xác nhận qua
+   * debug thật (job b5a93ba9-c0b5-4e3f-a544-7e207b682e71, 38917089): upload đã
+   * thấy thẻ file, nhưng lúc lỗi ô nhập KHÔNG còn thẻ nào và bấm Gửi/Enter
+   * đều không gửi được.
+   */
+  attachmentPaths?: string[];
+}
+
+/** Số thẻ file đang đính kèm trong ô nhập. */
+async function countComposerAttachments(page: Page): Promise<number> {
+  return page
+    .locator("uploader-file-preview")
+    .count()
+    .catch(() => 0);
 }
 
 /** Số ảnh do Gemini tạo trong 1 lượt trả lời (tổng / đã tải xong). */
@@ -246,10 +262,30 @@ export async function sendAndWait(
   const countBefore = await responses.count();
 
   const input = await firstVisible(geminiPromptInputCandidates(page), 30_000);
-  await input.click();
+  // focus() thay cho click(): UI mới của Gemini đặt thẻ file đính kèm ĐÈ trong
+  // vùng ô nhập — click vào giữa ô có thể trúng thẻ/nút xoá thẻ (nghi là
+  // nguyên nhân thẻ file biến mất, job b5a93ba9). Ctrl+A trong contenteditable
+  // đang focus chỉ chọn chữ trong ô nhập, không đụng tới thẻ file.
+  await input.focus().catch(() => input.click());
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Delete");
   await page.keyboard.insertText(text);
+
+  const expectedAttachments = options.attachmentPaths?.length ?? 0;
+  if (expectedAttachments > 0) {
+    const present = await countComposerAttachments(page);
+    if (present < expectedAttachments) {
+      console.warn(
+        `[gemini] (${jobId}) thẻ file đính kèm biến mất khỏi ô nhập (còn ${present}/${expectedAttachments}) — upload lại.`,
+      );
+      await captureSnapshot(page, `${jobId}_gemini-attachment-missing`, "gemini-attachment-missing", {
+        fullPage: false,
+      });
+      for (const filePath of options.attachmentPaths!.slice(present)) {
+        await uploadFile(page, filePath, jobId);
+      }
+    }
+  }
 
   // Nút Gửi bị disable trong lúc file đính kèm (video) còn đang xử lý.
   const sendButton = await firstVisible(geminiSendButtonCandidates(page), 30_000);
@@ -269,7 +305,7 @@ export async function sendAndWait(
   for (let attempt = 0; attempt < 2 && !sent; attempt++) {
     if (attempt === 1) {
       console.warn(`[gemini] (${jobId}) bấm Gửi nhưng tin chưa đi — thử nhấn Enter.`);
-      await input.click().catch(() => {});
+      await input.focus().catch(() => {});
       await page.keyboard.press("Enter");
     }
     const sentDeadline = Date.now() + 20_000;
@@ -282,8 +318,12 @@ export async function sendAndWait(
     }
   }
   if (!sent) {
+    const attachmentNote =
+      expectedAttachments > 0
+        ? ` Thẻ file trong ô nhập: ${await countComposerAttachments(page)}/${expectedAttachments}.`
+        : "";
     throw new GeminiError(
-      `Đã bấm Gửi nhưng Gemini không nhận tin nhắn (prompt vẫn còn trong ô nhập).${await readSnackbarText(page)}`,
+      `Đã bấm Gửi nhưng Gemini không nhận tin nhắn (prompt vẫn còn trong ô nhập).${attachmentNote}${await readSnackbarText(page)}`,
     );
   }
 
@@ -682,7 +722,9 @@ export async function askGemini(
       console.log(
         `[gemini] askGemini(${jobId}): lượt ${turn}/${config.geminiMaxTurns} — gửi, đang chờ Gemini trả lời...`,
       );
-      const response = await sendAndWait(page, messageToSend, jobId);
+      const response = await sendAndWait(page, messageToSend, jobId, {
+        attachmentPaths: turn === 1 && attachmentPath ? [attachmentPath] : undefined,
+      });
       if (turn === 1) {
         console.log(`[gemini] askGemini(${jobId}): url hội thoại: ${page.url()}`);
       }
