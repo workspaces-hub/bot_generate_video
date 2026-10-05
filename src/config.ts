@@ -117,13 +117,23 @@ export const config = {
   geminiStorageStatePath: path.resolve(
     process.env.GEMINI_STORAGE_STATE_PATH ?? "./storage/gemini-session.json",
   ),
+  // Theo yêu cầu người dùng: session RIÊNG (tài khoản Google khác) cho tạo ảnh
+  // bằng Gemini (geminiImage.ts) — hạn mức tạo ảnh/tin nhắn không ăn vào tài
+  // khoản askGemini. Đăng nhập bằng `npm run login-gemini -- image`.
+  geminiImageStorageStatePath: path.resolve(
+    process.env.GEMINI_IMAGE_STORAGE_STATE_PATH ?? "./storage/gemini-image-session.json",
+  ),
   // Text (khớp 1 phần, không phân biệt hoa thường) của model cần chọn trong
   // menu chọn model của Gemini, vd "2.5 Pro" / "Pro". Để trống = giữ model
   // đang mặc định của tài khoản.
   geminiModelLabel: process.env.GEMINI_MODEL_LABEL ?? "",
   // Số lượt tối đa gom JSON nhiều phần (mỗi lượt Gemini gửi 1 phần + marker
   // "ĐÃ HOÀN THÀNH" ở lượt cuối, xem askGemini).
-  geminiMaxTurns: Number(process.env.GEMINI_MAX_TURNS ?? 20),
+  geminiMaxTurns: Number(process.env.GEMINI_MAX_TURNS ?? 1000),
+  // Giới hạn kích thước khối JSON mỗi lượt Gemini được yêu cầu gửi (ký tự) —
+  // gửi NHIỀU item nhất có thể trong mức này. Đo thật: khối 10–21k ký tự vẫn
+  // hợp lệ; khối hỏng xảy ra cả ở 500 ký tự (do mất ngữ cảnh, không phải độ dài).
+  geminiMaxCharsPerTurn: Number(process.env.GEMINI_MAX_CHARS_PER_TURN ?? 20000),
   // Có đi qua proxy như ChatGPT không (mặc định có — dùng chung PROXY_*).
   geminiUseProxy: (process.env.GEMINI_USE_PROXY ?? "true").toLowerCase() !== "false",
 

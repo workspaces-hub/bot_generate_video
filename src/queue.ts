@@ -148,6 +148,14 @@ export interface ScriptReferenceVideoJob extends BaseJob {
    * (TEST_VIDEO_REFERENCE_BUTTON_LABEL) đặt true — xem processChatAIQueue.
    */
   verifyPromptTest?: boolean;
+  /**
+   * Theo yêu cầu người dùng: "Tham chiếu video" gửi NHIỀU video cùng lúc —
+   * các job cùng lô có chung batchId; JSON KHÔNG gửi ngay từng job mà gom
+   * lại, gửi 1 lượt + thống kê khi cả lô xong (xem recordReferenceVideoBatchResult).
+   */
+  batchId?: string;
+  /** Vị trí video trong lô (theo thứ tự user gửi). */
+  batchIndex?: number;
 }
 
 /**
@@ -434,6 +442,9 @@ const FAILED_STORYBOARD_JOBS_FILE = path.resolve(
 );
 const PENDING_VIDEO_CONFIRMATIONS_POLLO_FILE = path.resolve(
   "./storage/pending-video-confirmations-pollo.json",
+);
+const REFERENCE_VIDEO_BATCHES_FILE = path.resolve(
+  "./storage/reference-video-batches.json",
 );
 const PENDING_IMAGE_CONFIRMATIONS_POLLO_FILE = path.resolve(
   "./storage/pending-image-confirmations-pollo.json",
@@ -843,6 +854,7 @@ export function initQueue(botTelegram: Telegram): void {
   loadPersistedFailedStoryboardJobsPollo();
   loadPersistedFailedStoryboardJobsComfy();
   loadPersistedStopStoryboardRequests();
+  loadPersistedReferenceVideoBatches();
   void processImageQueue();
   void processVideoQueue();
   void processChatAIQueue();
@@ -1408,6 +1420,15 @@ export function stopAll(userId: number): StopAllResult {
       cancelledChatAIJobs.push(cancelled);
       if (cancelled.type === "scriptReferenceVideo") {
         fsp.unlink(cancelled.videoPath).catch(() => {});
+        // Job thuộc lô nhiều video: đánh dấu "đã huỷ" để lô vẫn chốt được
+        // (không thì lô chờ mãi video này, không bao giờ gửi kết quả).
+        if (cancelled.batchId !== undefined) {
+          void recordReferenceVideoBatchResult(
+            cancelled.batchId,
+            cancelled.batchIndex ?? 0,
+            { error: "đã huỷ (Stop All)" },
+          );
+        }
       }
     }
   }
@@ -2851,6 +2872,212 @@ async function processComfyVideoQueue(): Promise<void> {
  * điểm). Gộp hẳn 1 hàng đợi loại bỏ khả năng 2 job cùng dùng context này chạy
  * đồng thời.
  */
+interface ReferenceVideoBatchItem {
+  videoFileName: string;
+  status: "pending" | "done" | "error";
+  jsonFiles: string[];
+  error?: string;
+}
+
+interface ReferenceVideoBatch {
+  chatId: number;
+  /** Tin nhắn video ĐẦU TIÊN của lô — tin tổng hợp reply vào đây. */
+  promptMessageId: number;
+  statusMessageId?: number;
+  items: ReferenceVideoBatchItem[];
+}
+
+// Lô "Tham chiếu video" nhiều video — ghi ra file (sống sót qua restart, cùng
+// lý do với các hàng đợi: job trong chatAIJobs đã persist mang batchId).
+const referenceVideoBatches = new Map<string, ReferenceVideoBatch>();
+
+function loadPersistedReferenceVideoBatches(): void {
+  try {
+    if (!fs.existsSync(REFERENCE_VIDEO_BATCHES_FILE)) return;
+    const restored: [string, ReferenceVideoBatch][] = JSON.parse(
+      fs.readFileSync(REFERENCE_VIDEO_BATCHES_FILE, "utf-8"),
+    );
+    for (const [id, batch] of restored) referenceVideoBatches.set(id, batch);
+    if (restored.length > 0) {
+      console.log(
+        `[queue] Khôi phục ${restored.length} lô "Tham chiếu video" nhiều video từ lần chạy trước.`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[queue] Không đọc được file lô "Tham chiếu video" đã lưu, bỏ qua:',
+      err,
+    );
+  }
+}
+
+function persistReferenceVideoBatches(): void {
+  try {
+    fs.mkdirSync(path.dirname(REFERENCE_VIDEO_BATCHES_FILE), { recursive: true });
+    fs.writeFileSync(
+      REFERENCE_VIDEO_BATCHES_FILE,
+      JSON.stringify(Array.from(referenceVideoBatches.entries()), null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    console.error('[queue] Không ghi được file lô "Tham chiếu video":', err);
+  }
+}
+
+/** Tạo 1 lô "Tham chiếu video" cho các video (theo đúng thứ tự user gửi), trả về batchId. */
+export function createReferenceVideoBatch(
+  chatId: number,
+  promptMessageId: number,
+  videoFileNames: string[],
+  statusMessageId?: number,
+): string {
+  const batchId = randomUUID();
+  referenceVideoBatches.set(batchId, {
+    chatId,
+    promptMessageId,
+    statusMessageId,
+    items: videoFileNames.map((videoFileName) => ({
+      videoFileName,
+      status: "pending",
+      jsonFiles: [],
+    })),
+  });
+  persistReferenceVideoBatches();
+  return batchId;
+}
+
+/**
+ * Ghi kết quả 1 video trong lô (có JSON / không JSON / lỗi). Khi MỌI video đã
+ * có kết quả thì gửi toàn bộ JSON + thống kê cho user 1 lượt rồi xoá lô.
+ * Không throw — lỗi gửi chỉ log.
+ */
+export async function recordReferenceVideoBatchResult(
+  batchId: string,
+  index: number,
+  result: { jsonFiles: string[] } | { error: string },
+): Promise<void> {
+  const batch = referenceVideoBatches.get(batchId);
+  const item = batch?.items[index];
+  if (!batch || !item) {
+    console.warn(
+      `[queue] recordReferenceVideoBatchResult: không thấy lô ${batchId}/#${index} — bỏ qua.`,
+    );
+    return;
+  }
+  if ("error" in result) {
+    item.status = "error";
+    item.error = result.error;
+  } else {
+    item.status = "done";
+    item.jsonFiles = result.jsonFiles;
+  }
+  persistReferenceVideoBatches();
+
+  if (batch.items.some((i) => i.status === "pending")) return;
+  referenceVideoBatches.delete(batchId);
+  persistReferenceVideoBatches();
+  await finalizeReferenceVideoBatch(batch).catch((err) => {
+    console.error(`[queue] Gửi kết quả lô "Tham chiếu video" ${batchId} thất bại:`, err);
+  });
+}
+
+/** Gửi tất cả JSON đã tải được của lô, rồi 1 tin thống kê video có/không có JSON/lỗi. */
+async function finalizeReferenceVideoBatch(batch: ReferenceVideoBatch): Promise<void> {
+  if (!telegram) return;
+  if (batch.statusMessageId) {
+    await telegram.deleteMessage(batch.chatId, batch.statusMessageId).catch(() => {});
+  }
+
+  const lines: string[] = [];
+  let withJson = 0;
+  let noJson = 0;
+  let failed = 0;
+  for (const [i, item] of batch.items.entries()) {
+    const label = `${i + 1}. ${item.videoFileName}`;
+    if (item.status === "error") {
+      failed++;
+      lines.push(`❌ ${label} — lỗi: ${item.error}`);
+      continue;
+    }
+    const sentJson: string[] = [];
+    for (const jsonPath of item.jsonFiles) {
+      try {
+        await sendDocumentMaybeSplit(
+          batch.chatId,
+          jsonPath,
+          `✅ prompts — ${item.videoFileName}`,
+          batch.promptMessageId,
+        );
+        sentJson.push(path.basename(jsonPath));
+      } catch (err) {
+        console.error(`[queue] Gửi file JSON "${jsonPath}" (lô) thất bại:`, err);
+      }
+      await sleep(1000); // tránh gửi quá nhanh nhiều file liên tiếp (Telegram 429)
+    }
+    if (sentJson.length > 0) {
+      withJson++;
+      lines.push(`✅ ${label} → ${sentJson.join(", ")}`);
+    } else if (item.jsonFiles.length > 0) {
+      failed++;
+      lines.push(`❌ ${label} — có JSON nhưng gửi file thất bại`);
+    } else {
+      noJson++;
+      lines.push(`⚠️ ${label} — không có file JSON`);
+    }
+  }
+
+  const total = batch.items.length;
+  await sendTextMaybeSplit(
+    batch.chatId,
+    [
+      `📊 Kết quả tham chiếu ${total} video: ${withJson} có JSON, ${noJson} không có JSON, ${failed} lỗi.`,
+      "",
+      ...lines,
+    ].join("\n"),
+    batch.promptMessageId,
+  );
+}
+
+/**
+ * Theo yêu cầu người dùng: "Tạo kịch bản mới" KHÔNG được làm mất file JSON
+ * tham chiếu gốc trong config.chatAIResultsDir. File kết quả ChatGPT/Gemini
+ * cũng lưu vào CHÍNH thư mục đó — trùng tên với file tham chiếu (model hay đặt
+ * đúng tên file tham chiếu được liệt kê trong prompt) thì GHI ĐÈ lên bản gốc,
+ * rồi bước đổi tên theo remakeBaseName (fsp.rename) chuyển file đó đi → bản
+ * gốc mất hẳn. Đọc sẵn nội dung các file tham chiếu trước khi chạy, xong job
+ * (thành công hay lỗi) thì ghi lại file nào bị mất/bị thay đổi.
+ */
+async function backupReferenceJsonFiles(
+  fileNames: string[],
+): Promise<{ filePath: string; content: string }[]> {
+  const backups: { filePath: string; content: string }[] = [];
+  for (const fileName of fileNames) {
+    const filePath = path.join(config.chatAIResultsDir, path.basename(fileName));
+    const content = await fsp.readFile(filePath, "utf-8").catch(() => null);
+    if (content !== null) backups.push({ filePath, content });
+  }
+  return backups;
+}
+
+async function restoreReferenceJsonFiles(
+  backups: { filePath: string; content: string }[],
+): Promise<void> {
+  for (const { filePath, content } of backups) {
+    const current = await fsp.readFile(filePath, "utf-8").catch(() => null);
+    if (current === content) continue;
+    await fsp
+      .writeFile(filePath, content, "utf-8")
+      .then(() =>
+        console.warn(
+          `[queue] File JSON tham chiếu "${path.basename(filePath)}" bị ${current === null ? "mất" : "ghi đè"} trong lúc tạo kịch bản mới — đã khôi phục bản gốc.`,
+        ),
+      )
+      .catch((err) =>
+        console.error(`[queue] Không khôi phục được file tham chiếu "${filePath}":`, err),
+      );
+  }
+}
+
 async function processChatAIQueue(): Promise<void> {
   if (chatAIProcessing || !telegram) return;
   chatAIProcessing = true;
@@ -2861,6 +3088,12 @@ async function processChatAIQueue(): Promise<void> {
       console.log(
         `[queue] processChatAIQueue: bắt đầu job ${jobId} (type="${job.type}").`,
       );
+      // "Tạo kịch bản mới": giữ bản gốc các file JSON tham chiếu — xem
+      // backupReferenceJsonFiles.
+      const referenceBackups =
+        job.type === "generateScript"
+          ? await backupReferenceJsonFiles(job.referenceFileNames)
+          : [];
       try {
         let downloadedFiles: string[];
         if (job.type === "scriptReferenceVideo") {
@@ -2886,13 +3119,33 @@ async function processChatAIQueue(): Promise<void> {
           // thẳng nội dung file làm text, xem docstring askQwen), nên không
           // còn 2 tầng thử/fallback như bản ChatGPT cũ (không có
           // fileAccessError kiểu ChatGPT để mà fallback).
-          const ask = config.chatAIProvider === "gemini" ? askGemini : askChatAI;
-          ({ downloadedFiles } = await ask(
-            job.prompt,
-            jobId,
-            job.promptFileName,
-            job.promptAttachmentPath,
-          ));
+          // "Tạo kịch bản mới" nhiều tập: mỗi tập tham chiếu ra 1 file JSON —
+          // báo Gemini số file bắt buộc (xem AskGeminiOptions). "Theo từng
+          // tập" (generatedFolderNameOverride) chỉ ra 1 file dù có thêm file
+          // tham chiếu liên tục.
+          const expectedFileCount =
+            job.type === "generateScript" && !job.generatedFolderNameOverride
+              ? job.referenceFileNames.length
+              : undefined;
+          ({ downloadedFiles } =
+            config.chatAIProvider === "gemini"
+              ? await askGemini(
+                  job.prompt,
+                  jobId,
+                  job.promptFileName,
+                  job.promptAttachmentPath,
+                  {
+                    expectedFileCount,
+                    expectedSourceNames:
+                      job.type === "generateScript" ? job.referenceFileNames : undefined,
+                  },
+                )
+              : await askChatAI(
+                  job.prompt,
+                  jobId,
+                  job.promptFileName,
+                  job.promptAttachmentPath,
+                ));
           console.log(
             `[queue] processChatAIQueue(${jobId}): askChatAI xong, tải được ${downloadedFiles.length} file.`,
           );
@@ -3003,7 +3256,11 @@ async function processChatAIQueue(): Promise<void> {
         // đầu gen ảnh/video (có thể mất rất lâu) — theo yêu cầu người dùng,
         // để user xem/kiểm tra được kịch bản ngay, không phải đợi hết cả
         // pipeline. Lỗi gửi (vd Telegram lỗi) KHÔNG chặn pipeline tiếp theo.
-        for (const filePath of downloadedFiles) {
+        // Job thuộc lô nhiều video: JSON gom lại gửi 1 lượt khi cả lô xong
+        // (recordReferenceVideoBatchResult bên dưới), không gửi lẻ ở đây.
+        const isBatchJob =
+          job.type === "scriptReferenceVideo" && job.batchId !== undefined;
+        for (const filePath of isBatchJob ? [] : downloadedFiles) {
           if (path.extname(filePath).toLowerCase() !== ".json") continue;
           await sendDocumentMaybeSplit(
             job.chatId,
@@ -3016,6 +3273,7 @@ async function processChatAIQueue(): Promise<void> {
               err,
             );
           });
+          await sleep(1000); // tránh gửi quá nhanh nhiều file liên tiếp (Telegram 429)
         }
 
         if (job.type === "scriptReferenceVideo" && job.skipImageConfirmation) {
@@ -3027,7 +3285,13 @@ async function processChatAIQueue(): Promise<void> {
           const jsonFiles = downloadedFiles.filter(
             (f) => path.extname(f).toLowerCase() === ".json",
           );
-          if (jsonFiles.length === 0) {
+          if (job.batchId !== undefined && !job.verifyPromptTest) {
+            await recordReferenceVideoBatchResult(
+              job.batchId,
+              job.batchIndex ?? 0,
+              { jsonFiles },
+            );
+          } else if (jsonFiles.length === 0) {
             await telegram.sendMessage(
               job.chatId,
               "✅ ChatAI đã trả lời xong (không có file JSON đính kèm nào).",
@@ -3207,8 +3471,19 @@ async function processChatAIQueue(): Promise<void> {
           `[queue] processChatAIQueue(${jobId}): đã xử lý xong job.`,
         );
       } catch (err) {
-        await notifyError(job, err);
+        if (job.type === "scriptReferenceVideo" && job.batchId !== undefined) {
+          // Lô nhiều video: lỗi 1 video không báo "404" lẻ, ghi vào thống kê
+          // chung của lô.
+          console.error(`[queue] Tham chiếu video "${job.videoFileName}" (lô) thất bại:`, err);
+          await notifyAdmins(err);
+          await recordReferenceVideoBatchResult(job.batchId, job.batchIndex ?? 0, {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        } else {
+          await notifyError(job, err);
+        }
       } finally {
+        await restoreReferenceJsonFiles(referenceBackups);
         if (job.promptAttachmentPath) {
           await fsp.unlink(job.promptAttachmentPath).catch(() => {});
         }

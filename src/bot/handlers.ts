@@ -32,7 +32,9 @@ import {
   enqueueComfyRegenerateWithMerge,
   enqueueJob,
   isStoryboardJobQueued,
+  createReferenceVideoBatch,
   mergeVideosAndPublish,
+  recordReferenceVideoBatchResult,
   stopAll,
 } from "../queue";
 import {
@@ -128,6 +130,31 @@ interface PendingOmniRefBuffer {
 }
 const pendingOmniRefBuffers = new Map<number, PendingOmniRefBuffer>();
 
+// Theo yêu cầu người dùng: "Tham chiếu video" cho phép gửi NHIỀU video — gom
+// mọi video user gửi sau khi bấm nút (mỗi video Telegram là 1 tin nhắn riêng,
+// kể cả album), CHỈ bắt đầu phân tích khi user gõ "xong"/"done" (xem
+// REFERENCE_VIDEO_DONE_PATTERN trong bot.on(message("text"))) — KHÔNG chốt lô
+// theo thời gian ngắn nữa: video dài upload lâu, gửi rời cách nhau vài chục
+// giây sẽ bị tách lô/bỏ sót. Không tự chốt lô theo thời gian; chưa gõ "xong"
+// mà bấm chức năng khác thì huỷ lô (clearPendingUploads).
+const REFERENCE_VIDEO_DONE_PATTERN = /^\s*(xong|done)\s*[.!]*\s*$/i;
+/** Gom tin "đã nhận N video" — album nhiều video chỉ báo 1 lần. */
+const REFERENCE_VIDEO_ACK_DEBOUNCE_MS = 2000;
+interface PendingReferenceVideo {
+  fileId: string;
+  videoFileName: string;
+  caption?: string;
+  messageId: number;
+}
+interface PendingReferenceVideoBuffer {
+  ctx: Context;
+  chatId: number;
+  items: PendingReferenceVideo[];
+  /** Hẹn giờ gửi tin "đã nhận N video". */
+  ackTimer?: ReturnType<typeof setTimeout>;
+}
+const pendingReferenceVideoBuffers = new Map<number, PendingReferenceVideoBuffer>();
+
 /**
  * Bấm lại bất kỳ nút menu nào (kể cả bấm lại đúng nút cũ) TRƯỚC khi gõ prompt
  * nghĩa là user muốn bắt đầu lại — huỷ hết ảnh/video/audio đã gửi dở dang
@@ -149,6 +176,22 @@ function clearPendingUploads(userId: number): boolean {
   if (omniRefBuffer) {
     clearTimeout(omniRefBuffer.timer);
     pendingOmniRefBuffers.delete(userId);
+    hadSomething = true;
+  }
+
+  // Theo yêu cầu người dùng: đã gửi video "Tham chiếu video" nhưng chưa gõ
+  // "xong" mà bấm chức năng khác → huỷ lô, báo cho user biết.
+  const referenceVideoBuffer = pendingReferenceVideoBuffers.get(userId);
+  if (referenceVideoBuffer) {
+    clearTimeout(referenceVideoBuffer.ackTimer);
+    pendingReferenceVideoBuffers.delete(userId);
+    if (waitingMode.get(userId) === "videoReference") waitingMode.delete(userId);
+    void referenceVideoBuffer.ctx.telegram
+      .sendMessage(
+        referenceVideoBuffer.chatId,
+        `❌ Đã huỷ tham chiếu ${referenceVideoBuffer.items.length} video (chưa gõ "xong"/"done").`,
+      )
+      .catch(() => {});
     hadSomething = true;
   }
 
@@ -357,6 +400,123 @@ async function handleScriptReferenceVideoUpload(
  * downloadTelegramFile + submitChatAIJob), ChatAI tự đọc nội dung file, không cần
  * dán nguyên văn bản file làm prompt text nữa (tránh dán prompt siêu dài).
  */
+/**
+ * Thêm 1 video vào lô "Tham chiếu video" đang gom của user, báo "đã nhận N
+ * video" (gom theo REFERENCE_VIDEO_ACK_DEBOUNCE_MS).
+ */
+function addReferenceVideo(
+  ctx: Context,
+  userId: number,
+  chatId: number,
+  item: PendingReferenceVideo,
+): void {
+  const existing = pendingReferenceVideoBuffers.get(userId);
+  if (existing) clearTimeout(existing.ackTimer);
+  const buffer: PendingReferenceVideoBuffer = existing ?? {
+    ctx,
+    chatId,
+    items: [],
+  };
+  buffer.items.push(item);
+
+  buffer.ackTimer = setTimeout(() => {
+    void ctx.telegram
+      .sendMessage(
+        chatId,
+        `📥 Đã nhận ${buffer.items.length} video. Gửi thêm video, hoặc gõ "xong"/"done" để bắt đầu phân tích.`,
+        { reply_parameters: { message_id: item.messageId } },
+      )
+      .catch(() => {});
+  }, REFERENCE_VIDEO_ACK_DEBOUNCE_MS);
+  pendingReferenceVideoBuffers.set(userId, buffer);
+}
+
+/**
+ * Chốt lô "Tham chiếu video": 1 video → giữ nguyên luồng cũ
+ * (handleScriptReferenceVideoUpload, gửi JSON ngay khi xong). Nhiều video →
+ * tạo 1 lô (createReferenceVideoBatch), tải TUẦN TỰ từng video rồi đẩy mỗi
+ * video 1 job "scriptReferenceVideo" mang batchId — phân tích lần lượt, JSON
+ * gom lại gửi 1 lượt kèm thống kê khi cả lô xong
+ * (recordReferenceVideoBatchResult, queue.ts). Video không có caption dùng
+ * caption đầu tiên trong lô (album Telegram chỉ gắn caption vào video đầu).
+ */
+async function flushReferenceVideoBuffer(userId: number): Promise<void> {
+  const buffer = pendingReferenceVideoBuffers.get(userId);
+  if (!buffer) return;
+  clearTimeout(buffer.ackTimer);
+  pendingReferenceVideoBuffers.delete(userId);
+  if (waitingMode.get(userId) === "videoReference") waitingMode.delete(userId);
+
+  const { ctx, chatId, items } = buffer;
+  const sharedCaption = items.find((i) => i.caption)?.caption;
+  const options = {
+    masterPromptPath: config.promptVideoReference,
+    skipImageConfirmation: true,
+  };
+
+  if (items.length === 1) {
+    const [item] = items;
+    await handleScriptReferenceVideoUpload(
+      ctx,
+      item.fileId,
+      chatId,
+      item.messageId,
+      item.videoFileName,
+      item.caption,
+      options,
+    );
+    return;
+  }
+
+  const firstMessageId = items[0].messageId;
+  const statusMessage = await ctx.telegram.sendMessage(
+    chatId,
+    `⏳ Đã nhận ${items.length} video — đang tải từ Telegram rồi phân tích lần lượt, xong hết sẽ gửi kết quả cùng lúc.`,
+    { reply_parameters: { message_id: firstMessageId } },
+  );
+  const batchId = createReferenceVideoBatch(
+    chatId,
+    firstMessageId,
+    items.map((i) => i.videoFileName),
+    statusMessage.message_id,
+  );
+
+  for (const [index, item] of items.entries()) {
+    const ext = path.extname(item.videoFileName) || ".mp4";
+    let videoPath: string;
+    try {
+      videoPath = await downloadTelegramVideoRobust(
+        ctx,
+        item.fileId,
+        chatId,
+        item.messageId,
+        ext,
+      );
+    } catch (err) {
+      console.error(`[bot] Tải video "${item.videoFileName}" (lô) thất bại:`, err);
+      await recordReferenceVideoBatchResult(batchId, index, {
+        error: isTelegramFileTooBigError(err)
+          ? "video quá lớn, không tải được từ Telegram"
+          : `không tải được video từ Telegram${err instanceof Error ? ` (${err.message})` : ""}`,
+      });
+      continue;
+    }
+    enqueueJob({
+      type: "scriptReferenceVideo",
+      chatId,
+      userId,
+      prompt: "",
+      promptMessageId: item.messageId,
+      videoPath,
+      videoFileName: item.videoFileName,
+      extraInstruction: item.caption ?? sharedCaption,
+      ...options,
+      batchId,
+      batchIndex: index,
+    });
+  }
+}
+
 const CHATAI_FILE_ATTACHMENT_PROMPT = "Hãy thực hiện yêu cầu trong file sau";
 
 /** Cùng vai trò với CHATAI_FILE_ATTACHMENT_PROMPT nhưng dùng cho nút "Tạo kịch bản mới" (GENERATE_SCRIPT_BUTTON_LABEL) — file đính kèm lúc này gồm CẢ master prompt (prompt_generate_script.txt) LẪN nội dung (các) file JSON tham chiếu, xem handleGenerateScriptRequest. */
@@ -1840,6 +2000,7 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.command(["start", "menu"], async (ctx) => {
     if (!ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    if (ctx.from) clearPendingUploads(ctx.from.id);
     await ctx.reply("Menu:", promptMenu);
   });
 
@@ -1934,7 +2095,7 @@ export function registerHandlers(bot: Telegraf): void {
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "videoReference");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gửi 1 video tham chiếu — bot sẽ phân tích nhân vật/bối cảnh/đạo cụ rồi trả về JSON gồm các đoạn video ngắn nối tiếp (mỗi đoạn tối đa 15s, ranh giới cắt theo lời thoại hợp lý) dùng để gen lại toàn bộ video.`,
+      `${ctx.from.first_name ?? "Bạn"}, gửi 1 hoặc nhiều video tham chiếu, gửi xong gõ "xong" hoặc "done" để bắt đầu phân tích (nhiều video thì bot phân tích lần lượt rồi trả kết quả cùng lúc kèm thống kê) — bot sẽ phân tích nhân vật/bối cảnh/đạo cụ rồi trả về JSON gồm các đoạn video ngắn nối tiếp (mỗi đoạn tối đa 15s, ranh giới cắt theo lời thoại hợp lý) dùng để gen lại toàn bộ video.`,
       promptMenu
     );
   });
@@ -2001,6 +2162,7 @@ export function registerHandlers(bot: Telegraf): void {
 
   bot.hears(STOP_ALL_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
     stopAll(ctx.from.id);
     await ctx.reply(`🛑 Đã dừng job của bạn`, promptMenu);
   });
@@ -2085,6 +2247,30 @@ export function registerHandlers(bot: Telegraf): void {
     }
 
     const userId = ctx.from.id;
+
+    // "Tham chiếu video" nhiều video: gõ "xong"/"done" mới bắt đầu phân tích
+    // (xem REFERENCE_VIDEO_DONE_PATTERN). Đang gom video mà gõ text khác thì
+    // nhắc lại, giữ nguyên lô.
+    const referenceVideoBuffer = pendingReferenceVideoBuffers.get(userId);
+    const isReferenceVideoDone = REFERENCE_VIDEO_DONE_PATTERN.test(ctx.message.text);
+    if (referenceVideoBuffer) {
+      if (isReferenceVideoDone) {
+        await flushReferenceVideoBuffer(userId);
+      } else {
+        await ctx.reply(
+          `Đang gom ${referenceVideoBuffer.items.length} video tham chiếu — gửi thêm video, hoặc gõ "xong"/"done" để bắt đầu phân tích (bấm nút khác để huỷ).`,
+          { reply_parameters: { message_id: ctx.message.message_id } },
+        );
+      }
+      return;
+    }
+    if (isReferenceVideoDone && waitingMode.get(userId) === "videoReference") {
+      await ctx.reply(
+        'Chưa nhận được video nào — gửi video trước rồi gõ "xong"/"done".',
+        { reply_parameters: { message_id: ctx.message.message_id } },
+      );
+      return;
+    }
 
     // Gõ tay "<tên file json>__<id>" để yêu cầu tạo lại 1 entry cụ thể — kiểm
     // tra TRƯỚC mọi luồng theo waitingMode khác, vì đây là lệnh độc lập,
@@ -2699,22 +2885,19 @@ export function registerHandlers(bot: Telegraf): void {
     // ngắn nối tiếp (tối đa 15s/đoạn, ranh giới theo lời thoại — xem mục 3B
     // trong prompt_video_reference.txt) thay vì chia theo diễn biến/cảnh
     // như prompt_split_video.txt.
+    // Cho phép gửi nhiều video cùng lúc — gom lô (addReferenceVideo), giữ
+    // waitingMode tới khi chốt lô để video tiếp theo vẫn vào đúng lô.
     if (waitingMode.get(userId) === "videoReference") {
-      waitingMode.delete(userId);
-      const videoFileName = resolveVideoFileName(
-        ctx.message.video.file_name,
-        ctx.message.caption,
-        ctx.message.message_id,
-      );
-      await handleScriptReferenceVideoUpload(
-        ctx,
-        ctx.message.video.file_id,
-        ctx.chat.id,
-        ctx.message.message_id,
-        videoFileName,
-        ctx.message.caption?.trim() || undefined,
-        { masterPromptPath: config.promptVideoReference, skipImageConfirmation: true },
-      );
+      addReferenceVideo(ctx, userId, ctx.chat.id, {
+        fileId: ctx.message.video.file_id,
+        videoFileName: resolveVideoFileName(
+          ctx.message.video.file_name,
+          ctx.message.caption,
+          ctx.message.message_id,
+        ),
+        caption: ctx.message.caption?.trim() || undefined,
+        messageId: ctx.message.message_id,
+      });
       return;
     }
 
@@ -2978,26 +3161,19 @@ export function registerHandlers(bot: Telegraf): void {
     if (waitingMode.get(userId) === "videoReference") {
       const documentMimeType = ctx.message.document.mime_type ?? "";
       if (!documentMimeType.startsWith("video/")) {
-        await ctx.reply(
-          "Chế độ Tham chiếu video chỉ nhận file video. Gửi đúng 1 video.",
-        );
+        await ctx.reply("Chế độ Tham chiếu video chỉ nhận file video.");
         return;
       }
-      waitingMode.delete(userId);
-      const videoFileName = resolveVideoFileName(
-        ctx.message.document.file_name,
-        ctx.message.caption,
-        ctx.message.message_id,
-      );
-      await handleScriptReferenceVideoUpload(
-        ctx,
-        ctx.message.document.file_id,
-        ctx.chat.id,
-        ctx.message.message_id,
-        videoFileName,
-        ctx.message.caption?.trim() || undefined,
-        { masterPromptPath: config.promptVideoReference, skipImageConfirmation: true },
-      );
+      addReferenceVideo(ctx, userId, ctx.chat.id, {
+        fileId: ctx.message.document.file_id,
+        videoFileName: resolveVideoFileName(
+          ctx.message.document.file_name,
+          ctx.message.caption,
+          ctx.message.message_id,
+        ),
+        caption: ctx.message.caption?.trim() || undefined,
+        messageId: ctx.message.message_id,
+      });
       return;
     }
 

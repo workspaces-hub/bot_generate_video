@@ -4,6 +4,10 @@ import { config } from "./config";
 import { registerHandlers } from "./bot/handlers";
 import { startQwenFileServerEagerly } from "./automation/qwenFileServer";
 import { initQueue } from "./queue";
+import {
+  getGeminiBrowserContext,
+  getGeminiImageBrowserContext,
+} from "./automation/geminiBrowser";
 
 // Theo yêu cầu người dùng (VPS 100% CPU do các Chrome instance gen ảnh/video
 // — xác nhận qua `ps aux --sort=-%cpu` thật: 1 renderer Chrome chiếm 64.9%
@@ -117,5 +121,20 @@ bot
     process.exit(1);
   });
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+// Trước khi thoát (Ctrl+C/pm2 stop): lưu session Gemini mới nhất (xem
+// persistSession trong browser.ts) — best-effort, tối đa 5s. Ctrl+C trong
+// terminal cũng gửi SIGINT cho Chrome con nên có thể Chrome đã chết trước —
+// vì vậy session còn được lưu định kỳ + sau mỗi job, không chỉ dựa vào đây.
+async function shutdown(signal: "SIGINT" | "SIGTERM"): Promise<void> {
+  bot.stop(signal);
+  await Promise.race([
+    Promise.all([
+      getGeminiBrowserContext.saveSession(),
+      getGeminiImageBrowserContext.saveSession(),
+    ]),
+    new Promise((resolve) => setTimeout(resolve, 5000)),
+  ]);
+  process.exit(0);
+}
+process.once("SIGINT", () => void shutdown("SIGINT"));
+process.once("SIGTERM", () => void shutdown("SIGTERM"));

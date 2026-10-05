@@ -19,7 +19,11 @@ export const geminiPromptInputCandidates = (page: Page): Array<() => Locator> =>
   () => page.locator('[contenteditable="true"][role="textbox"]'),
 ];
 
+// DOM thật (debug job 38917089-274d-4520-a029-eead0a383026): class
+// "send-button" nằm ở <gem-icon-button> bọc ngoài, <button> thật bên trong có
+// aria-label "Gửi tin nhắn".
 export const geminiSendButtonCandidates = (page: Page): Array<() => Locator> => [
+  () => page.locator("gem-icon-button.send-button:not(.stop) button"),
   () => page.locator("button.send-button:not(.stop)"),
   () => page.getByRole("button", { name: /^(send message|gửi tin nhắn|gửi)$/i }),
 ];
@@ -27,7 +31,7 @@ export const geminiSendButtonCandidates = (page: Page): Array<() => Locator> => 
 /** Nút Stop hiện trong lúc Gemini đang trả lời (nút Send đổi thành Stop). */
 export const geminiStopButtonLocator = (page: Page): Locator =>
   page
-    .locator("button.send-button.stop")
+    .locator("gem-icon-button.send-button.stop button, button.send-button.stop")
     .or(page.getByRole("button", { name: /stop response|dừng phản hồi|dừng câu trả lời/i }));
 
 /** Mỗi lượt trả lời của Gemini là 1 <model-response>. */
@@ -46,6 +50,8 @@ export const geminiCodeBlockLocator = (response: Locator): Locator =>
 
 /** Nút mở menu đính kèm (dấu "+" cạnh ô nhập). */
 export const geminiUploadMenuButtonCandidates = (page: Page): Array<() => Locator> => [
+  // DOM thật (job 38917089): nút "+" có aria-label "Nội dung tải lên và công cụ".
+  () => page.getByRole("button", { name: /nội dung tải lên|upload.*tools/i }),
   () => page.locator('button[aria-label*="upload file menu" i]'),
   () => page.locator('button[aria-label*="tải tệp lên" i]'),
   () => page.locator("uploader button").first(),
@@ -61,7 +67,13 @@ export const geminiUploadFilesMenuItemCandidates = (page: Page): Array<() => Loc
 
 /** Thẻ file đã đính kèm trong composer. */
 export const geminiAttachmentPreviewLocator = (page: Page): Locator =>
-  page.locator("uploader-file-preview, file-preview, .file-preview-container");
+  page.locator(
+    'uploader-file-preview, file-preview, .file-preview-container, [data-test-id="uploaded-file"]',
+  );
+
+/** Thông báo nổi (snackbar) của Gemini — vd file bị từ chối/quá lớn. */
+export const geminiSnackbarLocator = (page: Page): Locator =>
+  page.locator(".mat-mdc-snack-bar-label, simple-snack-bar, mat-snack-bar-container");
 
 /** Dấu hiệu file đính kèm còn đang upload/xử lý (spinner/progress trong thẻ file). */
 export const geminiAttachmentLoadingLocator = (page: Page): Locator =>

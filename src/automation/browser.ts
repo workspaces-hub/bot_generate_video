@@ -23,6 +23,22 @@ export interface BrowserContextGetter {
    * lỗi khi đóng (nếu có) chỉ log, không throw.
    */
   close: () => Promise<void>;
+  /**
+   * Ghi session (cookies/localStorage) của context hiện tại ngược lại vào
+   * storageStatePath — chỉ có tác dụng khi bật persistSession (xem
+   * createBrowserContextManager). No-op nếu chưa có context/Chrome đã chết.
+   */
+  saveSession: () => Promise<void>;
+}
+
+export interface PersistSessionOptions {
+  /** Chu kỳ tự lưu session trong lúc Chrome còn sống (ms). */
+  intervalMs: number;
+  /**
+   * Session có còn đăng nhập không — false thì KHÔNG ghi đè file (tránh lưu
+   * trạng thái đã bị đăng xuất lên trên session tốt).
+   */
+  isValid: (cookieNames: Set<string>) => boolean;
 }
 
 export function createBrowserContextManager(
@@ -47,8 +63,42 @@ export function createBrowserContextManager(
    * bất kỳ frame nào" dù đã dò đúng frame Turnstile.
    */
   disableGpu = true,
+  /**
+   * Theo phản ánh người dùng (Gemini: Ctrl+C rồi chạy lại bot thì mất đăng
+   * nhập): Google XOAY VÒNG cookie phiên (__Secure-1PSIDTS...) ngay trong
+   * Chrome của bot và vô hiệu hoá bản cũ, trong khi file session chỉ được ghi
+   * 1 lần lúc login → lần chạy sau nạp lại cookie cũ = bị đăng xuất. Bật để
+   * định kỳ + lúc đóng Chrome ghi session MỚI NHẤT ngược lại vào file.
+   */
+  persistSession?: PersistSessionOptions,
 ): BrowserContextGetter {
   let contextPromise: Promise<BrowserContext> | null = null;
+  let persistTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function saveSession(): Promise<void> {
+    if (!persistSession || !contextPromise) return;
+    const context = await contextPromise.catch(() => null);
+    if (!context || !context.browser()?.isConnected()) return;
+    try {
+      const state = await context.storageState();
+      const cookieNames = new Set(state.cookies.map((c) => c.name));
+      if (!persistSession.isValid(cookieNames)) {
+        console.warn(
+          `[${logLabel}] Session hiện tại có vẻ đã bị đăng xuất — KHÔNG ghi đè ${storageStatePath}.`,
+        );
+        return;
+      }
+      // Ghi file tạm rồi rename — bị kill giữa chừng không làm hỏng file cũ.
+      const tmpPath = `${storageStatePath}.tmp`;
+      await fs.promises.writeFile(tmpPath, JSON.stringify(state, null, 2), "utf-8");
+      await fs.promises.rename(tmpPath, storageStatePath);
+    } catch (err) {
+      console.warn(
+        `[${logLabel}] Không lưu được session (bỏ qua):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
   // Mốc lần gần nhất có nơi lấy context — xem close(): khoảng giữa lúc 1 nơi
   // gọi getContext() và lúc nó kịp newPage() thì context.pages() vẫn = 0.
   let lastAcquiredAt = 0;
@@ -81,7 +131,16 @@ export function createBrowserContextManager(
     browser.on("disconnected", () => {
       console.warn(`[${logLabel}] Chrome đã ngắt kết nối/crash — sẽ khởi động lại ở job tiếp theo.`);
       contextPromise = null;
+      if (persistTimer) {
+        clearInterval(persistTimer);
+        persistTimer = null;
+      }
     });
+
+    if (persistSession) {
+      if (persistTimer) clearInterval(persistTimer);
+      persistTimer = setInterval(() => void saveSession(), persistSession.intervalMs);
+    }
 
     return context;
   }
@@ -142,6 +201,7 @@ export function createBrowserContextManager(
       );
       return;
     }
+    await saveSession();
     contextPromise = null;
     const browser = context?.browser();
     if (browser?.isConnected()) {
@@ -153,6 +213,7 @@ export function createBrowserContextManager(
 
   const getter = getContext as BrowserContextGetter;
   getter.close = close;
+  getter.saveSession = saveSession;
   return getter;
 }
 

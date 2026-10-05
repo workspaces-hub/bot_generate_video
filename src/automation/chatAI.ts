@@ -572,23 +572,23 @@ async function uploadAttachment(
   // SỬA THÊM (xem docstring splitFileNameForRenameMatch): so khớp theo
   // prefix/suffix (^=/$=, KHÔNG exact-match) — ChatGPT có thể đã tự đổi tên
   // file thành "<tên>(2).<đuôi>" nếu trùng tên với file đã upload trước đó.
-  const { prefix, suffix } = splitFileNameForRenameMatch(fileName);
-  const tile = page
-    .locator(`[role="group"][aria-label^="${prefix}"][aria-label$="${suffix}"]`)
-    .or(page.locator(`button[aria-label^="${prefix}"][aria-label$="${suffix}"]`));
-  const tileVisible = await tile
-    .first()
-    .isVisible({ timeout: 3000 })
-    .catch(() => false);
-  if (tileVisible) {
-    console.log(
-      `[chatAI] askChatAI(${jobId}): đã xác nhận tile đính kèm "${fileName}" (hoặc tên đã bị ChatGPT đổi do trùng, xem console log innerText nếu cần) hiển thị đầy đủ trong composer, sẵn sàng submit.`,
-    );
-  } else {
-    console.warn(
-      `[chatAI] askChatAI(${jobId}): KHÔNG thấy tile đính kèm "${fileName}" (đã thử cả tên bị đổi do trùng file) trong composer lúc chuẩn bị submit — có thể ChatGPT đổi cấu trúc DOM hoặc tile đã bị gỡ vì lý do khác, nên kiểm tra debug snapshot nếu kết quả sau đó bị thiếu file.`,
-    );
-  }
+  // const { prefix, suffix } = splitFileNameForRenameMatch(fileName);
+  // const tile = page
+  //   .locator(`[role="group"][aria-label^="${prefix}"][aria-label$="${suffix}"]`)
+  //   .or(page.locator(`button[aria-label^="${prefix}"][aria-label$="${suffix}"]`));
+  // const tileVisible = await tile
+  //   .first()
+  //   .isVisible({ timeout: 3000 })
+  //   .catch(() => false);
+  // if (tileVisible) {
+  //   console.log(
+  //     `[chatAI] askChatAI(${jobId}): đã xác nhận tile đính kèm "${fileName}" (hoặc tên đã bị ChatGPT đổi do trùng, xem console log innerText nếu cần) hiển thị đầy đủ trong composer, sẵn sàng submit.`,
+  //   );
+  // } else {
+  //   console.warn(
+  //     `[chatAI] askChatAI(${jobId}): KHÔNG thấy tile đính kèm "${fileName}" (đã thử cả tên bị đổi do trùng file) trong composer lúc chuẩn bị submit — có thể ChatGPT đổi cấu trúc DOM hoặc tile đã bị gỡ vì lý do khác, nên kiểm tra debug snapshot nếu kết quả sau đó bị thiếu file.`,
+  //   );
+  // }
 }
 
 /**
@@ -953,9 +953,9 @@ async function sendMessage(
           .innerText()
           .catch(() => "");
         if (fileReadyText !== null && text === fileReadyText) {
-          console.log(
-            "[chatAI] sendMessage: nút Stop vẫn hiện nhưng tin nhắn trả lời MỚI đã có file đính kèm, text ổn định (và KHÔNG có tool-call mới nào đang chạy) — coi như xong (không chờ Stop biến mất).",
-          );
+          // console.log(
+          //   "[chatAI] sendMessage: nút Stop vẫn hiện nhưng tin nhắn trả lời MỚI đã có file đính kèm, text ổn định (và KHÔNG có tool-call mới nào đang chạy) — coi như xong (không chờ Stop biến mất).",
+          // );
           return;
         }
         fileReadyText = text;
@@ -986,9 +986,9 @@ async function sendMessage(
       if (hasSeenGenerating) {
         if (stableSince === null) stableSince = Date.now();
         if (Date.now() - stableSince >= stableRequiredMs) {
-          console.log(
-            `[chatAI] sendMessage: ChatAI đã trả lời xong (nút Stop vắng mặt ổn định ${stableRequiredMs}ms).`,
-          );
+          // console.log(
+          //   `[chatAI] sendMessage: ChatAI đã trả lời xong (nút Stop vắng mặt ổn định ${stableRequiredMs}ms).`,
+          // );
           return;
         }
       } else {
@@ -1006,9 +1006,9 @@ async function sendMessage(
           (await assistantMessageLocator(page).count()) >
           messageCountBeforeSend;
         if (hasNewAssistantTurn) {
-          console.log(
-            "[chatAI] sendMessage: ChatAI đã có tin nhắn trả lời MỚI (chưa từng thấy nút Stop — trả lời quá nhanh), coi như xong.",
-          );
+          // console.log(
+          //   "[chatAI] sendMessage: ChatAI đã có tin nhắn trả lời MỚI (chưa từng thấy nút Stop — trả lời quá nhanh), coi như xong.",
+          // );
           return;
         }
         neverGeneratingPollCount++;
@@ -1167,9 +1167,9 @@ async function downloadAttachedFiles(
     seenLabels.add(label);
     indicesToProcess.push(i);
   }
-  console.log(
-    `[chatAI] downloadAttachedFiles: khớp ${totalMatched} attachment, xử lý ${indicesToProcess.length} file (đã dedupe theo tên).`,
-  );
+  // console.log(
+  //   `[chatAI] downloadAttachedFiles: khớp ${totalMatched} attachment, xử lý ${indicesToProcess.length} file (đã dedupe theo tên).`,
+  // );
 
   const savedPaths: string[] = [];
   // Nếu user gửi prompt qua file .txt (vd "cay_khe.txt"), đặt tên file ChatAI
@@ -1181,9 +1181,9 @@ async function downloadAttachedFiles(
     : null;
 
   for (const i of indicesToProcess) {
-    console.log(
-      `[chatAI] downloadAttachedFiles (index ${i}): bắt đầu tải file đính kèm...`,
-    );
+    // console.log(
+    //   `[chatAI] downloadAttachedFiles (index ${i}): bắt đầu tải file đính kèm...`,
+    // );
     try {
       // QUAN TRỌNG: gắn .catch() NGAY khi tạo promise (cùng statement), TRƯỚC
       // khi click() — nếu không, click() throw (vd element bị re-render/stale
@@ -1292,18 +1292,18 @@ async function downloadAttachedFiles(
             // thao tác "chọn hết" thật của CodeMirror (chọn theo MODEL dữ liệu
             // đầy đủ, không phải theo DOM đang render), đọc lại từ clipboard
             // ra được TOÀN BỘ nội dung bất kể có ảo hoá hay không.
-            const grantErr = await page
-              .context()
-              .grantPermissions(["clipboard-read", "clipboard-write"], {
-                origin: config.chatAIBaseUrl,
-              })
-              .then(() => null)
-              .catch((err) => err);
-            const clickErr = await panelContent
-              .first()
-              .click()
-              .then(() => null)
-              .catch((err) => err);
+            // const grantErr = await page
+            //   .context()
+            //   .grantPermissions(["clipboard-read", "clipboard-write"], {
+            //     origin: config.chatAIBaseUrl,
+            //   })
+            //   .then(() => null)
+            //   .catch((err) => err);
+            // const clickErr = await panelContent
+            //   .first()
+            //   .click()
+            //   .then(() => null)
+            //   .catch((err) => err);
             await page.keyboard.press("ControlOrMeta+A");
             await page.keyboard.press("ControlOrMeta+C");
             let clipboardErr: unknown = null;
@@ -1313,9 +1313,9 @@ async function downloadAttachedFiles(
                 clipboardErr = err;
                 return null;
               });
-            console.log(
-              `[chatAI] downloadAttachedFiles preview panel (index ${i}): grantPermissions${grantErr ? ` lỗi=${grantErr}` : " ok"}, click panel${clickErr ? ` lỗi=${clickErr}` : " ok"}, clipboard đọc được ${previewText ? previewText.length : 0} ký tự${clipboardErr ? `, lỗi clipboard=${clipboardErr}` : ""}`,
-            );
+            // console.log(
+            //   `[chatAI] downloadAttachedFiles preview panel (index ${i}): grantPermissions${grantErr ? ` lỗi=${grantErr}` : " ok"}, click panel${clickErr ? ` lỗi=${clickErr}` : " ok"}, clipboard đọc được ${previewText ? previewText.length : 0} ký tự${clipboardErr ? `, lỗi clipboard=${clipboardErr}` : ""}`,
+            // );
             // Fallback cuối nếu clipboard đọc lỗi (vd bị chặn Permissions-Policy
             // — xem lý do tương tự ở sendMessage): dùng innerText(), chấp nhận
             // rủi ro thiếu nội dung nếu panel có ảo hoá, còn hơn không có gì.
@@ -1328,9 +1328,9 @@ async function downloadAttachedFiles(
                   innerTextErr = err;
                   return null;
                 });
-              console.log(
-                `[chatAI] downloadAttachedFiles preview panel (index ${i}): innerText fallback đọc được ${previewText ? previewText.length : 0} ký tự${innerTextErr ? `, lỗi=${innerTextErr}` : ""}`,
-              );
+              // console.log(
+              //   `[chatAI] downloadAttachedFiles preview panel (index ${i}): innerText fallback đọc được ${previewText ? previewText.length : 0} ký tự${innerTextErr ? `, lỗi=${innerTextErr}` : ""}`,
+              // );
             }
           } else {
             // KHÔNG có .cm-content — panel đang ở biến thể "Preview
@@ -1343,9 +1343,9 @@ async function downloadAttachedFiles(
             // bằng chứng thật cho đúng biến thể "Preview unavailable" này —
             // rất có thể dùng cơ chế tải khác hẳn vì không cần dựng
             // CodeMirror, nên vẫn đáng thử trước khi chịu mất hẳn file.
-            console.warn(
-              `[chatAI] downloadAttachedFiles (index ${i}): panel hiện "Preview unavailable" (không có nội dung CodeMirror để đọc) — thử bấm nút Download trong panel.`,
-            );
+            // console.warn(
+            //   `[chatAI] downloadAttachedFiles (index ${i}): panel hiện "Preview unavailable" (không có nội dung CodeMirror để đọc) — thử bấm nút Download trong panel.`,
+            // );
             const panelDownloadButton = panelContainer.getByRole("button", {
               name: /^download$/i,
             });
@@ -1385,9 +1385,9 @@ async function downloadAttachedFiles(
                   previewText = await popup
                     .evaluate(() => document.body.innerText)
                     .catch(() => null);
-                  console.log(
-                    `[chatAI] downloadAttachedFiles panel Download (index ${i}): mở tab mới, đọc được ${previewText ? previewText.length : 0} ký tự.`,
-                  );
+                  // console.log(
+                  //   `[chatAI] downloadAttachedFiles panel Download (index ${i}): mở tab mới, đọc được ${previewText ? previewText.length : 0} ký tự.`,
+                  // );
                   await popup.close().catch(() => {});
                 }
               }
@@ -1472,9 +1472,9 @@ async function downloadAttachedFiles(
       const filePath = path.join(config.chatAIResultsDir, fileName);
       await download.saveAs(filePath);
       savedPaths.push(filePath);
-      console.log(
-        `[chatAI] downloadAttachedFiles (index ${i}): đã lưu "${filePath}".`,
-      );
+      // console.log(
+      //   `[chatAI] downloadAttachedFiles (index ${i}): đã lưu "${filePath}".`,
+      // );
     } catch (err) {
       console.warn(`[chatAI] Không tải được file đính kèm (index ${i}):`, err);
     }
@@ -2044,9 +2044,9 @@ export async function selectModelGPT6AstraMediumEffort(
     const finalLabel = await announcement
       .innerText()
       .catch(() => "(không đọc được)");
-    console.log(
-      `[chatAI] selectModelGPT6AstraMediumEffort: đã chọn model "${modelName}", effort hiện tại "${finalLabel}" (nấc ${finalValue}/${valueMax})${reachedMedium ? "" : " — KHÔNG tìm thấy nấc nào tên 'Medium', dừng ở nấc cuối đã dò"}.`,
-    );
+    // console.log(
+    //   `[chatAI] selectModelGPT6AstraMediumEffort: đã chọn model "${modelName}", effort hiện tại "${finalLabel}" (nấc ${finalValue}/${valueMax})${reachedMedium ? "" : " — KHÔNG tìm thấy nấc nào tên 'Medium', dừng ở nấc cuối đã dò"}.`,
+    // );
     if (!reachedMedium) {
       await captureSnapshot(page, jobId, "select-gpt6-astra-no-medium-level", {
         includeHtml: true,
@@ -2198,7 +2198,7 @@ export async function askChatAI(
         promptFileName,
         lastMessageCount + 1,
       );
-      console.log('jobId, result', jobId, result);
+      // console.log('jobId, result', jobId, result);
       lastMessageCount = result.messageCount;
       await captureSnapshot(
         page,
@@ -2550,9 +2550,9 @@ async function attemptAskChatAIWithInlineContent(
   promptFileName?: string,
   attachmentPath?: string,
 ): Promise<{ downloadedFiles: string[] }> {
-  console.log(
-    `[chatAI] askChatAIWithInlineContent(${jobId}): bắt đầu — mở trang ChatAI...`,
-  );
+  // console.log(
+  //   `[chatAI] askChatAIWithInlineContent(${jobId}): bắt đầu — mở trang ChatAI...`,
+  // );
   const context = await getChatAIBrowserContext();
   const page = await context.newPage();
   attachModelInfoLogger(page, jobId);
@@ -2602,9 +2602,9 @@ Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài đ�
     let lastMessageCount = 0;
 
     for (let turn = 1; turn <= MAX_TURNS_WAITING_FOR_FILE; turn++) {
-      console.log(
-        `[chatAI] askChatAIWithInlineContent(${jobId}): lượt ${turn}/${MAX_TURNS_WAITING_FOR_FILE} — gửi tin nhắn, đang chờ ChatAI trả lời...`,
-      );
+      // console.log(
+      //   `[chatAI] askChatAIWithInlineContent(${jobId}): lượt ${turn}/${MAX_TURNS_WAITING_FOR_FILE} — gửi tin nhắn, đang chờ ChatAI trả lời...`,
+      // );
       await sendMessage(page, messageToSend, jobId);
 
       // Chờ tới khi có tin nhắn trả lời MỚI (đếm tăng so với lượt trước) —
@@ -2625,11 +2625,11 @@ Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài đ�
       lastMessageCount = count;
 
       const latest = messages.last();
-      await captureSnapshot(
-        page,
-        `${jobId}_${promptFileName || ""}_turn-${turn}`,
-        `result-turn-${turn}`,
-      );
+      // await captureSnapshot(
+      //   page,
+      //   `${jobId}_${promptFileName || ""}_turn-${turn}`,
+      //   `result-turn-${turn}`,
+      // );
 
       const text = await latest.innerText().catch(() => "");
       const chunkJson = await readInlineCodeBlock(page, latest);
@@ -2653,9 +2653,9 @@ Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài đ�
       }
 
       const sawDoneMarker = text.includes(INLINE_CONTENT_DONE_MARKER);
-      console.log(
-        `[chatAI] askChatAIWithInlineContent(${jobId}): lượt ${turn} — nhận ${chunkItemCount} item mới (tổng ${allItems.length}), marker "Đã hoàn thành": ${sawDoneMarker ? "CÓ" : "chưa"}.`,
-      );
+      // console.log(
+      //   `[chatAI] askChatAIWithInlineContent(${jobId}): lượt ${turn} — nhận ${chunkItemCount} item mới (tổng ${allItems.length}), marker "Đã hoàn thành": ${sawDoneMarker ? "CÓ" : "chưa"}.`,
+      // );
 
       if (sawDoneMarker) {
         done = true;
@@ -2691,9 +2691,9 @@ Kết quả PHẢI là 1 JSON ARRAY. Nếu toàn bộ kết quả quá dài đ�
       JSON.stringify(allItems, null, 2),
       "utf-8",
     );
-    console.log(
-      `[chatAI] askChatAIWithInlineContent(${jobId}): xong — tổng ${allItems.length} item, đã lưu "${filePath}".`,
-    );
+    // console.log(
+    //   `[chatAI] askChatAIWithInlineContent(${jobId}): xong — tổng ${allItems.length} item, đã lưu "${filePath}".`,
+    // );
 
     return { downloadedFiles: [filePath] };
   } catch (err) {
@@ -3076,7 +3076,6 @@ Hãy viết lại ĐÚNG prompt này để mô tả lại y hệt ý tưởng, b
     const latest = assistantMessageLocator(page).last();
     const text = await latest.innerText().catch(() => "");
     const revisedPrompt = cleanRevisedPrompt(text);
-    console.log("🚀 ~ reviseGenerationPrompt ~ revisedPrompt:", revisedPrompt);
     if (!revisedPrompt) {
       throw new ChatAIError("ChatAI không trả về prompt viết lại nào");
     }

@@ -325,6 +325,31 @@ async function generateWithContentViolationRetry<T>(
   }
 }
 
+/**
+ * Theo yêu cầu người dùng: gen ẢNH lỗi (với Pollo: đã lỗi cả pollo.ai LẪN
+ * fallback ChatGPT bên trong generateImagePollo) thì tự thử lại TOÀN BỘ thêm
+ * 1 lần trước khi coi entry là lỗi (404). Không thử lại nếu user đã bấm
+ * "Stop All" cho file này.
+ */
+const IMAGE_RETRY_DELAY_MS = 5000;
+async function retryImageOnce<T>(
+  entry: StoryboardEntry,
+  inputPath: string,
+  attempt: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await attempt();
+  } catch (err) {
+    if (isStopStoryboardRequested(inputPath)) throw err;
+    console.warn(
+      `[storyboardPipeline] [${entry.type}] ${entry.id} — gen ảnh lỗi, thử lại 1 lần sau ${IMAGE_RETRY_DELAY_MS / 1000}s:`,
+      err instanceof Error ? err.message : err,
+    );
+    await sleep(IMAGE_RETRY_DELAY_MS);
+    return await attempt();
+  }
+}
+
 const REQUEST_THROTTLE_MS = 15000;
 
 /**
@@ -1076,10 +1101,12 @@ export async function generateReferenceImagesForFileViaAIVideo(
     );
     let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
     try {
-      const imagePaths = await generateWithContentViolationRetry(
-        entry,
-        jobId,
-        () => generateImage(entry.prompt!, { imageCount: 1 }, jobId),
+      const imagePaths = await retryImageOnce(entry, inputPath, () =>
+        generateWithContentViolationRetry(
+          entry,
+          jobId,
+          () => generateImage(entry.prompt!, { imageCount: 1 }, jobId),
+        ),
       );
       if (imagePaths.length === 0) {
         throw new Error("Không tạo được ảnh nào");
@@ -1236,12 +1263,16 @@ export async function generateReferenceImagesForFileViaPollo(
       );
       let destPath = path.join(outputDir, `${sanitizeId(entry.id)}`);
       try {
-        const { filePaths: imagePaths, polloResultId } =
-          await generateWithContentViolationRetry(entry, jobId, () =>
-            withPolloTaskSlot(() =>
-              generateImagePollo(entry.prompt!, {}, jobId),
+        const { filePaths: imagePaths, polloResultId } = await retryImageOnce(
+          entry,
+          inputPath,
+          () =>
+            generateWithContentViolationRetry(entry, jobId, () =>
+              withPolloTaskSlot(() =>
+                generateImagePollo(entry.prompt!, {}, jobId),
+              ),
             ),
-          );
+        );
         if (imagePaths.length === 0) {
           throw new Error("Không tạo được ảnh nào");
         }
@@ -2373,15 +2404,17 @@ export async function generateSceneImagesForFileViaAIVideo(
         refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
       }
 
-      const imagePaths = await generateWithContentViolationRetry(
-        entry,
-        jobId,
-        () =>
-          generateImage(
-            entry.prompt!,
-            { referenceImagePaths: refPaths, imageCount: 1 },
-            jobId,
-          ),
+      const imagePaths = await retryImageOnce(entry, inputPath, () =>
+        generateWithContentViolationRetry(
+          entry,
+          jobId,
+          () =>
+            generateImage(
+              entry.prompt!,
+              { referenceImagePaths: refPaths, imageCount: 1 },
+              jobId,
+            ),
+        ),
       );
       if (imagePaths.length === 0) {
         throw new Error("Không tạo được ảnh nào");
@@ -2568,16 +2601,20 @@ export async function generateSceneImagesForFileViaPollo(
         refPaths.push(await resolveRefImagePath(outputDir, sanitizeId(ref.id)));
       }
 
-      const { filePaths: imagePaths, polloResultId } =
-        await generateWithContentViolationRetry(entry, jobId, () =>
-          withPolloTaskSlot(() =>
-            generateImagePollo(
-              entry.prompt!,
-              { referenceImagePaths: refPaths },
-              jobId,
+      const { filePaths: imagePaths, polloResultId } = await retryImageOnce(
+        entry,
+        inputPath,
+        () =>
+          generateWithContentViolationRetry(entry, jobId, () =>
+            withPolloTaskSlot(() =>
+              generateImagePollo(
+                entry.prompt!,
+                { referenceImagePaths: refPaths },
+                jobId,
+              ),
             ),
           ),
-        );
+      );
       if (polloResultId) {
         entry.polloResultId = polloResultId;
       }

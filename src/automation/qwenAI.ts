@@ -132,9 +132,9 @@ export function mergeJsonPartAuto(
 
   if (state.kind === "unset") {
     state.kind = isArrayPart ? "array" : "object";
-    console.log(
-      `[qwenAI] (job ${jobId}) lượt ${turn} — xác định kiểu kết quả là "${state.kind}" (dựa theo lượt đầu tiên có dữ liệu).`,
-    );
+    // console.log(
+    //   `[qwenAI] (job ${jobId}) lượt ${turn} — xác định kiểu kết quả là "${state.kind}" (dựa theo lượt đầu tiên có dữ liệu).`,
+    // );
   }
 
   if (state.kind === "array") {
