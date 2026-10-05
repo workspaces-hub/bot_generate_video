@@ -635,21 +635,55 @@ function parseJsonFromResponse(
           : { ok: false as const, piece };
       }
     });
-    for (const [index, parsed] of parsedPieces.entries()) {
+    // Phần đứng SAU 1 phần bị cắt chỉ được coi là "viết lại" khi nó chứa
+    // đúng id ĐẦU TIÊN của phần bị cắt. Xác nhận qua lỗi thật (người dùng
+    // gửi HTML): VIDEO_01 bị cắt ở "SPEECH:", Gemini chèn ngay sau 1 fence
+    // "```json" với mảng LOC_02–LOC_06 của câu chuyện KHÁC (schema khác hẳn)
+    // rồi viết "ĐÃ HOÀN THÀNH" — bản cũ coi mảng lạ đó là bản viết lại → gộp
+    // rác vào kết quả và chốt xong khi chưa phân tích hết video.
+    let pendingBrokenId: string | null = null;
+    let pendingBrokenCounted = false;
+    for (const parsed of parsedPieces) {
       if (parsed.ok) {
+        if (pendingBrokenId !== null) {
+          // Phần bị cắt không có id nào (cắt ngay đầu) — không đối chiếu được,
+          // coi phần hợp lệ phía sau là bản viết lại như trước.
+          const isRewrite =
+            pendingBrokenId === "" ||
+            parsed.values.some((v) =>
+              JSON.stringify(v).includes(`"id":${JSON.stringify(pendingBrokenId)}`),
+            );
+          if (!isRewrite) {
+            console.warn(
+              `[gemini] bỏ 1 khối JSON lạ chèn sau phần bị cắt (không chứa "${pendingBrokenId}"): ${JSON.stringify(parsed.values).slice(0, 150)}`,
+            );
+            if (!pendingBrokenCounted) {
+              invalidCount++;
+              pendingBrokenCounted = true;
+            }
+            continue;
+          }
+          // Viết lại hợp lệ — phần bị cắt trước đó không còn tính là hỏng.
+          if (pendingBrokenCounted) invalidCount--;
+          pendingBrokenId = null;
+          pendingBrokenCounted = false;
+        }
         values.push(...parsed.values);
         continue;
       }
-      // Phần hỏng: cứu các item trọn vẹn. Chỉ tính là "khối hỏng" (bắt Gemini
-      // gửi lại) khi KHÔNG có phần hợp lệ nào viết lại phía sau trong cùng
-      // khối — đã viết lại đầy đủ thì phần bị cắt không còn ý nghĩa.
+      // Phần hỏng: cứu các item trọn vẹn, tạm tính là "khối hỏng" (bắt Gemini
+      // gửi lại) cho tới khi gặp 1 phần viết lại hợp lệ phía sau.
       const salvaged = salvageTruncatedJson(parsed.piece);
       if (salvaged !== null) {
         values.push(salvaged);
         salvagedCount++;
       }
-      const rewrittenLater = parsedPieces.slice(index + 1).some((p) => p.ok);
-      if (!rewrittenLater) invalidCount++;
+      if (pendingBrokenId === null || !pendingBrokenCounted) {
+        invalidCount++;
+        pendingBrokenCounted = true;
+      }
+      pendingBrokenId =
+        parsed.piece.match(/"id"\s*:\s*"([^"]+)"/)?.[1] ?? pendingBrokenId ?? "";
     }
   }
   return { values, invalidCount, salvagedCount };
@@ -806,11 +840,86 @@ function buildFirstTurnInstruction(): string {
 - TUYỆT ĐỐI KHÔNG viết "${DONE_MARKER}" khi vẫn còn phần chưa gửi.`;
 }
 
-function buildContinueMessage(state: MergeState, lastTurnInvalid: boolean): string {
-  const invalidWarning = lastTurnInvalid
+/**
+ * Khoá bắt buộc của item theo master prompt — đọc từ 2 dòng quy định schema
+ * trong prompt, vd prompt_video_reference.txt / prompt_generate_script.txt:
+ *   Asset đúng 5 khóa: {"id":string,"type":"CHARACTER"|"LOCATION","ref":[],"prompt":string,"duration":0}.
+ *   VIDEO đúng 9 khóa: {"id":string,"type":"VIDEO","ref":[...],"prompt":string,"duration":number,"shot":integer,...}.
+ * Prompt không có dòng nào như vậy thì không kiểm tra (null).
+ */
+interface ItemSchema {
+  video?: string[];
+  asset?: string[];
+}
+
+function extractItemSchema(text: string): ItemSchema | null {
+  const schema: ItemSchema = {};
+  for (const m of text.matchAll(/\b(Asset|VIDEO)\s+đúng\s+\d+\s+khóa\s*:\s*(\{.*)/gi)) {
+    // Chỉ lấy khoá CẤP NGOÀI: bỏ phần lồng trong "ref":[{...}].
+    const topLevel = m[2].replace(/\[[^\]]*\]/g, "[]");
+    const keys = [...new Set([...topLevel.matchAll(/"([A-Za-z_]+)"\s*:/g)].map((k) => k[1]))];
+    if (keys.length === 0) continue;
+    if (m[1].toUpperCase() === "VIDEO") schema.video = keys;
+    else schema.asset = keys;
+  }
+  return schema.video || schema.asset ? schema : null;
+}
+
+/** Item thiếu khoá bắt buộc (hoặc "prompt" rỗng) theo schema — trả về danh sách khoá thiếu. */
+function missingItemKeys(item: unknown, schema: ItemSchema): string[] {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+  const record = item as Record<string, unknown>;
+  const required = record.type === "VIDEO" ? schema.video : schema.asset;
+  if (!required) return [];
+  const missing = required.filter((key) => !(key in record));
+  if ("prompt" in record && required.includes("prompt") && typeof record.prompt === "string" && record.prompt.trim() === "") {
+    missing.push("prompt (rỗng)");
+  }
+  return missing;
+}
+
+/**
+ * Bỏ các item THIẾU field khỏi 1 phần JSON (mảng item, hoặc object nhiều file
+ * {"<tên>.json": [...]}) — theo yêu cầu người dùng: item VIDEO chưa đủ field
+ * không được gộp vào kết quả, bắt Gemini gửi lại đầy đủ.
+ */
+function dropIncompleteItems(
+  value: unknown,
+  schema: ItemSchema,
+): { value: unknown; dropped: string[] } {
+  const dropped: string[] = [];
+  const filterArray = (items: unknown[]): unknown[] =>
+    items.filter((item) => {
+      const missing = missingItemKeys(item, schema);
+      if (missing.length === 0) return true;
+      const id = (item as { id?: unknown }).id;
+      dropped.push(`${id === undefined ? "(không id)" : String(id)} [thiếu: ${missing.join(", ")}]`);
+      return false;
+    });
+  if (Array.isArray(value)) return { value: filterArray(value), dropped };
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = Array.isArray(val) ? filterArray(val) : val;
+    }
+    return { value: result, dropped };
+  }
+  return { value, dropped };
+}
+
+function buildContinueMessage(
+  state: MergeState,
+  lastTurnInvalid: boolean,
+  incompleteItems: string[] = [],
+): string {
+  const incompleteWarning =
+    incompleteItems.length > 0
+      ? `Các item sau THIẾU field bắt buộc nên bot KHÔNG nhận: ${incompleteItems.join("; ")}. Gửi lại ĐẦY ĐỦ các item này (đủ mọi khóa theo đúng schema ở tin nhắn đầu), rồi mới gửi tiếp phần sau.\n\n`
+      : "";
+  const invalidWarning = lastTurnInvalid && incompleteItems.length === 0
     ? `Lượt vừa rồi có khối JSON bị cắt giữa chừng — bot CHỈ giữ được các item đã viết trọn vẹn (xem trạng thái bên dưới), phần còn lại bị mất. Gửi tiếp NGAY SAU item cuối bot đã có (không quá ~${config.geminiMaxCharsPerTurn} ký tự), đóng ngoặc đầy đủ, không viết chữ nào khác trong khối code.\n\n`
     : "";
-  return `${invalidWarning}Tiếp tục gửi phần tiếp theo (1 khối \`\`\`json\`\`\` hợp lệ, chỉ phần MỚI chưa gửi), đúng quy tắc đã nêu ở lượt đầu.
+  return `${incompleteWarning}${invalidWarning}Tiếp tục gửi phần tiếp theo (1 khối \`\`\`json\`\`\` hợp lệ, chỉ phần MỚI chưa gửi), đúng quy tắc đã nêu ở lượt đầu.
 
 Trạng thái bot đã gom được (dựa CHÍNH XÁC vào đây để biết tiếp tục từ đâu):
 ${describeMergeState(state)}
@@ -906,6 +1015,19 @@ export async function askGemini(
     // await captureSnapshot(page, `${jobId}_gemini-before-send`, "gemini-before-send");
 
     const state: MergeState = { kind: "unset", items: [], obj: {} };
+    // Khoá bắt buộc của item — đọc từ master prompt (prompt, hoặc file .txt
+    // đính kèm với "Tạo kịch bản mới"), xem extractItemSchema.
+    const schemaSource = `${prompt}\n${
+      attachmentPath && /\.(txt|md)$/i.test(attachmentPath)
+        ? await fs.promises.readFile(attachmentPath, "utf-8").catch(() => "")
+        : ""
+    }`;
+    const itemSchema = extractItemSchema(schemaSource);
+    if (itemSchema) {
+      console.log(
+        `[gemini] askGemini(${jobId}): kiểm tra field bắt buộc — VIDEO: ${itemSchema.video?.join(",") ?? "-"}; asset: ${itemSchema.asset?.join(",") ?? "-"}.`,
+      );
+    }
     const expectedFileCount = options.expectedFileCount ?? 0;
     const fileCountNote =
       expectedFileCount > 1
@@ -926,8 +1048,23 @@ export async function askGemini(
       await captureSnapshot(page, `${jobId}_gemini-turn-${turn}`, `gemini-turn-${turn}`);
 
       const { text, codeBlocks } = await readResponse(response);
-      const { values, invalidCount, salvagedCount } = parseJsonFromResponse(codeBlocks, text);
-      for (const value of values) mergeGeminiPart(state, value, jobId, turn);
+      const parsedResponse = parseJsonFromResponse(codeBlocks, text);
+      const { salvagedCount } = parsedResponse;
+      let { invalidCount } = parsedResponse;
+      const incompleteItems: string[] = [];
+      for (const value of parsedResponse.values) {
+        const { value: complete, dropped } = itemSchema
+          ? dropIncompleteItems(value, itemSchema)
+          : { value, dropped: [] as string[] };
+        incompleteItems.push(...dropped);
+        mergeGeminiPart(state, complete, jobId, turn);
+      }
+      if (incompleteItems.length > 0) {
+        console.warn(
+          `[gemini] askGemini(${jobId}): lượt ${turn} có ${incompleteItems.length} item thiếu field — bỏ qua, yêu cầu gửi lại: ${incompleteItems.join("; ")}`,
+        );
+        invalidCount++;
+      }
       // Theo yêu cầu người dùng: chấp nhận cả "Đã hoàn thành" (và mọi kiểu
       // viết hoa/thường khác) — Gemini hay không viết đúng nguyên văn in hoa.
       const sawDone = text
@@ -961,7 +1098,7 @@ export async function askGemini(
       // thì Gemini tưởng phần hỏng đã nhận, viết tiếp phần sau → mất dữ liệu.
       messageToSend =
         invalidCount > 0 || sawDone
-          ? buildContinueMessage(state, invalidCount > 0)
+          ? buildContinueMessage(state, invalidCount > 0, incompleteItems)
           : buildShortContinueMessage(state);
     }
 
