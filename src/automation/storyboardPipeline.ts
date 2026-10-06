@@ -107,6 +107,116 @@ export function findDanglingAssetRefs(entries: StoryboardEntry[]): string[] {
   return errors;
 }
 
+/** Asset đã rút gọn cho ledger tích luỹ xuyên tập — chỉ id/type/prompt (CHARACTER/LOCATION/PROP/OBJECT luôn có ref=[]/duration=0 nên không cần lưu lại). */
+export interface LedgerAsset {
+  id: string;
+  type: string;
+  prompt: string;
+}
+
+/**
+ * SỬA (theo yêu cầu người dùng "sửa assetLedger tạo trong 1 folder trong
+ * chatai-results"): tên subfolder cố định chứa TOÀN BỘ file ledger của mọi
+ * phim, nằm NGAY TRONG chatAIResultsDir — tách riêng khỏi các file JSON
+ * từng tập để không lẫn lộn khi liệt kê/dọn thư mục chatai-results chính.
+ */
+const ASSET_LEDGER_SUBFOLDER = "asset_ledger";
+
+/**
+ * Đường dẫn file ledger tích luỹ asset (CHARACTER/LOCATION/PROP/OBJECT) XUYÊN
+ * SUỐT mọi tập đã gen của 1 phim "Tạo kịch bản theo từng tập"
+ * (GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, filmBaseName — xem
+ * handleGenerateScriptEpisodeRequest trong handlers.ts) — xem docstring
+ * updateAssetLedgerFile để biết lý do cần ledger riêng này. Nằm trong
+ * subfolder ASSET_LEDGER_SUBFOLDER bên trong chatAIResultsDir (không lẫn
+ * với các file JSON từng tập nằm trực tiếp trong chatAIResultsDir).
+ */
+export function assetLedgerFilePathFor(
+  chatAIResultsDir: string,
+  filmBaseName: string,
+): string {
+  return path.join(
+    chatAIResultsDir,
+    ASSET_LEDGER_SUBFOLDER,
+    `${filmBaseName}_asset_ledger.json`,
+  );
+}
+
+/**
+ * Đọc ledger hiện có (nếu đã từng gen tập trước đó cho CÙNG filmBaseName) —
+ * trả về mảng RỖNG nếu chưa có file (tập đầu tiên) hoặc đọc/parse lỗi
+ * (best-effort, không throw — ledger là tính năng BỔ SUNG, lỗi đọc không
+ * được phép chặn luồng gen kịch bản chính).
+ */
+export async function readAssetLedger(
+  ledgerPath: string,
+): Promise<LedgerAsset[]> {
+  try {
+    const raw = await fs.promises.readFile(ledgerPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (e): e is LedgerAsset =>
+        !!e &&
+        typeof e.id === "string" &&
+        typeof e.type === "string" &&
+        typeof e.prompt === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * SỬA (theo yêu cầu người dùng — xác nhận qua câu hỏi thật: "nếu 1 nhân vật
+ * mà xuất hiện ở tập 1 rồi, nhưng đến tập 5,6 mới xuất hiện lại thì có phải
+ * là không đồng bộ nhân vật không" — câu trả lời THẬT là CÓ, đây là lỗ hổng
+ * thật của thiết kế cũ): "TẬP MỚI TRƯỚC ĐÓ" trong
+ * prompt_generate_script_episode.txt chỉ truyền ĐÚNG 1 tập LIỀN TRƯỚC làm
+ * nguồn ledger — nhân vật xuất hiện ở tập 1 rồi vắng mặt tập 2-4 sẽ HOÀN
+ * TOÀN biến mất khỏi "bộ nhớ" của model khi gen tập 5 (model chỉ thấy tập 4,
+ * không có nhân vật đó), khiến model rất có thể tự đặt id/mô tả MỚI cho
+ * nhân vật đáng lẽ phải dùng LẠI id cũ từ tập 1 — mất đồng bộ.
+ *
+ * Hàm này gộp asset CHARACTER/LOCATION/PROP/OBJECT của 1 tập VỪA GEN vào
+ * ledger tích luỹ TOÀN BỘ LỊCH SỬ (không phụ thuộc tập liền trước có nhắc
+ * tới hay không), rồi ghi lại file — gọi sau MỖI lần gen xong 1 tập (xem
+ * processChatAIQueue trong queue.ts). Giữ NGUYÊN mô tả CŨ cho id đã có
+ * (KHÔNG ghi đè) — bản ghi ĐẦU TIÊN của 1 id coi là canonical, đúng quy tắc
+ * "mô tả nhất quán" của Asset Ledger; chỉ thêm MỚI các id chưa từng xuất
+ * hiện trong ledger.
+ */
+export async function updateAssetLedgerFile(
+  ledgerPath: string,
+  newEntries: StoryboardEntry[],
+): Promise<LedgerAsset[]> {
+  const existing = await readAssetLedger(ledgerPath);
+  const existingIds = new Set(existing.map((e) => e.id));
+  for (const entry of newEntries) {
+    if (
+      entry.type !== "CHARACTER" &&
+      entry.type !== "LOCATION" &&
+      entry.type !== "PROP" &&
+      entry.type !== "OBJECT"
+    ) {
+      continue;
+    }
+    if (!entry.id || typeof entry.prompt !== "string" || !entry.prompt) {
+      continue;
+    }
+    if (existingIds.has(entry.id)) continue;
+    existing.push({ id: entry.id, type: entry.type, prompt: entry.prompt });
+    existingIds.add(entry.id);
+  }
+  await fs.promises.mkdir(path.dirname(ledgerPath), { recursive: true });
+  await fs.promises.writeFile(
+    ledgerPath,
+    JSON.stringify(existing, null, 2),
+    "utf-8",
+  );
+  return existing;
+}
+
 /**
  * Chờ ms mili giây — dùng giữa các lần gọi generateReferenceImage/askChatAI
  * liên tiếp (xem generateReferenceImagesForFile/generateSceneImagesForFile

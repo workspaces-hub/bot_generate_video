@@ -30,6 +30,7 @@ import {
   getPolloImageBrowserContext,
 } from "./automation/polloBrowser";
 import {
+  assetLedgerFilePathFor,
   clearStopStoryboardRequest,
   ensureGeneratedFolder,
   ensureGeneratedFolderForName,
@@ -47,6 +48,7 @@ import {
   reconcileAssetLedgerAcrossFiles,
   requestStopStoryboardPipeline,
   sleep,
+  updateAssetLedgerFile,
   type FailedEntry,
   type GenerateVideosResult,
   type StoryboardEntry,
@@ -3399,6 +3401,42 @@ async function processChatAIQueue(): Promise<void> {
                 .catch(() => {});
             }
           }
+
+          // SỬA (theo yêu cầu người dùng — xem docstring updateAssetLedgerFile
+          // trong storyboardPipeline.ts): job "Tạo kịch bản theo từng tập"
+          // (generatedFolderNameOverride = tên phim, LUÔN đúng 1 file JSON/lần
+          // — xem expectedFileCount ở trên) cập nhật ngay ledger tích luỹ TOÀN
+          // BỘ LỊCH SỬ của phim này SAU KHI tập vừa gen xong, để lần gen tập
+          // kế tiếp (dù cách tập này bao xa) luôn biết đủ id/mô tả mọi nhân
+          // vật/bối cảnh/đạo cụ/vật thể đã từng xuất hiện — không chỉ tập
+          // liền trước. Best-effort: lỗi đọc/ghi ledger chỉ log, KHÔNG chặn
+          // luồng chính (ledger là tính năng bổ sung, gen kịch bản vẫn phải
+          // thành công dù ledger lỗi).
+          if (job.generatedFolderNameOverride && jsonFiles.length === 1) {
+            try {
+              const episodeRaw = await fsp.readFile(jsonFiles[0], "utf-8");
+              const episodeEntries = JSON.parse(episodeRaw);
+              if (Array.isArray(episodeEntries)) {
+                const ledgerPath = assetLedgerFilePathFor(
+                  config.chatAIResultsDir,
+                  job.generatedFolderNameOverride,
+                );
+                const ledger = await updateAssetLedgerFile(
+                  ledgerPath,
+                  episodeEntries,
+                );
+                console.log(
+                  `[queue] processChatAIQueue(${jobId}): đã cập nhật asset ledger "${ledgerPath}" (${ledger.length} asset tích luỹ xuyên các tập).`,
+                );
+              }
+            } catch (err) {
+              console.warn(
+                `[queue] processChatAIQueue(${jobId}): không cập nhật được asset ledger cho phim "${job.generatedFolderNameOverride}":`,
+                err,
+              );
+            }
+          }
+
           job.generatedFolderName =
             job.generatedFolderNameOverride ?? job.remakeBaseName;
         }

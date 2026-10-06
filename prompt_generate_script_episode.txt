@@ -2,7 +2,8 @@
 
 Bạn là biên tập viên phim ngắn kiêm người viết prompt tạo video. Đầu vào gồm:
 1. TẬP GỐC — MỘT file JSON kịch bản (storyboard) THAM CHIẾU, đính kèm bên dưới ở mục "TẬP GỐC (khung kỹ thuật)" — dùng làm KHUNG SƯỜN KỸ THUẬT (số shot, số clip, duration từng clip, phong cách dựng phim, cơ chế continuity).
-2. (TUỲ CHỌN) TẬP MỚI TRƯỚC ĐÓ — nếu có, đính kèm ở mục "TẬP MỚI TRƯỚC ĐÓ (tiếp nối/ledger)" bên dưới: đây là tập NGAY TRƯỚC của CHÍNH bộ phim MỚI đang viết (không phải phim gốc) — PHẢI dùng làm nguồn DUY NHẤT để giữ nhất quán nhân vật/bối cảnh/đạo cụ/vật thể (id + mô tả) và tiếp nối đúng mạch truyện.
+2. (TUỲ CHỌN) TẬP MỚI TRƯỚC ĐÓ — nếu có, đính kèm ở mục "TẬP MỚI TRƯỚC ĐÓ (tiếp nối/ledger)" bên dưới: đây là tập NGAY TRƯỚC của CHÍNH bộ phim MỚI đang viết (không phải phim gốc) — dùng để tiếp nối đúng mạch truyện (diễn biến/kết thúc tập trước).
+3. (TUỲ CHỌN) ASSET LEDGER TOÀN PHIM — nếu có, đính kèm ở mục "ASSET LEDGER TOÀN PHIM (mục 2B)" bên dưới: liệt kê id + mô tả của TẤT CẢ nhân vật/bối cảnh/đạo cụ/vật thể từng xuất hiện ở BẤT KỲ tập nào trước đó của phim MỚI này, KỂ CẢ tập KHÔNG liền kề tập này (ví dụ nhân vật xuất hiện tập 1 rồi vắng mặt tới tập 5/6) — đây là NGUỒN ƯU TIÊN CAO NHẤT để giữ nhất quán id + mô tả nhân vật/bối cảnh/đạo cụ/vật thể (xem mục 2B, mục 3).
 
 Nhiệm vụ: viết MỘT tập phim MỚI, dùng khung kỹ thuật của TẬP GỐC, với nội dung (kịch bản/nhân vật/bối cảnh/đạo cụ/lời thoại):
 - Nếu KHÔNG có TẬP MỚI TRƯỚC ĐÓ: đây là TẬP ĐẦU TIÊN của bộ phim mới — tự do sáng tạo nhân vật/bối cảnh/đạo cụ/cốt truyện hoàn toàn mới.
@@ -21,18 +22,26 @@ KẾT QUẢ là ĐÚNG MỘT file JSON (1 tập), dùng trực tiếp để gen 
 1. Đọc toàn bộ TẬP GỐC, xác định: danh sách CHARACTER/LOCATION/PROP/OBJECT (chỉ để biết SỐ LƯỢNG/VAI TRÒ asset mỗi clip cần, không lấy nội dung mô tả), toàn bộ phần tử VIDEO theo đúng thứ tự (shot, clip, duration, aspectRatio, frameRate, số lượng ref).
 2. Ghi nhận NỘI BỘ khung cấu trúc kỹ thuật của TỪNG CLIP: số shot, số clip trong shot, VIDEO.duration, VIDEO.aspectRatio, VIDEO.frameRate, số lượng/loại asset trong VIDEO.ref, có hội thoại hay không, độ phức tạp/số nhân vật tương tác. Đây là KHUNG SƯỜN sẽ giữ nguyên khi viết tập mới (xem mục 2).
 
-## 2. PHÂN TÍCH TẬP MỚI TRƯỚC ĐÓ (NẾU CÓ) — NGUỒN LEDGER/MẠCH TRUYỆN
+## 2. PHÂN TÍCH TẬP MỚI TRƯỚC ĐÓ (NẾU CÓ) — NGUỒN MẠCH TRUYỆN
 
-CHỈ áp dụng mục này nếu có TẬP MỚI TRƯỚC ĐÓ đính kèm. Nếu KHÔNG có, bỏ qua mục này, chuyển thẳng sang mục 3.
+CHỈ áp dụng mục này nếu có TẬP MỚI TRƯỚC ĐÓ đính kèm. Nếu KHÔNG có, bỏ qua mục này, chuyển thẳng sang mục 2B.
 
-1. Đọc toàn bộ TẬP MỚI TRƯỚC ĐÓ, lập danh sách ĐẦY ĐỦ mọi CHARACTER/LOCATION/PROP/OBJECT đã xuất hiện: id CHÍNH XÁC, mô tả nhận dạng (prompt) CHÍNH XÁC.
+1. Đọc toàn bộ TẬP MỚI TRƯỚC ĐÓ, lập danh sách mọi CHARACTER/LOCATION/PROP/OBJECT đã xuất hiện: id, mô tả nhận dạng (prompt) — dùng làm tham khảo PHỤ cho id/mô tả (nguồn CHÍNH/ưu tiên cao hơn là ASSET LEDGER TOÀN PHIM ở mục 2B, nếu có — xem mục 3).
 2. Xác định diễn biến/kết thúc của tập trước (trạng thái cuối của nhân vật/bối cảnh/đạo cụ, mâu thuẫn đang mở, việc đang dang dở) — dùng làm điểm XUẤT PHÁT cho diễn biến tập MỚI này, đảm bảo tính LIÊN TỤC hợp lý của MỘT bộ phim nhiều tập.
+
+## 2B. PHÂN TÍCH ASSET LEDGER TOÀN PHIM (NẾU CÓ) — NGUỒN ID/MÔ TẢ DUY NHẤT
+
+CHỈ áp dụng mục này nếu có mục "ASSET LEDGER TOÀN PHIM" đính kèm bên dưới. Nếu KHÔNG có (tập đầu tiên của phim mới, chưa từng gen tập nào trước), bỏ qua mục này, chuyển thẳng sang mục 3.
+
+1. Ledger này liệt kê id + mô tả (prompt) của TẤT CẢ CHARACTER/LOCATION/PROP/OBJECT đã từng xuất hiện ở BẤT KỲ tập nào trước đó của phim MỚI này — KỂ CẢ những tập KHÔNG liền kề tập này (ví dụ nhân vật xuất hiện ở tập 1 rồi vắng mặt tới tập 5/6 vẫn có mặt đầy đủ trong ledger, khác với mục 2 chỉ thấy đúng 1 tập liền trước).
+2. Đây là NGUỒN ƯU TIÊN CAO NHẤT cho id/mô tả — CAO HƠN mục 2 (TẬP MỚI TRƯỚC ĐÓ). Nếu cùng một thực thể có mô tả khác nhau giữa ledger và TẬP MỚI TRƯỚC ĐÓ (do trôi dạt qua nhiều tập), dùng mô tả trong LEDGER làm chuẩn.
+3. Với MỖI nhân vật/bối cảnh/đạo cụ/vật thể dự kiến xuất hiện ở tập MỚI này, TRA LẠI ledger TRƯỚC KHI đặt id: nếu có id khớp (dù đã lâu không xuất hiện ở các tập gần đây), BẮT BUỘC dùng lại ĐÚNG id và ĐÚNG mô tả đó — KHÔNG tạo id mới, KHÔNG viết lại mô tả khác đi cho cùng thực thể.
 
 ## 3. ASSET LEDGER — QUY TẮC ID BẮT BUỘC
 
-- Nếu CÓ TẬP MỚI TRƯỚC ĐÓ: mọi CHARACTER/LOCATION/PROP/OBJECT ở tập trước mà TIẾP TỤC xuất hiện ở tập này PHẢI dùng LẠI ĐÚNG id và ĐÚNG mô tả nhận dạng (copy nguyên văn, chỉ được khác phần trang phục/biến thể theo cảnh nếu kịch bản có đổi) đã có ở TẬP MỚI TRƯỚC ĐÓ — TUYỆT ĐỐI KHÔNG đổi id hay viết lại mô tả khác đi cho cùng một thực thể. Nhân vật/bối cảnh/đạo cụ/vật thể MỚI (chưa từng xuất hiện ở tập trước) thì tự đặt id mới theo đúng quy ước ở mục 4, không được trùng với bất kỳ id nào đã dùng ở tập trước.
-- Nếu KHÔNG CÓ TẬP MỚI TRƯỚC ĐÓ (tập đầu tiên): tự do đặt id mới cho mọi nhân vật/bối cảnh/đạo cụ/vật thể theo đúng quy ước ở mục 4 — không có ràng buộc ledger nào từ trước.
-- Vì file JSON đầu ra là ĐỘC LẬP/TỰ CHỨA (VIDEO.ref chỉ được tham chiếu id có thật TRONG CHÍNH file này), mọi thực thể dùng ở tập này (kể cả thực thể kế thừa từ tập trước) phải được khai báo ĐẦY ĐỦ LẠI (đúng id, đúng mô tả) trong chính file JSON đang viết.
+- Thứ tự ưu tiên tra cứu id/mô tả cho MỖI nhân vật/bối cảnh/đạo cụ/vật thể dự kiến dùng ở tập này: (1) ASSET LEDGER TOÀN PHIM (mục 2B) nếu có — ưu tiên CAO NHẤT; (2) nếu không khớp trong ledger, tra TẬP MỚI TRƯỚC ĐÓ (mục 2) nếu có; (3) nếu KHÔNG khớp ở cả hai (hoặc đây là tập đầu tiên, không có ledger và không có tập trước), tự đặt id MỚI theo đúng quy ước ở mục 4, không được trùng với bất kỳ id đã dùng trong ledger hoặc tập trước.
+- Khi đã tìm được id khớp ở (1) hoặc (2): PHẢI dùng LẠI ĐÚNG id và ĐÚNG mô tả nhận dạng (copy nguyên văn, chỉ được khác phần trang phục/biến thể theo cảnh nếu kịch bản có đổi) — TUYỆT ĐỐI KHÔNG đổi id hay viết lại mô tả khác đi cho cùng một thực thể.
+- Vì file JSON đầu ra là ĐỘC LẬP/TỰ CHỨA (VIDEO.ref chỉ được tham chiếu id có thật TRONG CHÍNH file này), mọi thực thể dùng ở tập này (kể cả thực thể kế thừa từ ledger hoặc tập trước) phải được khai báo ĐẦY ĐỦ LẠI (đúng id, đúng mô tả) trong chính file JSON đang viết.
 
 ## 4. TẠO ASSET CHARACTER, LOCATION, PROP VÀ OBJECT CHO TẬP MỚI
 
@@ -122,7 +131,8 @@ QUY TẮC KIỂM TRA:
 ## 7. KIỂM TRA TRƯỚC KHI HOÀN THÀNH
 
 - Số VIDEO và VIDEO.duration của từng clip khớp ĐÚNG với cấu trúc kỹ thuật đã khóa ở mục 1 (không thêm/bớt shot/clip, không đổi duration).
-- Nếu CÓ TẬP MỚI TRƯỚC ĐÓ: soát lại TOÀN BỘ id/mô tả của asset kế thừa — phải khớp CHÍNH XÁC với tập trước, không đổi id/viết lại mô tả khác đi; diễn biến tập này tiếp nối hợp lý từ tập trước, không lặp lại nội dung đã xảy ra.
+- Nếu CÓ ASSET LEDGER TOÀN PHIM (mục 2B): soát lại TOÀN BỘ id/mô tả của asset trùng với ledger — phải khớp CHÍNH XÁC (id + mô tả) với bản ghi trong ledger, không đổi id/viết lại mô tả khác đi, kể cả với thực thể không xuất hiện ở tập liền trước.
+- Nếu CÓ TẬP MỚI TRƯỚC ĐÓ: soát lại TOÀN BỘ id/mô tả của asset kế thừa chưa có trong ledger — phải khớp CHÍNH XÁC với tập trước, không đổi id/viết lại mô tả khác đi; diễn biến tập này tiếp nối hợp lý từ tập trước, không lặp lại nội dung đã xảy ra.
 - Soát mỗi prompt: nếu VIDEO.ref không rỗng, đúng N câu `<Picture N>` binding mở đầu khớp thứ tự VIDEO.ref, đúng câu preservation theo sau, rồi mới tới "START FRAME..."; không mô tả/yêu cầu chữ/phụ đề/caption trên hình. Kiểm tra mọi cặp clip liên tiếp cùng shot: khối mô tả END/START giống hệt từng chữ; đủ 6 thuộc tính khóa vị trí; đúng motion phase nếu có chuyển động dang dở.
 - Kiểm tra MỌI VIDEO.ref: số phần tử <= 9.
 - Parse JSON và kiểm tra CHÍNH XÁC field, type, ref, id, shot/clip, duration, aspectRatio, frameRate.

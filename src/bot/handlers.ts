@@ -12,10 +12,12 @@ import { SCRIPT_SECTION_MARKER } from "../automation/chatAI";
 import { downloadTelegramMediaViaMTProto } from "../automation/telegramMTProto";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import {
+  assetLedgerFilePathFor,
   buildVideoTimeline,
   findVideoEntriesInTimeRange,
   generatedDirFor,
   generatedImageDirFor,
+  readAssetLedger,
   resolveNextRemakeVersion,
   sanitizeId,
   type StoryboardEntry,
@@ -1752,6 +1754,24 @@ async function handleGenerateScriptEpisodeRequest(
   if (continuityFileName && continuityContent !== null) {
     sections.push(
       `\n\n## TẬP MỚI TRƯỚC ĐÓ (tiếp nối/ledger): ${continuityFileName}\n\`\`\`json\n${continuityContent}\n\`\`\``,
+    );
+  }
+
+  // SỬA (theo yêu cầu người dùng — xem docstring updateAssetLedgerFile trong
+  // storyboardPipeline.ts): đính kèm THÊM ledger tích luỹ TOÀN BỘ asset đã
+  // dùng xuyên MỌI tập trước của CHÍNH phim mới này (filmBaseName), KHÔNG
+  // CHỈ tập liền trước (continuityContent ở trên) — giải quyết lỗ hổng nhân
+  // vật xuất hiện tập 1, vắng mặt vài tập, quay lại tập 5/6 bị gán id mới vì
+  // "TẬP MỚI TRƯỚC ĐÓ" (tập 4) không hề nhắc tới nhân vật đó. Rỗng (tập đầu
+  // tiên, chưa từng ghi ledger) thì bỏ qua, không đính kèm section thừa.
+  const ledgerPath = assetLedgerFilePathFor(
+    config.chatAIResultsDir,
+    filmBaseName,
+  );
+  const ledger = await readAssetLedger(ledgerPath);
+  if (ledger.length > 0) {
+    sections.push(
+      `\n\n## ASSET LEDGER TOÀN PHIM (mục 2B): ${ledger.length} asset đã xuất hiện ở BẤT KỲ tập nào trước đó của phim này\n\`\`\`json\n${JSON.stringify(ledger, null, 2)}\n\`\`\``,
     );
   }
 
