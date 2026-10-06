@@ -128,7 +128,7 @@ export const config = {
   // đang mặc định của tài khoản.
   // Theo yêu cầu người dùng: mặc định chọn "Flash-Lite". Đặt GEMINI_MODEL_LABEL
   // khác (vd "Flash", "Pro") để đổi; để rỗng ("") thì giữ model mặc định.
-  geminiModelLabel: process.env.GEMINI_MODEL_LABEL ?? "Flash-Lite",
+  geminiModelLabel: process.env.GEMINI_MODEL_LABEL ?? "3.5 Flash-Lite",
   // Số lượt tối đa gom JSON nhiều phần (mỗi lượt Gemini gửi 1 phần + marker
   // "ĐÃ HOÀN THÀNH" ở lượt cuối, xem askGemini).
   geminiMaxTurns: Number(process.env.GEMINI_MAX_TURNS ?? 1000),
