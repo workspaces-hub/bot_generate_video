@@ -63,7 +63,9 @@ const DONE_MARKER = "ĐÃ HOÀN THÀNH";
  * đang viết (khối hỏng); 2/2 lượt gửi tin có mốc vị trí đều ra JSON đúng.
  */
 function buildShortContinueMessage(state: MergeState): string {
-  return `Tiếp tục xử lý — gửi tiếp phần JSON kế tiếp của kết quả đang làm ở trên (1 khối \`\`\`json\`\`\`, NHIỀU item mới nhất có thể nhưng KHÔNG quá ~${config.geminiMaxCharsPerTurn} ký tự, đúng quy tắc ở tin nhắn đầu). ${describeMergeState(state).replace(/\n/g, " ")} Chỉ viết "${DONE_MARKER}" khi đã gửi đủ toàn bộ.`;
+  return 'Tiếp tục'
+  return `Tiếp tục xử lý — gửi tiếp phần JSON kế tiếp của kết quả đang làm ở trên (đặt TOÀN BỘ JSON trong 1 khối code \`\`\`json\`\`\` — KHÔNG dùng Canvas). ${describeMergeState(state).replace(/\n/g, " ")} Chỉ viết "${DONE_MARKER}" khi đã gửi đủ toàn bộ.`;
+  return `Tiếp tục xử lý — gửi tiếp phần JSON kế tiếp của kết quả đang làm ở trên (đặt TOÀN BỘ JSON trong 1 khối code \`\`\`json\`\`\` — KHÔNG dùng Canvas; NHIỀU item mới nhất có thể nhưng KHÔNG quá ~${config.geminiMaxCharsPerTurn} ký tự, đúng quy tắc ở tin nhắn đầu). ${describeMergeState(state).replace(/\n/g, " ")} Chỉ viết "${DONE_MARKER}" khi đã gửi đủ toàn bộ.`;
 }
 
 /** Chờ tối đa cho 1 lượt trả lời (Gemini xem video dài có thể rất lâu). */
@@ -118,20 +120,36 @@ export async function openGeminiPage(
 /** Chọn model theo config.geminiModelLabel (best-effort — lỗi chỉ log, giữ model mặc định). */
 async function selectModelIfConfigured(page: Page, jobId: string): Promise<void> {
   const label = config.geminiModelLabel.trim();
+  console.log("🚀 ~ selectModelIfConfigured ~ label:", label)
   if (!label) return;
   try {
+    // So khớp CHÍNH XÁC tên model (không phân biệt hoa thường) — so "chứa
+    // chuỗi" không phân biệt được "Flash" với "Flash-Lite".
+    const normalize = (text: string): string => text.trim().toLowerCase().replace(/\s+/g, " ");
+    const wanted = normalize(label);
     const menuButton = await firstVisible(geminiModelMenuButtonCandidates(page), 5000);
-    const current = (await menuButton.innerText().catch(() => "")).trim();
-    if (current.toLowerCase().includes(label.toLowerCase())) {
-      console.log(`[gemini] (${jobId}) model hiện tại "${current}" đã khớp "${label}".`);
+    // aria-label dạng "Mở công cụ chọn chế độ, hiện tại là Flash"; không có thì lấy chữ trên nút.
+    const ariaLabel = (await menuButton.getAttribute("aria-label").catch(() => null)) ?? "";
+    const current =
+      ariaLabel.match(/(?:hiện tại là|currently)\s*(.+)$/i)?.[1]?.trim() ||
+      (await menuButton.innerText().catch(() => "")).trim();
+    if (normalize(current) === wanted) {
+      console.log(`[gemini] (${jobId}) model hiện tại "${current}" đã đúng "${label}".`);
       return;
     }
     await menuButton.click();
-    const option = geminiModelOptionLocator(page)
-      .filter({ hasText: new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") })
-      .first();
-    await option.click({ timeout: 5000 });
-    console.log(`[gemini] (${jobId}) đã chọn model khớp "${label}".`);
+    const options = geminiModelOptionLocator(page);
+    await options.first().waitFor({ state: "visible", timeout: 5000 });
+    // Tên model = dòng ĐẦU của mỗi lựa chọn (các dòng sau là mô tả).
+    const titles = await options.evaluateAll((els) =>
+      els.map((el) => ((el as HTMLElement).innerText ?? "").split("\n").map((l) => l.trim()).filter(Boolean)[0] ?? ""),
+    );
+    const index = titles.findIndex((title) => normalize(title) === wanted);
+    if (index < 0) {
+      throw new Error(`không có lựa chọn model "${label}" (các lựa chọn: ${titles.join(" | ")})`);
+    }
+    await options.nth(index).click({ timeout: 5000 });
+    console.log(`[gemini] (${jobId}) đã chọn model "${titles[index]}" (trước đó: "${current}").`);
   } catch (err) {
     console.warn(
       `[gemini] (${jobId}) không chọn được model "${label}" — giữ model mặc định:`,
@@ -693,10 +711,23 @@ function parseJsonFromResponse(
   codeBlocks: string[],
   text: string,
 ): { values: unknown[]; invalidCount: number; salvagedCount: number } {
-  const blocks =
+  let blocks =
     codeBlocks.length > 0
       ? codeBlocks
       : [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((m) => m[1].trim());
+  // Không có khối code/Canvas/fence: Gemini có thể viết JSON thành CHỮ THƯỜNG
+  // (các <p>) ngay trong câu trả lời — xác nhận qua debug thật (job
+  // 299f4fb3-e8d9-4caa-b988-ae5af86cc6ec lượt 1: prompt cấm code block, Gemini
+  // không mở Canvas mà dán JSON dạng chữ → bot bỏ sót toàn bộ asset +
+  // VIDEO_01–03). Lấy đoạn từ "[" / "{" đầu tiên tới "]" / "}" cuối cùng,
+  // sửa dấu ngoặc kép mất escape như Canvas (markdown cũng nuốt "\\").
+  if (blocks.length === 0) {
+    const start = text.search(/[[{]/);
+    const end = Math.max(text.lastIndexOf("]"), text.lastIndexOf("}"));
+    if (start >= 0 && end > start) {
+      blocks = [repairCanvasJson(text.slice(start, end + 1).trim())];
+    }
+  }
   const values: unknown[] = [];
   let invalidCount = 0;
   let salvagedCount = 0;
@@ -914,13 +945,13 @@ function mergeGeminiPart(state: MergeState, part: unknown, jobId: string, turn: 
 function buildFirstTurnInstruction(): string {
   return `## QUY TẮC TRẢ KẾT QUẢ — BẮT BUỘC (đọc kỹ)
 
-- Trả kết quả JSON TRỰC TIẾP trong khối code \`\`\`json ... \`\`\` ngay trong câu trả lời. KHÔNG tạo file, KHÔNG dùng Canvas, KHÔNG gửi link tải.
+- Đặt TOÀN BỘ kết quả JSON trong khối code \`\`\`json ... \`\`\` ngay trong câu trả lời — KHÔNG dùng Canvas, KHÔNG viết JSON dạng chữ thường ngoài khối code. KHÔNG tạo file, KHÔNG gửi link tải.
 - Giữ ĐÚNG schema mà yêu cầu phía trên mô tả (JSON ARRAY hoặc JSON OBJECT) và NHẤT QUÁN kiểu đó qua mọi lượt.
 - Nếu yêu cầu phía trên cần NHIỀU FILE JSON (vd nhiều tập), trả 1 JSON OBJECT có key là TÊN FILE (kết thúc bằng ".json"), value là nội dung đầy đủ của file đó.
 - KHÔNG cố xuất toàn bộ trong 1 lượt: chia NHIỀU LƯỢT, mỗi lượt ĐÚNG MỘT khối code JSON HỢP LỆ, ĐÃ ĐÓNG NGOẶC ĐẦY ĐỦ, chỉ chứa phần MỚI chưa gửi (array: các item tiếp theo; object: các key mới, hoặc key là mảng thì chỉ các phần tử mới của mảng đó).
 - KÍCH THƯỚC MỖI LƯỢT: mỗi khối JSON KHÔNG vượt quá khoảng ${config.geminiMaxCharsPerTurn} ký tự — đây CHỈ là giới hạn để CHIA LƯỢT, KHÔNG phải giới hạn độ dài kết quả. Sắp chạm mức đó thì dừng ở item TRỌN VẸN gần nhất, đóng ngoặc, phần còn lại gửi ở lượt sau.
 - TUYỆT ĐỐI KHÔNG rút gọn, gộp clip, bỏ bớt shot/clip/VIDEO hay viết ngắn prompt lại để cho vừa giới hạn — kết quả cuối cùng phải ĐẦY ĐỦ đúng như yêu cầu phía trên (vd giữ đủ số shot/clip/VIDEO theo khung kỹ thuật), dài bao nhiêu thì chia bấy nhiêu lượt.
-- KHÔNG viết thêm bất kỳ câu chữ nào BÊN TRONG khối code ngoài JSON.
+- KHÔNG viết thêm bất kỳ câu chữ nào BÊN TRONG khối code ngoài JSON; thông báo "${DONE_MARKER}" (nếu có) viết NGOÀI khối code.
 - Ưu tiên tuyệt đối việc đóng JSON hợp lệ: nếu sắp hết chỗ, dừng ở item trước đó và gửi tiếp ở lượt sau.
 - Ở CUỐI câu trả lời của LƯỢT CUỐI CÙNG (đã gửi đủ toàn bộ), sau khối code, viết đúng nguyên văn: ${DONE_MARKER}
 - TUYỆT ĐỐI KHÔNG viết "${DONE_MARKER}" khi vẫn còn phần chưa gửi.
@@ -1026,9 +1057,9 @@ function buildContinueMessage(
       ? `Các item sau THIẾU field bắt buộc nên bot KHÔNG nhận: ${incompleteItems.join("; ")}. Gửi lại ĐẦY ĐỦ các item này (đủ mọi khóa theo đúng schema ở tin nhắn đầu), rồi mới gửi tiếp phần sau.\n\n`
       : "";
   const invalidWarning = lastTurnInvalid && incompleteItems.length === 0
-    ? `Lượt vừa rồi có khối JSON bị cắt giữa chừng — bot CHỈ giữ được các item đã viết trọn vẹn (xem trạng thái bên dưới), phần còn lại bị mất. Gửi tiếp NGAY SAU item cuối bot đã có (không quá ~${config.geminiMaxCharsPerTurn} ký tự), đóng ngoặc đầy đủ, không viết chữ nào khác trong khối code.\n\n`
+    ? `Lượt vừa rồi có khối JSON bị cắt giữa chừng — bot CHỈ giữ được các item đã viết trọn vẹn (xem trạng thái bên dưới), phần còn lại bị mất. Gửi tiếp NGAY SAU item cuối bot đã có (không quá ~${config.geminiMaxCharsPerTurn} ký tự), đóng ngoặc đầy đủ, đặt trong 1 khối code \`\`\`json\`\`\` (không dùng Canvas), không viết chữ nào khác trong khối code.\n\n`
     : "";
-  return `${incompleteWarning}${invalidWarning}Tiếp tục gửi phần tiếp theo (1 khối \`\`\`json\`\`\` hợp lệ, chỉ phần MỚI chưa gửi), đúng quy tắc đã nêu ở lượt đầu.
+  return `${incompleteWarning}${invalidWarning}Tiếp tục gửi phần tiếp theo (1 khối code \`\`\`json\`\`\` hợp lệ — KHÔNG dùng Canvas, chỉ phần MỚI chưa gửi), đúng quy tắc đã nêu ở lượt đầu.
 
 Trạng thái bot đã gom được (dựa CHÍNH XÁC vào đây để biết tiếp tục từ đâu):
 ${describeMergeState(state)}
@@ -1040,10 +1071,21 @@ Chỉ viết "${DONE_MARKER}" ở cuối khi đã gửi đủ toàn bộ.`;
 async function saveMergedResult(
   state: MergeState,
   baseName: string,
+  /** true khi nơi gọi truyền tên gốc (tên video/file prompt) — xem nhánh 1 key bên dưới. */
+  hasSourceName = false,
 ): Promise<string[]> {
   await fs.promises.mkdir(config.chatAIResultsDir, { recursive: true });
   if (state.kind === "object") {
     const keys = Object.keys(state.obj);
+    // Object chỉ có ĐÚNG 1 key "*.json" mà nơi gọi có tên gốc → lưu theo tên
+    // gốc, KHÔNG theo tên key. Xác nhận qua lỗi thật (lô "Tham chiếu video"
+    // 10 video): ep09_amchen.mp4 ra "01_source_reference_full.json" — Gemini
+    // chép đúng tên ví dụ trong prompt; 2 video cùng làm vậy sẽ GHI ĐÈ nhau.
+    if (hasSourceName && keys.length === 1 && /\.json$/i.test(keys[0])) {
+      const filePath = path.join(config.chatAIResultsDir, `${baseName}.json`);
+      await fs.promises.writeFile(filePath, JSON.stringify(state.obj[keys[0]], null, 2), "utf-8");
+      return [filePath];
+    }
     if (keys.length > 0 && keys.every((k) => /\.json$/i.test(k))) {
       const files: string[] = [];
       for (const key of keys) {
@@ -1085,6 +1127,39 @@ export interface AskGeminiOptions {
   expectedSourceNames?: string[];
 }
 
+/**
+ * Nhắc lại ngữ cảnh khi Gemini quên lượt đầu (vẫn trong CÙNG cuộc chat) —
+ * xác nhận qua debug thật (job 299f4fb3, c18f28de: "hệ thống hiện không lưu
+ * trữ bối cảnh của các tin nhắn trước đó"). Gửi kèm prompt gốc (nơi gọi ghép
+ * phía trước) + danh sách id đã có + 2 item cuối để nối mạch + nhiệm vụ lượt này.
+ */
+function buildContextReminder(state: MergeState, task: string): string {
+  const lists: Array<{ label: string; items: unknown[] }> =
+    state.kind === "array"
+      ? [{ label: "kết quả", items: state.items }]
+      : state.kind === "object"
+        ? Object.entries(state.obj)
+            .filter(([, v]) => Array.isArray(v))
+            .map(([k, v]) => ({ label: k, items: v as unknown[] }))
+        : [];
+  const idLines = lists
+    .map(
+      ({ label, items }) =>
+        `- ${label}: ${items.length} item — id: ${items
+          .map((i) => String((i as { id?: unknown })?.id ?? "?"))
+          .join(", ")}`,
+    )
+    .join("\n");
+  const last = lists.at(-1);
+  const tail = last ? last.items.slice(-2) : [];
+  return `## NHẮC LẠI NGỮ CẢNH — TIẾP TỤC KẾT QUẢ ĐANG LÀM DỞ
+Toàn bộ yêu cầu gốc và file đính kèm được gửi lại ở trên. Bot ĐÃ nhận và lưu các phần trước — KHÔNG gửi lại các item đã có:
+${idLines || "(chưa có item nào)"}
+
+${tail.length > 0 ? `Các item CUỐI CÙNG đã có (để nối mạch, KHÔNG gửi lại):\n\`\`\`json\n${JSON.stringify(tail, null, 2)}\n\`\`\`\n\n` : ""}Nhiệm vụ lượt này (tiếp tục NGAY SAU item cuối đã có, theo đúng định dạng yêu cầu gốc):
+${task}`;
+}
+
 /** Số lượt liên tiếp không thêm được item hợp lệ nào thì coi là Gemini kẹt. */
 const STUCK_TURN_LIMIT = 3;
 
@@ -1100,15 +1175,15 @@ function countMergedItems(state: MergeState): number {
   return 0;
 }
 
-function buildOversizeDoneMessage(state: MergeState, turnJsonChars: number): string {
-  return `Tiếp tục xử lý — lượt vừa rồi khối JSON dài ${turnJsonChars} ký tự (vượt giới hạn ~${config.geminiMaxCharsPerTurn} ký tự/lượt) nên CHƯA được coi là hoàn thành. Nếu còn BẤT KỲ phần nào chưa gửi (item/VIDEO/shot/clip còn thiếu so với yêu cầu), gửi tiếp NGAY SAU item cuối đã gửi (1 khối \`\`\`json\`\`\` hợp lệ, không quá ~${config.geminiMaxCharsPerTurn} ký tự). Nếu đã gửi ĐỦ TOÀN BỘ thật sự, chỉ trả lời đúng "${DONE_MARKER}" (không gửi lại JSON). ${describeMergeState(state).replace(/\n/g, " ")}`;
-}
-
 /** Số file JSON đã gom (key "*.json" của kết quả object). */
 function collectedFileKeys(state: MergeState): string[] {
   return state.kind === "object"
     ? Object.keys(state.obj).filter((k) => /\.json$/i.test(k))
     : [];
+}
+
+function buildOversizeDoneMessage(state: MergeState, turnJsonChars: number): string {
+  return `Tiếp tục xử lý — lượt vừa rồi khối JSON dài ${turnJsonChars} ký tự (vượt giới hạn ~${config.geminiMaxCharsPerTurn} ký tự/lượt) nên CHƯA được coi là hoàn thành. Nếu còn BẤT KỲ phần nào chưa gửi (item/VIDEO/shot/clip còn thiếu so với yêu cầu), gửi tiếp NGAY SAU item cuối đã gửi (1 khối code \`\`\`json\`\`\` hợp lệ, không quá ~${config.geminiMaxCharsPerTurn} ký tự). Nếu đã gửi ĐỦ TOÀN BỘ thật sự, chỉ trả lời đúng "${DONE_MARKER}" (không gửi lại JSON). ${describeMergeState(state).replace(/\n/g, " ")}`;
 }
 
 function buildMissingFilesMessage(
@@ -1161,7 +1236,11 @@ export async function askGemini(
       expectedFileCount > 1
         ? `\n- Kết quả lần này gồm ĐÚNG ${expectedFileCount} FILE JSON (mỗi tập tham chiếu 1 file) — trả JSON OBJECT với ${expectedFileCount} key TÊN FILE; làm lần lượt từng tập, CHỈ viết "${DONE_MARKER}" sau khi đã gửi đủ cả ${expectedFileCount} file.`
         : "";
-    let messageToSend = `${prompt}\n\n${buildFirstTurnInstruction()}${fileCountNote}`;
+    const firstTurnMessage = `${prompt}\n\n${buildFirstTurnInstruction()}${fileCountNote}`;
+    let messageToSend = firstTurnMessage;
+    // Lượt trước không thêm được item nào (thường do Gemini web QUÊN lượt
+    // đầu — xem buildContextReminder) → lượt này nhắc lại toàn bộ ngữ cảnh.
+    let remindContext = false;
     // let messageToSend = `${prompt}`;
     let done = false;
     // Phát hiện kẹt: STUCK_TURN_LIMIT lượt liên tiếp không có thêm item hợp lệ
@@ -1173,8 +1252,16 @@ export async function askGemini(
       console.log(
         `[gemini] askGemini(${jobId}): lượt ${turn}/${config.geminiMaxTurns} — gửi, đang chờ Gemini trả lời...`,
       );
+      if (remindContext) {
+        console.warn(
+          `[gemini] askGemini(${jobId}): lượt trước không có item mới (Gemini có thể đã quên ngữ cảnh) — lượt ${turn} gửi lại prompt gốc${attachmentPath ? " + upload lại file" : ""} trong cùng cuộc chat.`,
+        );
+        if (attachmentPath) await uploadFileWithRetry(page, attachmentPath, jobId);
+        messageToSend = `${firstTurnMessage}\n\n${buildContextReminder(state, messageToSend)}`;
+      }
       const response = await sendAndWaitWithRetry(page, messageToSend, jobId, {
-        attachmentPaths: turn === 1 && attachmentPath ? [attachmentPath] : undefined,
+        attachmentPaths:
+          (turn === 1 || remindContext) && attachmentPath ? [attachmentPath] : undefined,
       });
       if (turn === 1) {
         console.log(`[gemini] askGemini(${jobId}): url hội thoại: ${page.url()}`);
@@ -1204,6 +1291,7 @@ export async function askGemini(
       // viết hoa/thường khác) — Gemini hay không viết đúng nguyên văn in hoa.
       if (countMergedItems(state) > itemCountBefore) {
         turnsWithoutProgress = 0;
+        remindContext = false;
       } else if (++turnsWithoutProgress >= STUCK_TURN_LIMIT) {
         throw new GeminiError(
           `Gemini kẹt: ${STUCK_TURN_LIMIT} lượt liên tiếp không có thêm item hợp lệ nào (lượt ${turn}) — dừng cuộc chat này.`,
@@ -1256,6 +1344,8 @@ export async function askGemini(
         invalidCount > 0 || sawDone
           ? buildContinueMessage(state, invalidCount > 0, incompleteItems)
           : buildShortContinueMessage(state);
+      // Lượt này không thêm item nào và chưa xong → lượt sau nhắc lại ngữ cảnh.
+      remindContext = turnsWithoutProgress > 0;
     }
 
     if (!hasData(state)) {
@@ -1268,7 +1358,7 @@ export async function askGemini(
         `[gemini] askGemini(${jobId}): hết ${config.geminiMaxTurns} lượt mà chưa thấy "${DONE_MARKER}" — vẫn lưu phần đã gom được (có thể chưa đầy đủ).`,
       );
     }
-    const files = await saveMergedResult(state, baseName);
+    const files = await saveMergedResult(state, baseName, Boolean(promptFileName));
     console.log(`[gemini] askGemini(${jobId}): xong — đã lưu ${files.join(", ")}.`);
     return { downloadedFiles: files };
   } catch (err) {
