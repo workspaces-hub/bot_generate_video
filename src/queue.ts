@@ -3380,6 +3380,32 @@ async function processChatAIQueue(): Promise<void> {
             downloadedFiles[i] = newPath;
           }
 
+          // SỬA (theo yêu cầu người dùng "sửa download file json remake ko
+          // để ở chatai-results mà để ở folder download"): JSON kết quả
+          // "Tạo kịch bản mới"/"Tạo kịch bản theo từng tập" trước đây nằm
+          // CHUNG config.chatAIResultsDir với các file JSON tham chiếu gốc —
+          // nguồn gốc của các lỗi mất/đè file tham chiếu phải vá bằng
+          // backupReferenceJsonFiles ở trên. Giờ MOVE sang config.downloadDir
+          // (thư mục chứa deliverable cuối, cùng quy ước với video/ảnh
+          // generated khác — xem pollo.ts/aiVideo.ts/comfyui.ts), tách hẳn
+          // khỏi thư mục chứa file tham chiếu gốc. findSingleGeneratedScriptFile
+          // (handlers.ts) đã được sửa để tìm file "TẬP MỚI TRƯỚC ĐÓ" ở CẢ
+          // chatAIResultsDir (file cũ từ trước khi có sửa này) và downloadDir
+          // (file mới) nên không mất khả năng tiếp nối tập.
+          await fsp.mkdir(config.downloadDir, { recursive: true });
+          for (let i = 0; i < downloadedFiles.length; i++) {
+            const oldPath = downloadedFiles[i];
+            if (path.extname(oldPath).toLowerCase() !== ".json") continue;
+            const destPath = path.join(
+              config.downloadDir,
+              path.basename(oldPath),
+            );
+            if (path.resolve(oldPath) !== path.resolve(destPath)) {
+              await fsp.rename(oldPath, destPath);
+              downloadedFiles[i] = destPath;
+            }
+          }
+
           const jsonFiles = downloadedFiles.filter(
             (f) => path.extname(f).toLowerCase() === ".json",
           );

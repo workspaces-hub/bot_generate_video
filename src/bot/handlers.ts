@@ -1555,12 +1555,21 @@ async function handleGenerateScriptRequest(
 }
 
 /**
- * Tìm ĐÚNG 1 file JSON trong config.chatAIResultsDir có tên CHỨA searchTerm
- * (không phân biệt hoa/thường) — dùng cho handleGenerateScriptEpisodeRequest,
- * nơi mỗi dòng input PHẢI trỏ tới ĐÚNG 1 file (khác handleGenerateScriptRequest
- * ở trên, nơi 1 chuỗi được phép khớp NHIỀU file = nhiều tập cùng lúc). Trả về
- * null kèm thông báo lỗi đã gửi sẵn cho user nếu khớp 0 hoặc >1 file (liệt kê
- * rõ các file khớp để user gõ lại chính xác hơn).
+ * Tìm ĐÚNG 1 file JSON có tên CHỨA searchTerm (không phân biệt hoa/thường)
+ * — dùng cho handleGenerateScriptEpisodeRequest, nơi mỗi dòng input PHẢI trỏ
+ * tới ĐÚNG 1 file (khác handleGenerateScriptRequest ở trên, nơi 1 chuỗi được
+ * phép khớp NHIỀU file = nhiều tập cùng lúc). Trả về null kèm thông báo lỗi
+ * đã gửi sẵn cho user nếu khớp 0 hoặc >1 file (liệt kê rõ các file khớp để
+ * user gõ lại chính xác hơn).
+ *
+ * SỬA (theo yêu cầu người dùng "sửa download file json remake ko để ở
+ * chatai-results mà để ở folder download" — xem processChatAIQueue trong
+ * queue.ts): JSON kết quả "Tạo kịch bản theo từng tập" (dòng 2, "TẬP MỚI
+ * TRƯỚC ĐÓ") giờ được lưu ở config.downloadDir thay vì config.chatAIResultsDir
+ * — tìm ở CẢ 2 thư mục (file tham chiếu gốc dòng 1 "TẬP GỐC" vẫn luôn nằm
+ * trong chatAIResultsDir; file tập mới trước đó nằm trong downloadDir, hoặc
+ * chatAIResultsDir nếu được tạo TRƯỚC khi có sửa này) để không mất khả năng
+ * tiếp nối tập cũ.
  */
 async function findSingleGeneratedScriptFile(
   ctx: Context,
@@ -1568,19 +1577,30 @@ async function findSingleGeneratedScriptFile(
   promptMessageId: number,
   /** Nhãn mô tả dùng trong thông báo lỗi (vd "TẬP GỐC", "TẬP MỚI TRƯỚC ĐÓ"). */
   label: string,
-): Promise<string | null> {
-  const allFiles = await fs
-    .readdir(config.chatAIResultsDir)
-    .catch(() => [] as string[]);
-  const matches = allFiles.filter(
-    (f) =>
-      f.toLowerCase().endsWith(".json") &&
-      f.toLowerCase().includes(searchTerm.toLowerCase()),
+): Promise<{ fileName: string; dirPath: string } | null> {
+  const [resultsFiles, downloadFiles] = await Promise.all([
+    fs.readdir(config.chatAIResultsDir).catch(() => [] as string[]),
+    fs.readdir(config.downloadDir).catch(() => [] as string[]),
+  ]);
+  const candidates = [
+    ...resultsFiles.map((fileName) => ({
+      fileName,
+      dirPath: config.chatAIResultsDir,
+    })),
+    ...downloadFiles.map((fileName) => ({
+      fileName,
+      dirPath: config.downloadDir,
+    })),
+  ];
+  const matches = candidates.filter(
+    ({ fileName }) =>
+      fileName.toLowerCase().endsWith(".json") &&
+      fileName.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
   if (matches.length === 0) {
     await ctx.reply(
-      `❌ Không tìm thấy file JSON nào có tên chứa "${searchTerm}" (${label}) trong storage/chatai-results. Không thể tiếp tục.`,
+      `❌ Không tìm thấy file JSON nào có tên chứa "${searchTerm}" (${label}) trong storage/chatai-results hoặc storage/downloads. Không thể tiếp tục.`,
       { reply_parameters: { message_id: promptMessageId },
         ...promptMenu
       },
@@ -1589,7 +1609,7 @@ async function findSingleGeneratedScriptFile(
   }
   if (matches.length > 1) {
     await ctx.reply(
-      `❌ "${searchTerm}" (${label}) khớp ${matches.length} file, cần khớp ĐÚNG 1 file: ${matches.join(", ")}. Gõ lại tên cụ thể hơn.`,
+      `❌ "${searchTerm}" (${label}) khớp ${matches.length} file, cần khớp ĐÚNG 1 file: ${matches.map((m) => m.fileName).join(", ")}. Gõ lại tên cụ thể hơn.`,
       { reply_parameters: { message_id: promptMessageId },
         ...promptMenu
       },
@@ -1650,15 +1670,16 @@ async function handleGenerateScriptEpisodeRequest(
     ? normalizeTypedJsonFileName(lines[1])
     : null;
 
-  const originalFileName = await findSingleGeneratedScriptFile(
+  const original = await findSingleGeneratedScriptFile(
     ctx,
     originalSearchTerm,
     promptMessageId,
     "TẬP GỐC",
   );
-  if (!originalFileName) return;
+  if (!original) return;
+  const originalFileName = original.fileName;
 
-  const continuityFileName = continuitySearchTerm
+  const continuity = continuitySearchTerm
     ? await findSingleGeneratedScriptFile(
         ctx,
         continuitySearchTerm,
@@ -1666,7 +1687,8 @@ async function handleGenerateScriptEpisodeRequest(
         "TẬP MỚI TRƯỚC ĐÓ",
       )
     : null;
-  if (continuitySearchTerm && !continuityFileName) return;
+  if (continuitySearchTerm && !continuity) return;
+  const continuityFileName = continuity?.fileName ?? null;
 
   const masterPrompt = await fs
     .readFile(config.promptGenerateScriptEpisode, "utf-8")
@@ -1686,7 +1708,7 @@ async function handleGenerateScriptEpisodeRequest(
   }
 
   const originalContent = await fs
-    .readFile(path.join(config.chatAIResultsDir, originalFileName), "utf-8")
+    .readFile(path.join(original.dirPath, originalFileName), "utf-8")
     .catch((err) => {
       console.error(
         `[bot] Không đọc được file "${originalFileName}":`,
@@ -1703,10 +1725,10 @@ async function handleGenerateScriptEpisodeRequest(
   }
 
   let continuityContent: string | null = null;
-  if (continuityFileName) {
+  if (continuity) {
     continuityContent = await fs
       .readFile(
-        path.join(config.chatAIResultsDir, continuityFileName),
+        path.join(continuity.dirPath, continuity.fileName),
         "utf-8",
       )
       .catch((err) => {
