@@ -9,6 +9,7 @@ import {
 } from "../automation/aiVideo";
 import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
 import { SCRIPT_SECTION_MARKER } from "../automation/chatAI";
+import { lastSeriesEpisode, readSeriesMeta } from "../automation/seriesScript";
 import { downloadTelegramMediaViaMTProto } from "../automation/telegramMTProto";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import {
@@ -48,6 +49,7 @@ import {
   CONTINUE_VIDEO_BUTTON_LABEL,
   GENERATE_SCRIPT_BUTTON_LABEL,
   GENERATE_SCRIPT_EPISODE_BUTTON_LABEL,
+  CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   MERGE_VIDEO_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
@@ -78,6 +80,7 @@ type PendingMode =
   | "videoReferenceTest"
   | "generateScript"
   | "generateScriptEpisode"
+  | "continueGenerateScript"
   | "continueVideo"
   | "continueSceneFrame"
   | "continueImage"
@@ -1433,11 +1436,40 @@ async function handleGenerateScriptRequest(
   ctx: Context,
   typedText: string,
   promptMessageId: number,
+  /** true = nút "Tiếp tục tạo kịch bản": typedText là tên series đã có. */
+  mode: { continueSeries?: boolean } = {},
 ): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId || !ctx.chat) return;
 
-  const searchTerm = normalizeTypedJsonFileName(typedText);
+  // "Tiếp tục tạo kịch bản": tạo tiếp series đã có (pipeline series Gemini,
+  // xem seriesScript.ts) từ tập sau tập cuối tới hết file tham chiếu còn lại.
+  const continueSeries = mode.continueSeries
+    ? normalizeTypedJsonFileName(typedText) || undefined
+    : undefined;
+  if (mode.continueSeries && !continueSeries) {
+    await ctx.reply("Tên series trống, đã huỷ.", promptMenu);
+    return;
+  }
+  if (continueSeries && config.chatAIProvider !== "gemini") {
+    await ctx.reply(
+      `❌ "${CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL}" chỉ dùng được với CHAT_AI_PROVIDER=gemini (pipeline series).`,
+      { reply_parameters: { message_id: promptMessageId }, ...promptMenu },
+    );
+    return;
+  }
+  const seriesMeta = continueSeries ? await readSeriesMeta(continueSeries) : null;
+  const lastEpisode = continueSeries ? await lastSeriesEpisode(continueSeries) : 0;
+  if (continueSeries && lastEpisode === 0) {
+    await ctx.reply(
+      `❌ Không thấy series "${continueSeries}" (chưa có tập nào trong storage/series/${continueSeries}/episodes).`,
+      { reply_parameters: { message_id: promptMessageId }, ...promptMenu },
+    );
+    return;
+  }
+  const searchTerm = continueSeries
+    ? (seriesMeta?.searchTerm ?? continueSeries.replace(/_remake_\d+$/i, ""))
+    : normalizeTypedJsonFileName(typedText);
   if (!searchTerm) {
     await ctx.reply("Tên file trống, đã huỷ.", promptMenu);
     return;
@@ -1446,13 +1478,24 @@ async function handleGenerateScriptRequest(
   const allFiles = await fs
     .readdir(config.chatAIResultsDir)
     .catch(() => [] as string[]);
-  const matches = allFiles
+  const allMatches = allFiles
     .filter(
       (f) =>
         f.toLowerCase().endsWith(".json") &&
         f.toLowerCase().includes(searchTerm.toLowerCase()),
     )
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  // Tạo tiếp: bỏ các tập gốc đã làm (tập 1..lastEpisode), lấy hết phần còn lại.
+  const startEpisode = lastEpisode + 1;
+  const matches = allMatches.slice(startEpisode - 1);
+
+  if (continueSeries && matches.length === 0) {
+    await ctx.reply(
+      `❌ Series "${continueSeries}" đã có ${lastEpisode} tập; không còn file tham chiếu nào (từ khoá "${searchTerm}", tìm thấy ${allMatches.length} file) cho tập ${startEpisode} trở đi.`,
+      { reply_parameters: { message_id: promptMessageId }, ...promptMenu },
+    );
+    return;
+  }
 
   if (matches.length === 0) {
     await ctx.reply(
@@ -1494,8 +1537,8 @@ async function handleGenerateScriptRequest(
   // OUTPUT_BASENAME_GOI_Y — không bắt buộc model tuân theo (processChatAIQueue
   // sẽ tự đổi tên lại file JSON theo remakeBaseName dù model đặt tên gì),
   // nhưng khớp sẵn giúp model đặt tên nhất quán ngay từ đầu.
-  const remakeVersion = await resolveNextRemakeVersion(searchTerm);
-  const remakeBaseName = `${searchTerm}_remake_${remakeVersion}`;
+  const remakeBaseName =
+    continueSeries ?? `${searchTerm}_remake_${await resolveNextRemakeVersion(searchTerm)}`;
 
   const sections: string[] = [
     masterPrompt,
@@ -1534,7 +1577,9 @@ async function handleGenerateScriptRequest(
   await fs.writeFile(combinedAttachmentPath, sections.join(""), "utf-8");
 
   const statusMessage = await ctx.reply(
-    `⏳ Đang xử lý (${matches.length} tập tham chiếu: ${matches.join(", ")})...`,
+    continueSeries
+      ? `⏳ Tạo tiếp series "${continueSeries}" tập ${startEpisode}–${startEpisode + matches.length - 1} (tham chiếu: ${matches.join(", ")})...`
+      : `⏳ Đang xử lý (${matches.length} tập tham chiếu: ${matches.join(", ")})...`,
     { 
       reply_parameters: { message_id: promptMessageId }, 
       ...promptMenu, 
@@ -1551,6 +1596,8 @@ async function handleGenerateScriptRequest(
     referenceFileNames: matches,
     promptAttachmentPath: combinedAttachmentPath,
     remakeBaseName,
+    seriesStartEpisode: startEpisode,
+    seriesSearchTerm: searchTerm,
   });
 }
 
@@ -2159,8 +2206,18 @@ export function registerHandlers(bot: Telegraf): void {
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "generateScript");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gõ tên (hoặc 1 phần tên) file JSON kịch bản đã có trong storage/chatai-results — bot sẽ tìm mọi file JSON có tên chứa chuỗi đó (nhiều file = nhiều tập phim) rồi tạo 1 bộ phim mới tương tự.`,
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên (hoặc 1 phần tên) file JSON kịch bản đã có trong storage/chatai-results — bot sẽ tìm mọi file JSON có tên chứa chuỗi đó (nhiều file = nhiều tập phim) rồi tạo 1 bộ phim mới tương tự (số tập = số file tìm thấy). Tạo tiếp series sau này: nút "${CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL}".`,
       promptMenu
+    );
+  });
+
+  bot.hears(CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "continueGenerateScript");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên series đã tạo bằng "${GENERATE_SCRIPT_BUTTON_LABEL}" (vd 9trung_remake_1) — bot tạo tiếp từ tập sau tập cuối đã có tới hết các file JSON tham chiếu còn lại.`,
+      promptMenu,
     );
   });
 
@@ -2288,6 +2345,7 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === TEST_VIDEO_REFERENCE_BUTTON_LABEL ||
       ctx.message.text === GENERATE_SCRIPT_BUTTON_LABEL ||
       ctx.message.text === GENERATE_SCRIPT_EPISODE_BUTTON_LABEL ||
+      ctx.message.text === CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_IMAGE_BUTTON_LABEL ||
@@ -2412,6 +2470,13 @@ export function registerHandlers(bot: Telegraf): void {
         ctx,
         ctx.message.text,
         ctx.message.message_id,
+      );
+    } else if (mode === "continueGenerateScript") {
+      await handleGenerateScriptRequest(
+        ctx,
+        ctx.message.text,
+        ctx.message.message_id,
+        { continueSeries: true },
       );
     } else if (mode === "generateScriptEpisode") {
       await handleGenerateScriptEpisodeRequest(

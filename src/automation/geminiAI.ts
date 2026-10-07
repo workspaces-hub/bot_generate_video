@@ -1387,3 +1387,77 @@ export async function askGeminiAboutReferenceVideo(
     : masterPrompt;
   return askGemini(prompt, jobId, videoFileName, videoPath);
 }
+
+/** Master prompt kiểm tra video — dùng chung với verifyVideo (chatAI.ts). */
+const VERIFY_VIDEO_PROMPT_TEMPLATE_PATH = path.resolve("./src/automation/check_video.txt");
+
+/**
+ * Bản Gemini của verifyVideo (chatAI.ts) — cùng tham số, cùng template
+ * check_video.txt, cùng thứ tự upload (video liền trước → video hiện tại →
+ * ảnh ref ĐÚNG THỨ TỰ), cùng đầu ra: JSON kết quả lưu cạnh video, tên
+ * <id video>.json. Gửi ĐÚNG 1 lượt, không lặp "Tiếp tục".
+ */
+export async function verifyVideoGemini(
+  prompt: string,
+  refs: { id: string; path: string }[],
+  videoPath: string,
+  previousVideoPath?: string,
+): Promise<{ filePath: string }> {
+  const id = path.basename(videoPath, path.extname(videoPath));
+  const jobId = `${id}_verify`;
+  console.log(`[gemini] verifyVideoGemini(${id}): bắt đầu — mở Gemini...`);
+  const page = await openGeminiPage(jobId);
+  try {
+    const attachmentPaths = [
+      ...(previousVideoPath ? [previousVideoPath] : []),
+      videoPath,
+      ...refs.map((ref) => ref.path),
+    ];
+    for (const [i, filePath] of attachmentPaths.entries()) {
+      // Chỉ file đầu được phép tải lại trang (tải lại sẽ mất các thẻ đã upload).
+      await uploadFileWithRetry(page, filePath, jobId, { allowReload: i === 0 });
+    }
+
+    const template = await fs.promises.readFile(VERIFY_VIDEO_PROMPT_TEMPLATE_PATH, "utf-8");
+    const refsListing = refs.map((ref) => `- ${ref.id}: ${ref.id}.png`).join("\n");
+    const generatedVideoBlock = [
+      `- Tên file: ${id}.mp4`,
+      "- Đây là video hiện tại cần đánh giá.",
+      "- So sánh frame có ý nghĩa đầu tiên với video trước.",
+    ].join("\n");
+    const previousVideoBlock = previousVideoPath
+      ? [
+          `- Tên file: ${path.basename(previousVideoPath, path.extname(previousVideoPath))}.mp4`,
+          "- Đây là video liền trước.",
+          "- Dùng frame có ý nghĩa cuối cùng của video này để kiểm tra continuity.",
+        ].join("\n")
+      : "Không có.";
+    const message = `${template
+      .replace("[DÁN PROMPT ĐÃ DÙNG ĐỂ TẠO VIDEO VÀO ĐÂY]", prompt)
+      .replace("[LIỆT KÊ TẤT CẢ ẢNH THAM CHIẾU VÀ ID]", refsListing)
+      .replace("[MÔ TẢ VIDEO NGAY TRƯỚC ĐÓ NẾU CÓ]", previousVideoBlock)
+      .replace("[MÔ TẢ VIDEO HIỆN TẠI CẦN ĐÁNH GIÁ]", generatedVideoBlock)}\n\nTrả kết quả JSON trong MỘT khối code (code block).`;
+
+    const response = await sendAndWaitWithRetry(page, message, jobId, { attachmentPaths });
+    await captureSnapshot(page, jobId, "result");
+
+    const { text, codeBlocks } = await readResponse(page, response, jobId);
+    const { values } = parseJsonFromResponse(codeBlocks, text);
+    if (values.length === 0) {
+      throw new GeminiError(`Gemini không trả kết quả JSON nào cho video "${id}".`);
+    }
+    const result = values.length === 1 ? values[0] : values;
+
+    const filePath = path.join(path.dirname(videoPath), `${id}.json`);
+    await fs.promises.writeFile(filePath, JSON.stringify(result, null, 2), "utf-8");
+    console.log(`[gemini] verifyVideoGemini(${id}): đã lưu kết quả ${filePath}`);
+    return { filePath };
+  } catch (err) {
+    await captureErrorSnapshot(page, jobId, err);
+    throw err instanceof GeminiError
+      ? err
+      : new GeminiError(err instanceof Error ? err.message : String(err));
+  } finally {
+    await page.close().catch(() => {});
+  }
+}

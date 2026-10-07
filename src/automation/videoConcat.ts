@@ -279,3 +279,42 @@ async function concatByReencode(
     );
   }
 }
+
+/** Các fps chuẩn — fps đo được làm tròn về giá trị gần nhất (vd 29.97 → 30, 23.976 → 24). */
+const STANDARD_FRAME_RATES = [24, 25, 30, 60];
+
+/**
+ * FPS của video (ffprobe, ưu tiên avg_frame_rate — đúng hơn với video VFR),
+ * làm tròn về fps chuẩn gần nhất trong STANDARD_FRAME_RATES (bằng khoảng thì
+ * lấy giá trị nhỏ hơn). null nếu không đọc được.
+ */
+export async function probeFrameRate(videoPath: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=avg_frame_rate,r_frame_rate",
+      "-of",
+      "json",
+      videoPath,
+    ]);
+    const stream = (
+      JSON.parse(stdout) as { streams?: { avg_frame_rate?: string; r_frame_rate?: string }[] }
+    ).streams?.[0];
+    for (const raw of [stream?.avg_frame_rate, stream?.r_frame_rate]) {
+      const [num, den] = (raw ?? "").split("/").map(Number);
+      const fps = den ? num / den : num;
+      if (Number.isFinite(fps) && fps > 0) {
+        return STANDARD_FRAME_RATES.reduce((best, candidate) =>
+          Math.abs(candidate - fps) < Math.abs(best - fps) ? candidate : best,
+        );
+      }
+    }
+  } catch {
+    // ffprobe lỗi — để nơi gọi giữ nguyên giá trị cũ
+  }
+  return null;
+}

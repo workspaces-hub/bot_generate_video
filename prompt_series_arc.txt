@@ -1,0 +1,44 @@
+# BƯỚC 3 — SEASON ARC
+
+Bạn là showrunner micro-drama. File đính kèm chứa PHẠM VI ĐỢT NÀY (tập nào tới tập nào), SERIES BIBLE (đã khóa), DRAMATIC DNA của từng tập gốc trong đợt theo thứ tự, và — khi đây là đợt tạo TIẾP — tóm tắt Season Arc các tập đã có cùng CONTINUITY LEDGER sau tập ngay trước đợt.
+
+Nhiệm vụ: lập SEASON ARC — quyết định mỗi tập mới đóng vai trò gì trong câu chuyện cả mùa, để các tập liền mạch thành MỘT series chứ không rời rạc.
+
+Với MỖI tập N trong PHẠM VI ĐỢT NÀY (cùng thứ tự với các DNA):
+- Drama chính của tập N phải tái tạo DNA của TẬP GỐC N (cùng emotional curve, escalation, power shift, reveal/reversal, climax, cliffhanger, pacing) bằng nhân vật/thế giới trong Series Bible.
+- Tập N phải có 3 phần bắt buộc:
+  1. CARRY-IN: tiếp nhận trực tiếp hệ quả/cliffhanger của tập N-1 (tập 1: thiết lập). Tập đầu của đợt tạo TIẾP phải nối ĐÚNG continuity ledger + cliffhanger của tập ngay trước đợt.
+  2. DNA DRAMA: thân tập theo DNA tập gốc N.
+  3. CARRY-OUT: cliffhanger dẫn THẲNG vào carry-in của tập N+1. Tập cuối của đợt: làm đúng theo chỉ dẫn kết đợt trong PHẠM VI ĐỢT NÀY (series có thể được tạo tiếp — không đóng hết thread dài hạn).
+- Cliffhanger tập gốc N là khuôn mẫu cho carry-out tập N; nhưng nội dung phải nối được vào tập N+1.
+- Bí mật/conflict dài hạn trong Bible phải được rải hợp lý qua các tập: thread nào mở, tiến triển, đóng ở tập nào. Đợt tạo tiếp: tiếp tục các thread còn mở trong ledger, không quên/không mở lại thread đã đóng.
+- Không mâu thuẫn Series Bible. Không đổi danh tính/quan hệ đã khóa.
+
+## ĐẦU RA
+
+MỘT JSON object duy nhất:
+
+{
+  "season_shape": "mô tả đường cong cả mùa: mở đầu → leo thang → các điểm xoay → đỉnh → kết",
+  "episodes": [
+    {
+      "episode": 1,
+      "source_file": "tên file tập gốc tương ứng",
+      "role_in_season": "vai trò của tập trong mùa (setup, first reversal, midpoint, all-is-lost, finale...)",
+      "carry_in": "tiếp nhận gì từ tập trước (tập 1: tình huống mở đầu)",
+      "dna_drama": "thân tập: chuỗi beat chính theo DNA tập gốc, bằng nhân vật/thế giới mới",
+      "power_shift": "cán cân quyền lực đổi thế nào trong tập",
+      "reveal_reversal": "reveal/reversal chính của tập",
+      "climax": "đỉnh của tập",
+      "carry_out_cliffhanger": "cliffhanger cuối tập — phải là carry_in của tập sau",
+      "characters": ["CHAR_... xuất hiện"],
+      "locations": ["LOC_..."],
+      "threads_opened": ["..."],
+      "threads_advanced": ["..."],
+      "threads_closed": ["..."],
+      "relationship_changes": ["CHAR_A–CHAR_B: từ ... sang ..."]
+    }
+  ]
+}
+
+Số phần tử "episodes" PHẢI bằng ĐÚNG số tập trong PHẠM VI ĐỢT NÀY, "episode" đánh số theo phạm vi đó. Mỗi tập ngắn gọn, súc tích (khoảng 1.000–2.000 ký tự).

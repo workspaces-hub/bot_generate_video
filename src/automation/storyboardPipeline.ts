@@ -10,6 +10,7 @@ import {
   verifyVideo,
   type VerifyVideoRef,
 } from "./chatAI";
+import { verifyVideoGemini } from "./geminiAI";
 import { generateVideo as generateVideoPollo } from "./pollo";
 import { generateImage as generateImagePollo } from "./polloImage";
 import { withPolloTaskSlot } from "./polloBrowser";
@@ -1870,7 +1871,9 @@ export async function verifyVideos(
         });
       }
 
-      await verifyVideo(entry.prompt, verifyRefs, videoPath, previousVideoPath);
+      // CHAT_AI_PROVIDER=gemini → kiểm tra bằng Gemini web (verifyVideoGemini).
+      const verify = config.chatAIProvider === "gemini" ? verifyVideoGemini : verifyVideo;
+      await verify(entry.prompt, verifyRefs, videoPath, previousVideoPath);
       verified++;
     } catch (err) {
       console.error(

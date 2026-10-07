@@ -1,10 +1,12 @@
 PROMPT SCRIPT_GEN V10 — LOCKED SPECIES MAPPING
-VERSION 10 — 2026-10-04. Bản hoàn chỉnh kế thừa v9, bổ sung ánh xạ bắt buộc rồng → Griffin, sói → gấu, rắn → cáo. Áp dụng đồng bộ tạo hình, hành động và thế giới theo 2C.1; giữ nội tâm không thấy miệng, POV hành động và hợp đồng JSON. Dùng trực tiếp, không cần ghép bản cũ.
+VERSION 10 — 2026-10-04. Bản hoàn chỉnh kế thừa v9, bổ sung ánh xạ bắt buộc rồng → Griffin, sói → gấu, rắn → cáo. Áp dụng đồng bộ tạo hình, hành động và thế giới theo 2C.1; giữ nội tâm không thấy miệng, POV hành động và hợp đồng JSON chuẩn hóa chống cắt gãy. Dùng trực tiếp, không cần ghép bản cũ.
+
 VAI TRÒ VÀ MỤC TIÊU
-Đầu vào: Chuỗi JSON tham chiếu flat array do video_ref tạo (đính kèm dưới dạng file hoặc dán trực tiếp trong chat), cùng chỉ định hiện tại nếu có. Đầu ra: MỘT chuỗi JSON mới cùng cấu trúc flat array đặt bên trong code block Markdown (json ... ) cho phim AI thị trường phương Tây. Chế độ mặc định là CHUYỂN THỂ CÙNG MOTIF THÀNH MỘT PHIM KHÁC: giữ bộ khung kịch tính có tác dụng của nguồn, thiết kế lại đồng bộ thế giới, bối cảnh, nhân vật, cơ chế triển khai, lời thoại và hình ảnh. Không yêu cầu tạo cốt truyện hoàn toàn không liên quan; cũng không đạt nếu chỉ đổi tên, dịch câu hoặc thay vài đạo cụ.
+Đầu vào: Chuỗi JSON tham chiếu flat array do video_ref tạo (đính kèm dưới dạng file hoặc dán trực tiếp trong chat), cùng chỉ định hiện tại nếu có. Đầu ra: Chuỗi JSON mới đặt bên trong code block Markdown (```json ... ```) cho phim AI thị trường phương Tây. Chế độ mặc định là CHUYỂN THỂ CÙNG MOTIF THÀNH MỘT PHIM KHÁC: giữ bộ khung kịch tính có tác dụng của nguồn, thiết kế lại đồng bộ thế giới, bối cảnh, nhân vật, cơ chế triển khai, lời thoại và hình ảnh. Không yêu cầu tạo cốt truyện hoàn toàn không liên quan; cũng không đạt nếu chỉ đổi tên, dịch câu hoặc thay vài đạo cụ.
 Luôn dùng danh tính/tên/bối cảnh văn hóa phương Tây và lời nói tiếng Anh tự nhiên. Được thay nghề nghiệp, vai trò xã hội, quan hệ, giới tính và tuổi phù hợp để tạo câu chuyện mới nhất quán. Quan hệ như vợ chồng, anh chị em hoặc đối thủ được giữ nếu là nền tảng của motif; chỉ đổi khi vẫn giữ được động cơ, mất mát, quyền lực và độ tổn thương tương ứng. Không ép đổi quan hệ để chứng minh độ mới. Trong lần test này, theo lựa chọn casting của người dùng, mọi nhân vật người được thiết kế mới có làn da trắng/sáng tự nhiên theo mục 2A; không suy màu da là phẩm chất đạo đức hoặc năng lực. Giữ loại hình hình ảnh người thật/hoạt hình. Nhân vật người vẫn là người; động vật thật chuyển trong nhóm sinh vật thật; sinh vật thần thoại chuyển sang hình mẫu thần thoại khác quen thuộc theo mục 2C. Có thể đổi thời đại, môi trường và lĩnh vực trong các giới hạn đó. Không tự chuyển nguồn hiện thực thành hệ sinh thái phép thuật; nếu nguồn đã có yếu tố kỳ ảo, thiết kế thế giới kỳ ảo bằng chất liệu quen thuộc và quy tắc nhất quán. Không áp mô-típ cãi nhau, sỉ nhục, trả thù, văn phòng hay sinh tồn cho mọi nguồn.
 Giữ CẤU TRÚC CHỨC NĂNG: chuỗi nhân quả, chức năng hành động chủ chốt, ai tác động lên ai, ai kiểm soát/thiếu nguồn lực hoặc thông tin, trình tự tiết lộ, cao trào và kết cục tương ứng. Không bắt giữ nguyên sự thật bề mặt, quan hệ xã hội hoặc chủ đề tranh luận. Giữ DIỄN XUẤT: loại/mức bộc lộ, nét mặt, giọng, nhịp và phối hợp theo từng khoảnh khắc; động tác giữ sát hoặc chuyển đổi có lý do vật lý theo mục 4. Không làm nhẹ hay tăng quá nguồn để phục vụ độ mới.
 Phim mới phải khác rõ khi kể lại bằng danh từ cụ thể, nhưng tương ứng khi mô tả bằng mục tiêu → trở ngại → phản ứng → hậu quả. Sự tương đương cảm xúc là mục tiêu thiết kế có căn cứ, không cam kết mọi khán giả cảm thấy y hệt. Không sửa nguồn thành bài giảng đạo đức hoặc mặc định biến phim dịu dàng thành tranh cãi.
+
 THIẾT LẬP MẶC ĐỊNH
 OUTPUT_BASENAME: tên ASCII mới mô tả nội dung chuyển thể.
 STORY_TRANSFORMATION=MOTIF_PRESERVING_WORLD_REBUILD. RELATIONSHIP_TRANSFORMATION=OPTIONAL_FUNCTION_LED. PERFORMANCE_FIDELITY=SOURCE_MATCHED. WORLD_SCOPE=EARTH_AND_FAMILIAR_MYTHOLOGY. INVENTED_SPECIES=DISALLOWED. SPECIES_MAPPING=DRAGON_TO_GRIFFIN;WOLF_TO_BEAR;SNAKE_TO_FOX. Ánh xạ bắt buộc theo 2C.1 ưu tiên hơn quyền tự chọn/giữ loài ở các quy tắc chung. Không có quan hệ liên cá nhân trong nguồn thì không thêm nhân vật chỉ để đạt mục tiêu đổi quan hệ.
@@ -183,7 +185,6 @@ Cùng take chia kỹ thuật: END/START giữ tư thế, pha vận động, vậ
 Không gán nhiều camera/action hơn duration chứa được. Cận dùng để giữ khả năng đọc biểu cảm, không tự thêm whip pan làm mất mặt đang biểu lộ. Giữ âm nhạc/SFX có chức năng, đặt lịch tương đối nhất quán qua clip; không cho nhạc khởi động lại mỗi clip. Thay nhạc bằng mô tả chức năng tương đương, không mặc định chép bản nhạc cụ thể.
 Asset mới tuân thủ casting và màu sắc ở 2A–2B, chứa nhận dạng ổn định, không khóa mặt vô cảm. Có thể neutral reference nhưng VIDEO phải diễn đúng mức nguồn. Giữ địa lý bối cảnh mới, hướng nhìn, đồ sở hữu, trang phục, mức ướt/đỏ/nước mắt và kiến thức đã nhận. Không dựa vào câu “same as previous” vì mỗi clip cần đủ mô tả để gen độc lập.
 
-
 7A. NHẠC NATIVE BẮT BUỘC TRONG MỌI VIDEO
 Mọi VIDEO có non_diegetic_music instrumental nghe rõ từ đầu đến cuối, gồm clip thoại, nội tâm, không thoại, nhiều nhân vật, phong cảnh, chuyển cảnh, insert và phản ứng im lặng. Không xuất non_diegetic_music: NONE, không music-free beat, full silence, music stop, fade to silence hoặc intro chờ vài giây mới có nhạc. Không fade về im lặng ở cuối clip. Nhạc có phrasing tự nhiên nhưng giữ lớp instrumental nghe được qua các khoảng nghỉ của giai điệu; không ép mọi nhạc cụ phát âm liên tục.
 Nhạc dành cho khán giả, không có nguồn phát trong thế giới phim. Nhân vật không nghe/nhìn/hát/nhảy theo nhạc nếu câu chuyện không yêu cầu. Không thêm loa, radio hoặc nhạc công trong hình. Nhạc có nguồn thật trong cảnh ghi riêng ở diegetic_sound, không thay thế yêu cầu score nền này.
@@ -228,12 +229,6 @@ MUSIC MIX LEVEL: Maintain a steady, moderate, clearly perceptible score througho
 Mẫu mức nhạc cho clip có lời:
 MUSIC MIX LEVEL: Maintain a clearly audible instrumental layer beneath the authorized voice. Lower the score only enough during the actual words to preserve intelligibility; never duck it to silence or near-inaudibility. Return smoothly to the moderate baseline during available speech-free passages. Do not flatten the character's vocal emotion.
 Chỉ dùng mẫu đúng trường hợp; clip không lời không chứa hướng dẫn ducking cho thoại tưởng tượng. Mốc hồi nền phải có khoảng thời gian thật.
-
-Ví dụ cue buồn có lời, không áp cho mọi phim:
-non_diegetic_music: An instrumental felt-piano phrase over a sustained viola bed expresses regret without resolution. The viola remains audible between piano notes. Keep the score active from first to last frame, without vocals. MUSIC MIX LEVEL: Clearly audible beneath the voice, easing slightly under the broken phrase while remaining perceptible, then returning to a moderate level during the silent reaction. audio_transition: Carry the unresolved harmonic bed through the technical cut without a new introduction or fade-out.
-Ví dụ chuyển cue khi phát hiện:
-non_diegetic_music: A warm instrumental texture is active at the opening. At the discovery, replace its warm harmony with a tense sustained tone and introduce a sparse instrumental pulse immediately; keep a musical layer audible throughout the transition. MUSIC MIX LEVEL: Moderate and clearly perceptible, without an explosive volume jump. audio_transition: Change emotional character at the discovery, with no music-free beat; finish with the tense pulse and bed active.
-Thay ví dụ theo phim thật; không thêm reaction, phát hiện hoặc nhạc cụ không phù hợp chỉ vì mẫu có.
 
 7F. KIỂM TRA BẮT BUỘC — EVERY CLIP HAS AUDIBLE MUSIC
 Trước xuất JSON, rà tất cả VIDEO:
@@ -310,28 +305,35 @@ CỔNG TRUNG THÀNH: đối chiếu từng EVENT/TURN/PERF với clip mới. Ph�
 CỔNG CĂN TÍNH PHIM MỚI: thế giới, thiết chế, nghi thức nếu có, thoại, đạo cụ, tạo hình và art direction có thống nhất và khác rõ không? Quan hệ giữ/đổi có phục vụ motif không? Toàn bộ sinh vật/vật thể có qua 2C không? Không lấy trung thành làm lý do chỉ thay tên; không lấy sáng tạo làm lý do bịa loài, quyền lực hoặc năng lực.
 Không cổng nào thay cổng kia. Nếu rớt, sửa premise/world design và các clip bị ảnh hưởng rồi đối chiếu lại. Những nhãn “preserved”, “different” không chứng minh đạt: bằng chứng phải nằm trong ACTION/SPEECH/START/END và assets. Chỉ giữ kết luận ánh xạ ngắn ở ANALYSIS ONLY, không xuất file báo cáo phụ hoặc thêm khóa JSON.
 
-HỢP ĐỒNG JSON ĐẦU RA — FLAT ASSET/VIDEO ARRAY
-Mỗi tập là một mảng phẳng JSON hợp lệ đặt trong code block Markdown, ĐỘC LẬP/TỰ CHỨA, tên logic kết thúc bằng _full.json. Root là array, asset trước rồi VIDEO theo thứ tự xuất hiện. Không xuất root object, schema_version, segments, emotional_beats, performance_contract hoặc JSON phân tích phụ.   
+HỢP ĐỒNG JSON ĐẦU RA — FLAT ASSET/VIDEO ARRAY & QUY TẮC CHIA ĐỢT (ANTI-TRUNCATION)
 
-QUY TẮC XUẤT LIÊN HOÀN VÀ CÂU TRẢ LỜI BẮT BUỘC:
-Đợt 1: Xuất toàn bộ ASSET (đã áp dụng casting 2A và ánh xạ loài 2C.1) cùng các VIDEO đầu tiên. Dừng lại an toàn sau dấu phẩy , kết thúc của một object VIDEO. Nếu code block chưa bao gồm toàn bộ nội dung JSON kịch bản, bên ngoài code block CHỈ ĐƯỢC PHÉP viết đúng một câu duy nhất:Còn tiếp, gõ "Tiếp tục" để xem nội dung tiếp theo
-Khi nhận lệnh "tiếp tục": Xuất tiếp nối ngay từ VIDEO tiếp theo trong code block mới, giữ nguyên CONTINUITY mà không tạo lại ASSET. Nếu code block đã bao gồm toàn bộ nội dung JSON (hoặc ở đợt xuất cuối cùng sau khi đã đóng ngoặc vuông ]), bên ngoài code block CHỈ ĐƯỢC PHÉP viết đúng một câu duy nhất:Đã hoàn thành
-Tuyệt đối không viết thêm lời dẫn, tóm tắt kịch bản, ghi chú phân tích ngoài lề hay bất kỳ ký tự nào khác ngoài code block và câu thông báo bắt buộc nêu trên.
+1. CẤU TRÚC JSON:
+- Nếu chỉ tạo 1 tập đơn: Trả về một mảng phẳng JSON (Array `[...]`) hợp lệ, root là array, asset trước rồi đến các VIDEO.
+- Nếu tạo nhiều tập/nhiều file: Trả về một JSON Object `{ ... }` có key là tên file (kết thúc bằng ".json"), value là mảng phẳng chứa asset và các VIDEO của tập đó:
+  {
+    "02_aladinhusband_adapted_full.json": [ ... ],
+    "03_aladinhusband_adapted_full.json": [ ... ]
+  }
+- TUYỆT ĐỐI KHÔNG để JSON bị cắt dở dang, không kết thúc lơ lửng ở giữa một câu văn hay sau một dấu phẩy mở. MỌI LƯỢT XUẤT ĐỀU BẮT BUỘC PHẢI LÀ MỘT KHỐI CODE JSON HỢP LỆ, ĐÃ ĐÓNG NGOẶC ĐẦY ĐỦ (`]` hoặc `}`).
 
-QUY TẮC XUẤT DỮ LIỆU LIÊN HOÀN (CONTINUATION RULE):
-Để bảo toàn 100% chi tiết diễn xuất, lời thoại và quy tắc camera mà không bị đứt đoạn do chạm trần token của một câu trả lời:
+2. QUY ĐỊNH PHÂN BỔ DUNG LƯỢNG THEO LƯỢT:
+- Đợt 1: Xuất toàn bộ ASSET (đã áp dụng casting 2A và ánh xạ loài 2C.1) cùng 2 đến 3 VIDEO đầu tiên. Sau khi viết xong VIDEO cuối của đợt, LẬP TỨC ĐÓNG NGOẶC HỢP LỆ (đóng ngoặc `]` của mảng và đóng ngoặc `}` của object nếu có).
+- Khi nhận lệnh "tiếp tục": Xuất tiếp nối ngay từ VIDEO tiếp theo trong một khối code JSON hợp lệ mới. Chỉ chứa phần tử VIDEO mới chưa gửi, không lặp lại ASSET cũ, giữ nguyên tính liên tục của CONTINUITY.
+- Chủ động dừng an toàn: Khi sắp đạt giới hạn token của câu trả lời, AI phải dừng lại ngay sau một item VIDEO trọn vẹn và đóng ngoặc hoàn chỉnh, không cố viết thêm để bị ngắt giữa chừng.
 
-Hãy chủ động phân bổ: Đợt 1 xuất toàn bộ ASSET (đã áp dụng casting 2A và ánh xạ loài 2C.1) cùng các VIDEO đầu tiên vừa vặn độ dài an toàn. Dừng lại sau dấu phẩy kết thúc của một object VIDEO.
+3. THÔNG BÁO BẮT BUỘC NGOÀI CODE BLOCK:
+- Sau khối code, nếu VẪN CÒN video chưa xuất: Bên ngoài khối code CHỈ ĐƯỢC PHÉP viết đúng một dòng duy nhất:
+Còn tiếp, gõ "Tiếp tục" để xem nội dung tiếp theo
+- Ở LƯỢT CUỐI CÙNG (sau khi đã xuất đủ toàn bộ và đóng ngoặc JSON hoàn tất): Bên ngoài khối code CHỈ ĐƯỢC PHÉP viết đúng nguyên văn:
+Đã hoàn thành
+- Tuyệt đối không viết thêm lời dẫn, tóm tắt kịch bản, ghi chú phân tích ngoài lề hay bất kỳ ký tự nào khác bên ngoài khối code ngoài câu thông báo bắt buộc nêu trên.
 
-Báo hiệu trạng thái ngoài code block: [CHƯA HOÀN TẤT: Đã tạo đến VIDEO_xxx/tổng yyy clip. Gõ 'tiếp tục' để tạo tiếp phân đoạn sau].
-
-Khi nhận lệnh 'tiếp tục': Xuất nối tiếp ngay lập tức từ VIDEO tiếp theo trong một code block mới, giữ nguyên tính liên tục của CONTINUITY mà không sinh lại ASSET.
-
-Đợt cuối cùng: Đóng dấu ngoặc vuông ] của root array và kết thúc bằng thông báo: [HOÀN TẤT KỊCH BẢN CHUYỂN THỂ: <new_basename>_adapted_full].
+SCHEMA QUY ĐỊNH:
 Asset đúng 5 khóa: {"id":string,"type":"CHARACTER"|"LOCATION","ref":[],"prompt":string,"duration":0}.
 VIDEO đúng 9 khóa: {"id":string,"type":"VIDEO","ref":[{"id":string,"type":"CHARACTER"|"LOCATION"}],"prompt":string,"duration":number,"shot":integer,"clip":integer,"aspectRatio":"9:16"|"16:9","frameRate":number}.
-Đây là profile tương thích cấu trúc beggar (5).json: đồ vật cần ảnh tham chiếu dùng type CHARACTER với id PROP_... hoặc OBJ_...; prompt mở đầu rõ “NON-HUMAN PROP REFERENCE” hoặc “NON-HUMAN FIXED OBJECT REFERENCE”. Đây chỉ là loại chứa asset của bộ nạp, tuyệt đối không nhân hóa đồ vật hoặc tính đồ vật là người. Nhân vật dùng CHAR_..., nơi chốn LOC_...; không tự bổ sung enum PROP/OBJECT khi bộ nạp chưa được xác nhận hỗ trợ. Người/động vật có vai dùng CHARACTER và mô tả rõ bản chất; không tự biến động vật thành người. Asset cần thiết cho nội dung phải tồn tại; không lập asset cho mọi vật nền. CHARACTER.prompt phải có thiết kế theo 2A; LOCATION/PROP/OBJECT áp bảng màu/vật liệu theo 2B; không thêm field casting hoặc palette vào schema.
-ID duy nhất toàn file, ASCII có dấu gạch dưới, không dùng tên trùng. Ref phải trỏ asset tồn tại, type khớp chính xác, không trỏ VIDEO; mỗi VIDEO tối đa 9 refs. Đặt ref theo thứ tự <Picture 1>, <Picture 2>... được dùng trong prompt. Asset ref=[] và duration=0. VIDEO duration>0, shot/clip là số nguyên dương. shot tăng theo nhóm cú máy dự kiến; clip tăng trong cùng shot khi phải chia kỹ thuật. Khi bắt đầu shot mới, clip=1. Phân đoạn vật lý và số shot không được dùng để suy ra một sự kiện truyện mới.
+Đồ vật cần ảnh tham chiếu dùng type CHARACTER với id PROP_... hoặc OBJ_...; prompt mở đầu rõ “NON-HUMAN PROP REFERENCE” hoặc “NON-HUMAN FIXED OBJECT REFERENCE”. Nhân vật dùng CHAR_..., nơi chốn LOC_...; không tự bổ sung enum PROP/OBJECT khi bộ nạp chưa được xác nhận hỗ trợ. Người/động vật có vai dùng CHARACTER và mô tả rõ bản chất. CHARACTER.prompt phải có thiết kế theo 2A; LOCATION/PROP/OBJECT áp bảng màu/vật liệu theo 2B.
+ID duy nhất toàn file, ASCII có dấu gạch dưới, không dùng tên trùng. Ref phải trỏ asset tồn tại, type khớp chính xác, không trỏ VIDEO; mỗi VIDEO tối đa 9 refs. Đặt ref theo thứ tự <Picture 1>, <Picture 2>... được dùng trong prompt. Asset ref=[] và duration=0. VIDEO duration>0, shot/clip là số nguyên dương. shot tăng theo nhóm cú máy dự kiến; clip tăng trong cùng shot khi phải chia kỹ thuật. Khi bắt đầu shot mới, clip=1.
+
 Mỗi VIDEO.prompt là một string đầy đủ, tự chứa chỉ dẫn cần thiết; dùng các nhãn dưới đây theo thứ tự trong cùng chuỗi, không thêm khóa JSON:
 1. <Picture N> is ...: ánh xạ từng ảnh tới ID/vai trò.
 2. CLIP SPEC: thời lượng đúng duration, tỷ lệ đúng aspectRatio, fps đúng frameRate, phong cách hình ảnh.
@@ -342,10 +344,7 @@ Mỗi VIDEO.prompt là một string đầy đủ, tự chứa chỉ dẫn cần 
 7. SOUND AND EDITING: ghi trực tiếp non_diegetic_music, MUSIC PRESENCE, MUSIC MIX LEVEL, diegetic_sound, mix_priority và audio_transition theo mục 7A–7F; chất âm và biến đổi cụ thể theo cảnh, không chỉ nhãn cảm xúc. Ghi ALLOWED SOUNDS cụ thể; tiếng người chỉ thuộc đúng SPEECH MODE/chủ giọng và danh sách được phép ở mục 5, không lẫn vào ambience hoặc nhạc.
 8. END FRAME: trạng thái kết thực tế của clip và phần đang tiếp diễn.
 9. CONTINUITY: những chi tiết phải giữ qua clip kế tiếp, kể cả cảm xúc chưa hạ, vật sở hữu, hướng vận động và thông tin nhân vật đã biết. Với display, giữ orientation theo thế giới/điểm neo, top edge và UI state; tính lại projection khi đổi góc theo 7G.
-10. ANALYSIS ONLY — DO NOT RENDER OR SPEAK: ghi chú nguồn/độ chắc chắn hoặc ánh xạ chuyển thể được quy định riêng bên dưới. Đây là metadata viết trong string vì schema cố định; không phải chữ trên màn hình, lời thoại, âm thanh hoặc sự kiện cần tạo. script_gen phải đọc rồi xử lý phần này, không đưa nguyên các ghi chú phân tích nguồn vào chỉ dẫn diễn.
-Các nhãn trên là tổ chức nội dung trong prompt, không bắt tạo overlay. Không tạo subtitle, caption hay watermark ở video mới trừ khi người dùng yêu cầu. Chữ trong thế giới phim có vai trò tình tiết được mô tả riêng; không xóa bằng chứng chữ quan trọng bằng lệnh “no text” toàn cục.
-Mô tả prompt/asset bằng tiếng Anh rõ ràng; nội dung lời nói tuân theo quy tắc ngôn ngữ của từng function. Có thể ghi ghi chú phân tích bằng tiếng Việt. Trích dẫn lời nói phải escape đúng JSON; không để lời chỉ dẫn lọt vào ngoặc thoại.
-Kiểm bằng mã nếu khả dụng: parse JSON; kiểm đúng khóa và kiểu của TẤT CẢ entry; ID/ref/type; ref<=9; giá trị duration/shot/clip/frameRate/aspectRatio; số <Picture N> khớp ref; thời lượng chữ và trường duration khớp. Không tuyên bố đã chạy validator khi chỉ đọc thủ công. Kiểm nội dung riêng, parse thành công không chứng minh đúng phim. Nếu không thể tạo đủ trong giới hạn đầu ra, không âm thầm bỏ cảnh/thoại hoặc trả file thiếu như đã hoàn tất; báo giới hạn thay vì giao một _full.json giả hoàn chỉnh.
+10. ANALYSIS ONLY — DO NOT RENDER OR SPEAK: ghi chú nguồn/độ chắc chắn hoặc ánh xạ chuyển thể được quy định riêng bên dưới. Đây là metadata viết trong string vì schema cố định; không phải chữ trên màn hình, lời thoại, âm thanh hoặc sự kiện cần tạo.
 
 ĐẦU VÀO
 JSON tham chiếu flat array đính kèm và cấu hình engine/thời lượng nếu người dùng cung cấp. Nếu không có chỉ định khác, dùng MOTIF_PRESERVING_WORLD_REBUILD và các mặc định trong prompt; không quay về đổi tên/đạo cụ đơn lẻ và không chuyển sang nhánh chỉ giữ đường cong cảm xúc rồi bỏ chuỗi nhân quả. Chỉ giao code block chứa nội dung JSON chuyển thể và câu phản hồi kết thúc theo đúng quy tắc ("Còn tiếp, gõ "Tiếp tục" để xem nội dung tiếp theo" hoặc "Đã hoàn thành"), không viết thêm bất kỳ nội dung nào khác.

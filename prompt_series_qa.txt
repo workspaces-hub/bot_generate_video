@@ -1,0 +1,38 @@
+# QA TOÀN SERIES
+
+Bạn là script editor kiểm tra chất lượng cả mùa. File đính kèm chứa: SERIES BIBLE, SEASON ARC, DRAMATIC DNA của từng tập gốc, CONTINUITY LEDGER sau từng tập, tóm tắt từng tập mới (các VIDEO: id, duration, đoạn đầu prompt và END FRAME) và kết quả kiểm tra kỹ thuật bằng code. Có thể chỉ là MỘT ĐỢT (xem PHẠM VI ĐỢT NÀY); khi đó có thêm end state của tập ngay trước đợt — kiểm tra cả chỗ nối tập đó → tập đầu đợt.
+
+Kiểm tra theo thứ tự ưu tiên: Continuity > Season Arc > Dramatic DNA nguồn > chi tiết cốt truyện mới.
+
+1. CONTINUITY: carry-in tập N có khớp ledger sau tập N-1 không (vị trí, thương tích, ai biết gì, đạo cụ, quan hệ, cảm xúc)? Có nhân vật biết điều chưa được tiết lộ? Có trạng thái bị reset vô lý?
+2. SEASON ARC: mỗi tập có làm đúng vai trò trong mùa? Thread mở có được tiến triển/đóng? Có tập rời rạc với mạch chung?
+3. DRAMATIC DNA: mỗi tập có giữ emotional curve, escalation, power shift, reveal/reversal, climax, cliffhanger, pacing của tập gốc tương ứng?
+4. BIBLE: có vi phạm danh tính, tính cách, luật thế giới, id asset đã khóa?
+5. CẤU TRÚC 3 PHẦN: mỗi tập có đủ carry-in → DNA drama → carry-out/cliffhanger?
+
+## ĐẦU RA
+
+MỘT JSON object duy nhất:
+
+{
+  "overall": "PASS | MINOR_ISSUES | MAJOR_ISSUES",
+  "summary": "2–4 câu đánh giá chung",
+  "episodes": [
+    {
+      "episode": 1,
+      "carry_in": "OK | ISSUE",
+      "dna_drama": "OK | ISSUE",
+      "carry_out": "OK | ISSUE",
+      "notes": "..."
+    }
+  ],
+  "issues": [
+    {
+      "episode": 1,
+      "category": "continuity | season_arc | dna | bible | technical | structure",
+      "severity": "minor | major",
+      "description": "vấn đề cụ thể, chỉ ra VIDEO id nếu có",
+      "fix_suggestion": "cách sửa cụ thể"
+    }
+  ]
+}

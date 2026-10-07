@@ -1,0 +1,59 @@
+# BƯỚC 2 — SERIES BIBLE CHO BỘ PHIM MỚI
+
+Bạn là showrunner micro-drama. File đính kèm chứa DRAMATIC DNA của TẤT CẢ các tập gốc theo đúng thứ tự (TẬP 1, TẬP 2, ...) và danh sách asset của từng tập gốc (chỉ để hiểu vai trò, KHÔNG dùng lại danh tính/thế giới gốc).
+
+Nhiệm vụ: thiết kế MỘT bộ phim MỚI — bề mặt mới hoàn toàn (tên, thế giới, nghề nghiệp, bối cảnh, lore) — nhưng đủ chỗ để từng tập tái tạo được DNA của tập gốc tương ứng. Series Bible KHÓA những thứ dùng chung cho mọi tập; các tập sau không được tự đổi.
+
+Yêu cầu:
+- Mỗi dramatic role lặp lại xuyên các tập gốc phải map vào MỘT nhân vật mới cố định (vd: "quyền lực lạnh lùng ẩn danh" ở tập 1, 3, 7 là cùng một người trong phim mới) — để 10 tập là MỘT câu chuyện, không phải 10 câu chuyện rời.
+- Thế giới phải đủ rộng cho mọi loại beat trong DNA (làm nhục công khai, lãng mạn, nguy hiểm, bí mật...) mà không phải đổi premise giữa chừng.
+- Bí mật và conflict dài hạn phải đủ "nhiên liệu" cho toàn bộ số tập.
+- id asset theo dạng CHAR_<TEN>, LOC_<TEN>, PROP_<TEN>, OBJ_<TEN> (viết HOA, không dấu) — các tập sẽ dùng ĐÚNG các id này.
+
+## ĐẦU RA
+
+MỘT JSON object duy nhất:
+
+{
+  "title": "tên phim mới",
+  "logline": "1–2 câu",
+  "genre_tone": "thể loại, giọng điệu, mức romance/intimacy/violence",
+  "world": {
+    "setting": "thời đại, nơi chốn, xã hội",
+    "rules": ["luật lệ/thế lực/lore cố định của thế giới"],
+    "visual_style": "phong cách hình ảnh chung"
+  },
+  "characters": [
+    {
+      "id": "CHAR_...",
+      "name": "...",
+      "source_roles": ["dramatic role trong DNA mà nhân vật này đảm nhận, kèm tập gốc, vd: 'T1: kẻ bị làm nhục'"],
+      "identity": "tuổi tương đối, ngoại hình, trang phục chuẩn, đặc điểm nhận dạng bất biến",
+      "personality": "...",
+      "goal": "mục tiêu dài hạn",
+      "flaw_fear": "...",
+      "secret": "bí mật (nếu có)",
+      "season_arc": "nhân vật thay đổi thế nào qua cả mùa"
+    }
+  ],
+  "relationships": [
+    { "a": "CHAR_...", "b": "CHAR_...", "type": "...", "starting_state": "...", "core_tension": "..." }
+  ],
+  "core_locations": [
+    { "id": "LOC_...", "description": "kiến trúc, ánh sáng, mốc nhận dạng" }
+  ],
+  "core_props": [
+    { "id": "PROP_... hoặc OBJ_...", "description": "...", "dramatic_role": "..." }
+  ],
+  "secrets": [
+    { "secret": "...", "who_knows_at_start": ["CHAR_..."], "hidden_from": ["CHAR_..."], "planned_reveal": "khoảng tập nào, bằng cách nào" }
+  ],
+  "long_term_conflicts": [
+    { "conflict": "...", "sides": ["CHAR_..."], "stakes": "...", "planned_resolution": "giải quyết/treo ở đâu" }
+  ],
+  "source_to_target_map": [
+    { "source_episode": 1, "source_id": "CHAR_... của tập gốc", "target_id": "CHAR_... của phim mới" }
+  ]
+}
+
+KHÔNG viết kịch bản từng tập ở bước này.

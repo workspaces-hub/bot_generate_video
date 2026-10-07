@@ -22,7 +22,7 @@ export interface BrowserContextGetter {
    * dễ chạm ngưỡng crash "Target crashed"/OOM, xem launch.ts). Best-effort —
    * lỗi khi đóng (nếu có) chỉ log, không throw.
    */
-  close: (options?: { force?: boolean }) => Promise<void>;
+  close: () => Promise<void>;
   /**
    * Ghi session (cookies/localStorage) của context hiện tại ngược lại vào
    * storageStatePath — chỉ có tác dụng khi bật persistSession (xem
@@ -99,10 +99,19 @@ export function createBrowserContextManager(
       );
     }
   }
-  // Mốc lần gần nhất có nơi lấy context — xem close(): khoảng giữa lúc 1 nơi
-  // gọi getContext() và lúc nó kịp newPage() thì context.pages() vẫn = 0.
-  let lastAcquiredAt = 0;
-  const RECENT_ACQUIRE_GRACE_MS = 60_000;
+  // close() bị bỏ qua vì còn page đang mở (nơi khác đang dùng chung context)
+  // thì HẸN tự thử đóng lại — nếu không, không ai gọi close() lại nữa và
+  // Chrome sống mãi. getContext() mới thì huỷ hẹn (hàng đợi của nơi đó sẽ tự
+  // gọi close() khi xong).
+  let deferredCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleDeferredClose = (delayMs: number): void => {
+    if (deferredCloseTimer) return;
+    console.log(`[${logLabel}] Hẹn thử đóng Chrome lại sau ${Math.round(delayMs / 1000)}s.`);
+    deferredCloseTimer = setTimeout(() => {
+      deferredCloseTimer = null;
+      void close().catch(() => {});
+    }, delayMs);
+  };
 
   async function launchNewContext(): Promise<BrowserContext> {
     const browser = await launchRealChrome(
@@ -165,28 +174,17 @@ export function createBrowserContextManager(
     if (!contextPromise) {
       contextPromise = launchNewContext();
     }
-    lastAcquiredAt = Date.now();
+    if (deferredCloseTimer) {
+      clearTimeout(deferredCloseTimer);
+      deferredCloseTimer = null;
+    }
     return contextPromise;
   }
 
-  async function close(options?: { force?: boolean }): Promise<void> {
+  async function close(): Promise<void> {
     if (!contextPromise) return;
     const current = contextPromise;
     const context = await current.catch(() => null);
-    // Xác nhận qua log thật ("browserContext.newPage: Target page, context or
-    // browser has been closed" ở compareOriginalWithFinalVideo ngay lúc bot
-    // khởi động): nơi A vừa getContext() (Chrome đang launch/vừa xong) nhưng
-    // CHƯA kịp newPage() → pages().length = 0 → hàng đợi B gọi close() lúc
-    // đó qua được check bên dưới và đóng mất Chrome của A. Bỏ qua đóng nếu
-    // vừa có nơi lấy context gần đây — lần close() sau sẽ đóng.
-    // force: nơi gọi CHẮC CHẮN vừa dùng xong (vd tạo ảnh Gemini — đóng ngay
-    // sau mỗi ảnh) — bỏ qua khoảng chờ này, vẫn giữ kiểm tra page đang mở.
-    if (!options?.force && Date.now() - lastAcquiredAt < RECENT_ACQUIRE_GRACE_MS) {
-      console.warn(
-        `[${logLabel}] Bỏ qua đóng Chrome — vừa có nơi lấy context trong ${RECENT_ACQUIRE_GRACE_MS / 1000}s gần đây (có thể sắp mở page).`,
-      );
-      return;
-    }
     // SỬA (xác nhận qua debug thật, bật DEBUG=pw:browser,pw:channel — xem
     // lịch sử xoá close() ở processChatAIQueue): context này có thể ĐANG
     // ĐƯỢC DÙNG bởi 1 hàng đợi KHÁC tại đúng lúc hàng đợi gọi close() vừa
@@ -201,7 +199,12 @@ export function createBrowserContextManager(
       console.warn(
         `[${logLabel}] Bỏ qua đóng Chrome — vẫn còn ${context.pages().length} page đang mở (nơi khác đang dùng chung context này).`,
       );
+      scheduleDeferredClose(30_000);
       return;
+    }
+    if (deferredCloseTimer) {
+      clearTimeout(deferredCloseTimer);
+      deferredCloseTimer = null;
     }
     await saveSession();
     contextPromise = null;

@@ -238,7 +238,7 @@ async function attemptGenerateImageGemini(
     await page.close().catch(() => {});
     // Theo yêu cầu người dùng: tạo xong mỗi ảnh thì đóng luôn Chrome tạo ảnh
     // (close() tự lưu session trước khi đóng — xem persistSession).
-    await getGeminiImageBrowserContext.close({ force: true });
+    await getGeminiImageBrowserContext.close();
   }
 }
 

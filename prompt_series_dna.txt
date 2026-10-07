@@ -1,0 +1,50 @@
+# BƯỚC 1 — TRÍCH DRAMATIC DNA CỦA MỘT TẬP GỐC
+
+Bạn là biên tập viên kịch bản micro-drama. File đính kèm chứa ĐÚNG MỘT JSON tham chiếu (storyboard của một tập gốc: các asset CHARACTER/LOCATION/PROP/OBJECT và các VIDEO theo thứ tự thời gian; có thể kèm khối ANALYSIS ONLY như DRAMATIC_DNA_26, MACRO_DRAMA_MAP, EMOTIONAL_BEAT_MAP — nếu có thì dùng làm nguồn ưu tiên).
+
+Nhiệm vụ: trích DRAMATIC DNA của tập này — những gì làm nên "chất" drama của nó — tách khỏi bề mặt (tên, thế giới, trang phục, đạo cụ cụ thể). DNA này sẽ được dùng để viết một tập MỚI có bề mặt khác hoàn toàn nhưng cảm giác drama tương đương.
+
+Chỉ phân tích những gì JSON thực sự hỗ trợ; không bịa chi tiết. Tham chiếu vị trí bằng VIDEO id thật của tập gốc.
+
+## ĐẦU RA
+
+MỘT JSON object duy nhất, đúng các khóa sau:
+
+{
+  "source_file": "tên file tham chiếu",
+  "premise_function": "1–2 câu: tập này làm gì về mặt dramatic (không dùng tên riêng)",
+  "character_roles": [
+    { "source_id": "CHAR_...", "dramatic_role": "vd: kẻ bị làm nhục công khai / quyền lực lạnh lùng ẩn danh / nam chính trêu chọc", "want": "...", "leverage": "nhân vật này nắm lợi thế gì" }
+  ],
+  "emotional_curve": [
+    { "video_ids": ["..."], "position": "đầu | 1/4 | giữa | 3/4 | cuối", "audience_emotion": "...", "intensity": 1, "created_by": "hành động/lời thoại/reveal nào tạo ra" }
+  ],
+  "escalation": [
+    { "video_ids": ["..."], "step": "xung đột/khó khăn tăng thế nào", "level": "nhẹ | vừa | mạnh | cực mạnh" }
+  ],
+  "power_shifts": [
+    { "video_id": "...", "before": "ai mạnh/ai yếu", "trigger": "...", "after": "cán cân đổi thế nào" }
+  ],
+  "reveals_reversals": [
+    { "video_id": "...", "type": "reveal | reversal | twist", "function": "thông tin/cú đảo làm thay đổi gì", "withheld_until_then": "điều gì bị giấu trước đó và với ai" }
+  ],
+  "climax": { "video_ids": ["..."], "type": "cảm xúc | xung đột | thông tin | tình cảm", "intensity": 1, "description": "..." },
+  "cliffhanger": { "video_id": "...", "open_question": "câu hỏi treo cho người xem", "pull_type": "open question | unresolved danger | interrupted action | withheld identity | romantic tension | threat | reveal | promise of payoff" },
+  "pacing": [
+    { "video_ids": ["..."], "speed": "FAST | MEDIUM | SLOW | ACCELERATION | DECELERATION", "mode": "dialogue-led | action-led | reaction-led | visual-led | balanced", "note": "..." }
+  ],
+  "major_reactions": [
+    { "video_id": "...", "character_source_id": "...", "trigger": "...", "before_to_after": "vd: hy vọng → chết lặng", "intensity": 1, "visible_channels": ["eyes", "breath", "hands", "posture"] }
+  ],
+  "speech_modes": [
+    { "video_id": "...", "mode": "INTERNAL_MONOLOGUE | VOICE_OVER | OFF_SCREEN_SPOKEN", "function": "chỉ liệt kê các câu KHÔNG phải lời nói trực tiếp bình thường" }
+  ],
+  "core_functions_must_keep": ["chức năng dramatic bắt buộc giữ, vd: public humiliation, hidden authority, delayed reveal"],
+  "mechanisms_to_change": ["cơ chế bề mặt của bản gốc cần ĐỔI để tránh reskin, vd: tắm trong bồn, phu ngựa"],
+  "dna_summary": "3–5 câu tóm tắt DNA, không dùng tên riêng"
+}
+
+Quy tắc:
+- intensity là số nguyên 1–10.
+- Ngắn gọn, súc tích: mỗi mảng chỉ giữ các beat QUAN TRỌNG; tổng JSON nên dưới khoảng 6.000 ký tự.
+- KHÔNG viết lại kịch bản, KHÔNG đề xuất câu chuyện mới ở bước này.

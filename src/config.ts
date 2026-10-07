@@ -224,6 +224,19 @@ export const config = {
   // handleGenerateScriptEpisodeRequest trong handlers.ts,
   // prompt_generate_script_episode.txt.
   promptGenerateScriptEpisode: "prompt_generate_script_episode.txt",
+  // "Tạo kịch bản mới" nhiều tập bằng Gemini — pipeline series (xem
+  // seriesScript.ts): Dramatic DNA từng tập gốc → Series Bible → Season Arc →
+  // từng tập + Continuity Ledger → QA toàn series. Mỗi bước 1 master prompt.
+  promptSeriesDna: "prompt_series_dna.txt",
+  promptSeriesBible: "prompt_series_bible.txt",
+  // "Tạo tiếp" series từ tập K: chỉ THÊM nhân vật/bối cảnh/bí mật mới vào Bible đã khoá.
+  promptSeriesBibleExtend: "prompt_series_bible_extend.txt",
+  promptSeriesArc: "prompt_series_arc.txt",
+  promptSeriesLedger: "prompt_series_ledger.txt",
+  promptSeriesQa: "prompt_series_qa.txt",
+  // Kết quả từng bước của pipeline series, theo tên phim (remakeBaseName) —
+  // bước nào đã có file thì bỏ qua (bot restart giữa chừng chạy tiếp).
+  seriesDir: path.resolve(process.env.SERIES_DIR ?? "./storage/series"),
 
   // Theo yêu cầu người dùng: bản clone của askChatAIAboutReferenceVideo dùng
   // API Qwen (qua OpenRouter, KHÔNG phải browser automation) thay vì

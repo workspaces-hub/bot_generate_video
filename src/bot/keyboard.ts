@@ -80,6 +80,12 @@ export const GENERATE_SCRIPT_BUTTON_LABEL = "Tạo kịch bản mới";
  */
 export const GENERATE_SCRIPT_EPISODE_BUTTON_LABEL = "Tạo kịch bản theo từng tập";
 /**
+ * Tạo tiếp series đã tạo bằng "Tạo kịch bản mới" (pipeline series Gemini, xem
+ * seriesScript.ts): user gõ tên series (vd "9trung_remake_1") — bot tạo từ
+ * tập sau tập cuối đã có tới hết các file tham chiếu còn lại.
+ */
+export const CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL = "Tiếp tục tạo kịch bản";
+/**
  * Bất kỳ ai trong nhóm được phép dùng bot (isAllowedGroup, KHÔNG giới hạn
  * admin — theo yêu cầu người dùng) đều bấm được — user upload 1 file .txt
  * để GHI ĐÈ master prompt prompt_generate_script.txt (dùng cho
@@ -173,6 +179,7 @@ export const REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL = "Gen lại video lỗi";
 export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
+  [CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL],
   [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL],
   [CONTINUE_IMAGE_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
   [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],

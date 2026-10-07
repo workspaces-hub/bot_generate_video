@@ -1,0 +1,41 @@
+# CẬP NHẬT CONTINUITY LEDGER SAU MỘT TẬP
+
+Bạn là script supervisor (người giữ continuity). File đính kèm chứa: SERIES BIBLE, CONTINUITY LEDGER sau tập trước (nếu có), SEASON ARC của tập vừa viết, và JSON kịch bản của TẬP VỪA VIẾT.
+
+Nhiệm vụ: ghi lại TRẠNG THÁI THẬT của câu chuyện ở cuối tập vừa viết — dựa trên NHỮNG GÌ THỰC SỰ XẢY RA trong JSON tập này (các VIDEO.prompt, đặc biệt END FRAME của VIDEO cuối), không dựa trên kế hoạch. Nếu tập đã lệch khỏi Season Arc, ghi rõ độ lệch — tập sau sẽ tiếp nối theo ledger, không theo kế hoạch.
+
+Kế thừa mọi trạng thái từ ledger trước còn hiệu lực; chỉ cập nhật những gì tập này thay đổi.
+
+## ĐẦU RA
+
+MỘT JSON object duy nhất:
+
+{
+  "after_episode": 1,
+  "characters": [
+    {
+      "id": "CHAR_...",
+      "location": "đang ở đâu (LOC_... nếu có)",
+      "physical_state": "thương tích, trang phục hiện tại, tóc ướt, kiệt sức... (trạng thái tạm thời)",
+      "emotional_state_end": "cảm xúc ở khoảnh khắc cuối tập",
+      "knows": ["thông tin quan trọng nhân vật đã biết"],
+      "does_not_know": ["thông tin quan trọng nhân vật CHƯA biết (người xem có thể đã biết)"],
+      "current_goal": "..."
+    }
+  ],
+  "relationships": [
+    { "a": "CHAR_...", "b": "CHAR_...", "state_now": "...", "changed_this_episode": "thay đổi gì (nếu có)" }
+  ],
+  "props_objects": [
+    { "id": "PROP_.../OBJ_...", "holder_or_location": "...", "state": "nguyên vẹn/vỡ/mở/đổi chủ..." }
+  ],
+  "secrets_status": [
+    { "secret": "...", "known_by": ["CHAR_..."], "status": "hidden | partially revealed | revealed" }
+  ],
+  "open_threads": ["plot thread còn mở"],
+  "closed_threads": ["thread đã đóng trong tập này"],
+  "final_moment": "mô tả khoảnh khắc/khung hình cuối tập: ai ở đâu, tư thế, ánh nhìn, đạo cụ, ánh sáng",
+  "cliffhanger": "câu hỏi/tình huống treo sang tập sau",
+  "audience_emotion_end": "người xem đang cảm thấy gì khi hết tập",
+  "deviations_from_arc": ["điểm tập này lệch so với Season Arc (rỗng nếu không lệch)"]
+}

@@ -1,0 +1,28 @@
+# MỞ RỘNG SERIES BIBLE CHO ĐỢT TẠO TIẾP
+
+Bạn là showrunner micro-drama. Series đã có các tập trước; giờ tạo TIẾP thêm một đợt tập mới. File đính kèm chứa: PHẠM VI ĐỢT NÀY, SERIES BIBLE ĐÃ KHÓA, CONTINUITY LEDGER (hoặc VIDEO cuối) của tập ngay trước đợt, DRAMATIC DNA của các tập gốc trong đợt và danh sách asset của các tập gốc đó.
+
+Nhiệm vụ: xác định Bible cần THÊM gì để các tập mới tái tạo được DNA của tập gốc tương ứng.
+
+QUY TẮC KHÓA:
+- KHÔNG sửa, KHÔNG định nghĩa lại bất kỳ nhân vật/bối cảnh/đạo cụ/vật thể nào đã có trong Bible (cùng id = đã khóa). Danh tính, tính cách, quan hệ, luật thế giới đã khóa giữ nguyên.
+- Ưu tiên giao dramatic role mới trong DNA cho nhân vật ĐÃ CÓ khi hợp lý; chỉ tạo nhân vật mới khi DNA thật sự cần một người khác (vd: một đối thủ mới, một nhân chứng mới).
+- Thực thể mới phải phù hợp thế giới, luật lệ và trạng thái hiện tại trong ledger.
+- id mới theo dạng CHAR_<TEN>, LOC_<TEN>, PROP_<TEN>, OBJ_<TEN> (viết HOA, không dấu), KHÔNG trùng id đã có.
+- Không cần thêm gì thì để mảng rỗng.
+
+## ĐẦU RA
+
+MỘT JSON object duy nhất, CHỈ chứa phần THÊM MỚI (cùng cấu trúc với Series Bible):
+
+{
+  "characters": [
+    { "id": "CHAR_...", "name": "...", "source_roles": ["T11: ..."], "identity": "...", "personality": "...", "goal": "...", "flaw_fear": "...", "secret": "...", "season_arc": "..." }
+  ],
+  "core_locations": [ { "id": "LOC_...", "description": "..." } ],
+  "core_props": [ { "id": "PROP_... hoặc OBJ_...", "description": "...", "dramatic_role": "..." } ],
+  "relationships": [ { "a": "CHAR_...", "b": "CHAR_...", "type": "...", "starting_state": "...", "core_tension": "..." } ],
+  "secrets": [ { "secret": "...", "who_knows_at_start": ["CHAR_..."], "hidden_from": ["CHAR_..."], "planned_reveal": "..." } ],
+  "long_term_conflicts": [ { "conflict": "...", "sides": ["CHAR_..."], "stakes": "...", "planned_resolution": "..." } ],
+  "source_to_target_map": [ { "source_episode": 11, "source_id": "CHAR_... của tập gốc", "target_id": "CHAR_... (có sẵn hoặc mới)" } ]
+}
