@@ -119,6 +119,17 @@ export const UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL =
  */
 export const UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL =
   "Cập nhật prompt tham chiếu video";
+/**
+ * Cập nhật các master prompt của pipeline series (seriesScript.ts) — cùng cơ
+ * chế handleUpdateMasterPromptUpload (sao lưu bản cũ trước khi ghi đè). Mỗi
+ * prompt 1 nút; file đích map trong SERIES_PROMPT_CONFIG_KEYS (handlers.ts).
+ */
+export const UPDATE_SERIES_DNA_PROMPT_BUTTON_LABEL = "Cập nhật prompt series DNA";
+export const UPDATE_SERIES_BIBLE_PROMPT_BUTTON_LABEL = "Cập nhật prompt series Bible";
+export const UPDATE_SERIES_BIBLE_EXTEND_PROMPT_BUTTON_LABEL = "Cập nhật prompt series Bible mở rộng";
+export const UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL = "Cập nhật prompt series Arc";
+export const UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL = "Cập nhật prompt series Ledger";
+export const UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL = "Cập nhật prompt series QA";
 /** Dừng SỚM các job đang chờ/đang gen ảnh-video của CHARACTER_REF_BUTTON_LABEL và CHATAI_BUTTON_LABEL — xem stopAll() trong queue.ts. */
 export const STOP_ALL_BUTTON_LABEL = "🛑 Stop All";
 /** Retry job "storyboardVideo" đã lỗi trước đó (xem failedStoryboardJobs/continueFailedStoryboardVideo trong queue.ts) — user nhập tên file json, bot tự tra lại. */
@@ -183,6 +194,9 @@ export const promptMenu = Markup.keyboard([
   [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL],
   [CONTINUE_IMAGE_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
   [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
+  [UPDATE_SERIES_DNA_PROMPT_BUTTON_LABEL, UPDATE_SERIES_BIBLE_PROMPT_BUTTON_LABEL],
+  [UPDATE_SERIES_BIBLE_EXTEND_PROMPT_BUTTON_LABEL, UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL],
+  [UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL, UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL],
   // [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   [MERGE_VIDEO_BUTTON_LABEL, REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL],
   [STOP_ALL_BUTTON_LABEL],

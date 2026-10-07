@@ -59,6 +59,12 @@ import {
   STOP_ALL_BUTTON_LABEL,
   TEST_VIDEO_REFERENCE_BUTTON_LABEL,
   UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL,
+  UPDATE_SERIES_DNA_PROMPT_BUTTON_LABEL,
+  UPDATE_SERIES_BIBLE_PROMPT_BUTTON_LABEL,
+  UPDATE_SERIES_BIBLE_EXTEND_PROMPT_BUTTON_LABEL,
+  UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL,
+  UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL,
+  UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL,
   UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL,
   UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL,
   UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL,
@@ -89,9 +95,22 @@ type PendingMode =
   | "updateGenerateScriptPrompt"
   | "updateGenerateScriptEpisodePrompt"
   | "updateVideoReferencePrompt"
-  | "updateTestVideoReferencePrompt";
+  | "updateTestVideoReferencePrompt"
+  | "updateSeriesPrompt";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
+
+/** Nút cập nhật prompt pipeline series → key đường dẫn prompt trong config. */
+const SERIES_PROMPT_CONFIG_KEYS = {
+  [UPDATE_SERIES_DNA_PROMPT_BUTTON_LABEL]: "promptSeriesDna",
+  [UPDATE_SERIES_BIBLE_PROMPT_BUTTON_LABEL]: "promptSeriesBible",
+  [UPDATE_SERIES_BIBLE_EXTEND_PROMPT_BUTTON_LABEL]: "promptSeriesBibleExtend",
+  [UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL]: "promptSeriesArc",
+  [UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL]: "promptSeriesLedger",
+  [UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL]: "promptSeriesQa",
+} as const satisfies Record<string, keyof typeof config>;
+// Mode "updateSeriesPrompt": userId → file prompt series sẽ bị ghi đè.
+const pendingSeriesPromptPath = new Map<number, string>();
 
 // Gom ảnh tham chiếu gửi liên tiếp từ CÙNG 1 user trong 1 khoảng thời gian
 // ngắn (tối đa MAX_REFERENCE_IMAGES ảnh). KHÔNG dựa vào media_group_id của
@@ -2251,6 +2270,19 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  for (const [label, configKey] of Object.entries(SERIES_PROMPT_CONFIG_KEYS)) {
+    bot.hears(label, async (ctx) => {
+      if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+      clearPendingUploads(ctx.from.id);
+      waitingMode.set(ctx.from.id, "updateSeriesPrompt");
+      pendingSeriesPromptPath.set(ctx.from.id, config[configKey]);
+      await ctx.reply(
+        `${ctx.from.first_name ?? "Bạn"}, gửi file .txt nội dung mới cho "${config[configKey]}"`,
+        promptMenu,
+      );
+    });
+  }
+
   bot.hears(UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
@@ -2354,7 +2386,8 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL ||
       ctx.message.text === UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL ||
       ctx.message.text === UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL ||
-      ctx.message.text === UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL
+      ctx.message.text === UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL ||
+      ctx.message.text in SERIES_PROMPT_CONFIG_KEYS
     ) {
       return next();
     }
@@ -2855,7 +2888,8 @@ export function registerHandlers(bot: Telegraf): void {
       mode === "updateGenerateScriptPrompt" ||
       mode === "updateGenerateScriptEpisodePrompt" ||
       mode === "updateVideoReferencePrompt" ||
-      mode === "updateTestVideoReferencePrompt"
+      mode === "updateTestVideoReferencePrompt" ||
+      mode === "updateSeriesPrompt"
     ) {
       // Bắt buộc phải gửi file .txt (xem nhánh xử lý trong
       // bot.on(message("document"))) — gõ text không kèm file thì từ chối,
@@ -3163,6 +3197,21 @@ export function registerHandlers(bot: Telegraf): void {
         ctx.message.message_id,
         config.promptVideoReference,
       );
+      return;
+    }
+    if (waitingMode.get(userId) === "updateSeriesPrompt") {
+      waitingMode.delete(userId);
+      const targetPath = pendingSeriesPromptPath.get(userId);
+      pendingSeriesPromptPath.delete(userId);
+      if (targetPath) {
+        await handleUpdateMasterPromptUpload(
+          ctx,
+          ctx.message.document.file_id,
+          ctx.message.document.file_name,
+          ctx.message.message_id,
+          targetPath,
+        );
+      }
       return;
     }
     if (waitingMode.get(userId) === "updateTestVideoReferencePrompt") {
