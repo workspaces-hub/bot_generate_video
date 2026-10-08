@@ -41,6 +41,37 @@ export interface SeriesGenerationOptions {
   startEpisode?: number;
   /** Từ khoá tìm file tham chiếu — lưu vào series_meta.json để "Tiếp tục tạo kịch bản" tìm lại. */
   searchTerm?: string;
+  /**
+   * "Remake phim" (src/film/pipeline.ts): nội dung tập gốc dựng sẵn từ Story
+   * Memory, cùng thứ tự/độ dài với referenceFileNames — thay cho đọc file
+   * trong chatAIResultsDir.
+   */
+  sourceEpisodes?: string[];
+  /**
+   * "Remake phim": mạch truyện toàn phim. overview → Bible/Arc/QA;
+   * episode(tap) → DNA + tạo tập (setup cần gieo, payoff cần trả, twist,
+   * ai biết gì) kèm luật rules.
+   */
+  globalContext?: {
+    overview: string;
+    episode: (tap: number) => string;
+    rules: string;
+  };
+  /** "Remake phim": tên phim (storage/films/<filmId>) — lưu vào series_meta.json. */
+  filmId?: string;
+  /**
+   * "Remake phim": số tập của từng tham chiếu = SỐ TẬP GỐC (tập gốc 2 → tập
+   * remake 2, dna_tap2...), có thể không liền nhau (2, 3, 6). Mặc định
+   * startEpisode, startEpisode+1...
+   */
+  episodeNumbers?: number[];
+  /**
+   * Tập remake ngay trước đợt này (nối end state/ledger) — 0 = series mới
+   * (đợt đầu: tạo Bible). Mặc định startEpisode - 1.
+   */
+  previousEpisode?: number;
+  /** "Remake phim": bỏ bước QA cuối đợt — viết xong tập là trả JSON ngay. */
+  skipQa?: boolean;
   onStatus?: (text: string) => Promise<void>;
 }
 
@@ -58,9 +89,13 @@ export interface SeriesMeta {
   searchTerm?: string;
   /** Số tập → tên file tham chiếu đã dùng. */
   references: Record<string, string>;
+  /** Series tạo từ "Remake phim" — tạo tiếp qua nút đó, không qua "Tiếp tục tạo kịch bản". */
+  filmId?: string;
 }
 
 const STAGE_ATTEMPTS = 2;
+/** Tạo tập: thêm 1 lần thử vì có kiểm tra ref tới asset (repairAssetRefs). */
+const EPISODE_ATTEMPTS = 3;
 
 export function seriesDirFor(remakeBaseName: string): string {
   return path.join(config.seriesDir, remakeBaseName);
@@ -239,12 +274,12 @@ function arcEpisodes(arc: unknown): unknown[] {
   return [];
 }
 
-/** Season Arc của 1 đợt bắt đầu ở firstEpisode — tìm theo số "episode", không có thì theo vị trí. */
-function arcEntry(arc: unknown, episode: number, firstEpisode: number): unknown {
+/** Season Arc của 1 đợt — tìm theo số "episode", không có thì theo vị trí (index) trong đợt. */
+function arcEntry(arc: unknown, episode: number, index: number): unknown {
   const list = arcEpisodes(arc);
   return (
     list.find((e) => isRecord(e) && Number(e.episode) === episode) ??
-    list[episode - firstEpisode] ??
+    list[index] ??
     null
   );
 }
@@ -314,9 +349,82 @@ async function loadBibleExtensions(seriesDir: string, upToEpisode: number): Prom
   return exts.sort((a, b) => a.tap - b.tap).map((e) => e.value);
 }
 
-function scopeHeader(start: number, end: number): string {
-  const count = end - start + 1;
-  return `## PHẠM VI ĐỢT NÀY\nTạo tập ${start}–${end} (${count} tập). Đánh số "episode" đúng theo phạm vi này (${start}, ${start + 1}, ...). Tổng số tập của cả series chưa xác định — series có thể được tạo tiếp: tập ${end} trả thưởng một phần nhưng vẫn kết bằng cliffhanger, không đóng hết bí mật/conflict dài hạn.`;
+function scopeHeader(taps: number[]): string {
+  const start = taps[0];
+  const end = taps[taps.length - 1];
+  const contiguous = end - start + 1 === taps.length;
+  const range = contiguous ? `tập ${start}–${end}` : `các tập ${taps.join(", ")}`;
+  const numbering = contiguous ? `(${start}, ${start + 1}, ...)` : `(${taps.join(", ")} — đúng số tập gốc, không đánh lại liên tục)`;
+  return `## PHẠM VI ĐỢT NÀY\nTạo ${range} (${taps.length} tập). Đánh số "episode" đúng theo phạm vi này ${numbering}. Tổng số tập của cả series chưa xác định — series có thể được tạo tiếp: tập ${end} trả thưởng một phần nhưng vẫn kết bằng cliffhanger, không đóng hết bí mật/conflict dài hạn.`;
+}
+
+/**
+ * VIDEO.ref phải trỏ tới asset khai báo trong CHÍNH file tập (xác nhận qua lỗi
+ * thật, aladinhusband_remake_1 tập 1: S0044–S0046 ref LOC_EXT_CITY /
+ * LOC_EXT_BUILDING nhưng file không khai báo). Ref tới asset đã có ở tập trước
+ * (sổ asset) → tự chép asset đó vào file; còn lại → trả về để bắt tạo lại.
+ */
+function repairAssetRefs(
+  value: unknown,
+  assetLedger: Map<string, unknown>,
+): { value: unknown; autoAdded: string[]; missing: { id: string; videos: string[] }[] } {
+  if (!Array.isArray(value)) return { value, autoAdded: [], missing: [] };
+  const declared = new Set(
+    value.filter((e) => isRecord(e) && e.type !== "VIDEO").map((e) => String((e as Record<string, unknown>).id)),
+  );
+  const usedBy = new Map<string, string[]>();
+  for (const v of videoEntries(value)) {
+    for (const r of Array.isArray(v.ref) ? v.ref : []) {
+      if (!isRecord(r) || typeof r.id !== "string" || declared.has(r.id)) continue;
+      usedBy.set(r.id, [...(usedBy.get(r.id) ?? []), String(v.id)]);
+    }
+  }
+  const autoAdded: string[] = [];
+  const missing: { id: string; videos: string[] }[] = [];
+  const toInsert: unknown[] = [];
+  for (const [id, videos] of usedBy) {
+    const known = assetLedger.get(id);
+    if (known) {
+      toInsert.push(known);
+      autoAdded.push(id);
+    } else {
+      missing.push({ id, videos });
+    }
+  }
+  if (toInsert.length === 0) return { value, autoAdded, missing };
+  // Chèn asset trước VIDEO đầu tiên (asset trước, VIDEO sau — đúng schema).
+  const firstVideo = value.findIndex((e) => isRecord(e) && e.type === "VIDEO");
+  const at = firstVideo < 0 ? value.length : firstVideo;
+  return { value: [...value.slice(0, at), ...toInsert, ...value.slice(at)], autoAdded, missing };
+}
+
+/**
+ * Asset chuẩn từ Bible: core_locations → LOCATION, core_props (PROP_/OBJ_) →
+ * type CHARACTER (quy ước loader của master prompt). Chỉ lấy mục có
+ * asset_prompt tiếng Anh (mô tả tiếng Việt không dùng được làm prompt gen ảnh).
+ */
+function bibleSceneAssets(bible: unknown): unknown[] {
+  if (!isRecord(bible)) return [];
+  const vietnamese = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
+  const out: unknown[] = [];
+  const take = (list: unknown, type: "LOCATION" | "CHARACTER", pattern: RegExp) => {
+    for (const item of Array.isArray(list) ? list : []) {
+      if (!isRecord(item) || typeof item.id !== "string" || !pattern.test(item.id)) continue;
+      const prompt = typeof item.asset_prompt === "string" ? item.asset_prompt.trim() : "";
+      if (!prompt || vietnamese.test(prompt)) continue;
+      out.push({ id: item.id, type, ref: [], prompt, duration: 0 });
+    }
+  };
+  take(bible.core_locations, "LOCATION", /^LOC_/);
+  take(bible.core_props, "CHARACTER", /^(PROP|OBJ)_/);
+  return out;
+}
+
+function missingRefFeedback(missing: { id: string; videos: string[] }[]): string {
+  return `\n\n## LỖI CỦA LẦN TẠO TRƯỚC — BẮT BUỘC SỬA
+JSON lần trước có VIDEO.ref trỏ tới asset KHÔNG được khai báo trong file (dangling ref):
+${missing.map((m) => `- ${m.id} (dùng ở ${m.videos.join(", ")})`).join("\n")}
+Tạo lại TOÀN BỘ tập: mọi id xuất hiện trong VIDEO.ref PHẢI có asset tương ứng khai báo trong chính file (id, type CHARACTER|LOCATION khớp ref.type, "ref": [], prompt tiếng Anh tự chứa, "duration": 0). Đạo cụ/vật thể/bối cảnh có vai trò trong cảnh (vd bảng tên, toà nhà, toàn cảnh thành phố) phải là asset riêng + có trong ref, không chỉ mô tả bằng chữ.`;
 }
 
 const SERIES_EPISODE_RULES = `## QUY TẮC SERIES (áp dụng cho tập này, ưu tiên CAO HƠN các mục mâu thuẫn bên trên)
@@ -330,6 +438,9 @@ TẬP NÀY BẮT BUỘC CÓ 3 PHẦN:
 3. CARRY-OUT: kết tập bằng cliffhanger theo Season Arc ("carry_out_cliffhanger"), dẫn thẳng vào tập sau.
 
 - Dùng ĐÚNG id + mô tả nhận dạng trong Series Bible / sổ asset; KHÔNG dùng lại danh tính, tên, thế giới của tập gốc.
+- NGÔN NGỮ ĐẦU RA: Series Bible/Season Arc/DNA/Ledger bên dưới có thể bằng tiếng Việt — đó chỉ là dữ liệu. Mọi asset.prompt và VIDEO.prompt trong JSON xuất ra PHẢI hoàn toàn bằng tiếng Anh (dịch, không chép nguyên văn), tên riêng không dấu (xem OUTPUT LANGUAGE LOCK của master prompt).
+- ĐẠO CỤ/VẬT THỂ/BỐI CẢNH THỐNG NHẤT TOÀN PHIM: bối cảnh, đạo cụ, vật thể đã có trong Series Bible (core_locations/core_props) hoặc ASSET LEDGER TOÀN PHIM thì dùng ĐÚNG id đó và mô tả đó mỗi khi chúng xuất hiện — không tạo id mới cho cùng một vật, không đổi mô tả. Vật mới chưa có thì tạo asset PROP_/OBJ_/LOC_ mới (prompt tiếng Anh).
+- ASSET TỰ CHỨA: mọi id trong VIDEO.ref PHẢI có asset khai báo trong chính file JSON của tập (kể cả bối cảnh ngoại cảnh/toàn cảnh, toà nhà, đạo cụ nhỏ như bảng tên). Đạo cụ/vật thể/bối cảnh có id riêng trong tập gốc và có mặt trong beat tương ứng → tạo asset riêng + đưa vào ref, không chỉ tả bằng chữ trong prompt. Bot kiểm tra bằng code và bắt tạo lại nếu có ref trỏ tới asset không tồn tại.
 - Không để nhân vật biết điều ledger ghi là họ chưa biết; không reset thương tích/đạo cụ/quan hệ.
 - Khung kỹ thuật (duration từng VIDEO, số VIDEO/shot/clip, aspectRatio, frameRate, schema JSON) theo ĐÚNG quy định của master prompt bên trên — quy tắc series này KHÔNG thay đổi các quy định đó.`;
 
@@ -342,8 +453,12 @@ export async function generateSeriesWithGemini(
   opts: SeriesGenerationOptions,
 ): Promise<SeriesGenerationResult> {
   const { jobId, referenceFileNames, remakeBaseName, onStatus } = opts;
-  const start = opts.startEpisode ?? 1;
-  const end = start + referenceFileNames.length - 1;
+  const taps = opts.episodeNumbers ?? referenceFileNames.map((_, i) => (opts.startEpisode ?? 1) + i);
+  const start = taps[0];
+  const end = taps[taps.length - 1];
+  // Tập remake ngay trước đợt (nối mạch) — 0 = series mới.
+  const prev = opts.previousEpisode ?? start - 1;
+  const isFirstBatch = prev < 1;
   const seriesDir = seriesDirFor(remakeBaseName);
   const episodesDir = path.join(seriesDir, "episodes");
   await fsp.mkdir(episodesDir, { recursive: true });
@@ -353,29 +468,29 @@ export async function generateSeriesWithGemini(
   // Meta series — "Tiếp tục tạo kịch bản" đọc lại searchTerm.
   const meta: SeriesMeta = (await readSeriesMeta(remakeBaseName)) ?? { references: {} };
   if (opts.searchTerm) meta.searchTerm = opts.searchTerm;
+  if (opts.filmId) meta.filmId = opts.filmId;
   referenceFileNames.forEach((name, i) => {
-    meta.references[String(start + i)] = name;
+    meta.references[String(taps[i])] = name;
   });
   await fsp.writeFile(path.join(seriesDir, "series_meta.json"), JSON.stringify(meta, null, 2), "utf-8");
-  const scope = scopeHeader(start, end);
+  const scope = scopeHeader(taps);
 
-  if (start > 1 && !fs.existsSync(episodePath(start - 1))) {
-    throw new Error(`Series "${remakeBaseName}" chưa có tập ${start - 1} — không tạo tiếp từ tập ${start} được.`);
+  if (!isFirstBatch && !fs.existsSync(episodePath(prev))) {
+    throw new Error(`Series "${remakeBaseName}" chưa có tập ${prev} — không tạo tiếp từ tập ${start} được.`);
   }
 
   const references: { tap: number; name: string; content: string; value: unknown }[] = [];
   for (const [i, name] of referenceFileNames.entries()) {
-    const content = await fsp.readFile(
-      path.join(config.chatAIResultsDir, path.basename(name)),
-      "utf-8",
-    );
+    const content =
+      opts.sourceEpisodes?.[i] ??
+      (await fsp.readFile(path.join(config.chatAIResultsDir, path.basename(name)), "utf-8"));
     let value: unknown = null;
     try {
       value = JSON.parse(content);
     } catch {
       // vẫn gửi nguyên văn cho Gemini
     }
-    references.push({ tap: start + i, name, content, value });
+    references.push({ tap: taps[i], name, content, value });
   }
 
   // 1. Dramatic DNA từng tập gốc của đợt.
@@ -387,7 +502,7 @@ export async function generateSeriesWithGemini(
         name: `dna_tap${ref.tap}`,
         label: `[1/5] Trích Dramatic DNA tập gốc ${ref.tap}/${end} (${ref.name})`,
         promptPath: config.promptSeriesDna,
-        input: jsonSection(`TẬP GỐC ${ref.tap}: ${ref.name}`, ref.content),
+        input: `${jsonSection(`TẬP GỐC ${ref.tap}: ${ref.name}`, ref.content)}${opts.globalContext?.episode(ref.tap) ?? ""}`,
         outPath: path.join(seriesDir, `dna_tap${ref.tap}.json`),
         protectedNames,
         validate: (v) => (isRecord(v) ? null : "DNA không phải JSON object."),
@@ -407,29 +522,31 @@ export async function generateSeriesWithGemini(
     })
     .join("");
 
+  const globalOverview = opts.globalContext?.overview ?? "";
+
   // End state trước đợt (chỉ khi tạo tiếp).
   let previousLedger: unknown = null;
   let previousEpisodeValue: unknown = null;
-  if (start > 1) {
-    previousLedger = await readJsonIfExists(path.join(seriesDir, `ledger_tap${start - 1}.json`));
-    previousEpisodeValue = await readJsonIfExists(episodePath(start - 1));
+  if (!isFirstBatch) {
+    previousLedger = await readJsonIfExists(path.join(seriesDir, `ledger_tap${prev}.json`));
+    previousEpisodeValue = await readJsonIfExists(episodePath(prev));
   }
   const previousEndState = previousLedger
-    ? jsonSection(`CONTINUITY LEDGER SAU TẬP ${start - 1} (end state trước đợt này)`, previousLedger)
+    ? jsonSection(`CONTINUITY LEDGER SAU TẬP ${prev} (end state trước đợt này)`, previousLedger)
     : previousEpisodeValue
-      ? jsonSection(`VIDEO CUỐI TẬP ${start - 1} (end state trước đợt này)`, videoEntries(previousEpisodeValue).at(-1) ?? null)
+      ? jsonSection(`VIDEO CUỐI TẬP ${prev} (end state trước đợt này)`, videoEntries(previousEpisodeValue).at(-1) ?? null)
       : "";
 
   // 2. Series Bible — đợt đầu tạo mới; đợt sau dùng lại + mở rộng (chỉ thêm).
   const biblePath = path.join(seriesDir, "series_bible.json");
   let bible: unknown;
-  if (start === 1) {
+  if (isFirstBatch) {
     const base = await runJsonStage({
       jobId,
       name: "bible",
       label: `[2/5] Tạo Series Bible`,
       promptPath: config.promptSeriesBible,
-      input: `${scope}${dnaInput}${sourceAssets}`,
+      input: `${scope}${dnaInput}${sourceAssets}${globalOverview}`,
       outPath: biblePath,
       protectedNames,
       validate: (v) =>
@@ -444,13 +561,13 @@ export async function generateSeriesWithGemini(
     if (!isRecord(base)) {
       throw new Error(`Series "${remakeBaseName}" không có series_bible.json — không tạo tiếp được.`);
     }
-    const lockedBible = mergeBible(base, await loadBibleExtensions(seriesDir, start - 1));
+    const lockedBible = mergeBible(base, await loadBibleExtensions(seriesDir, prev));
     await runJsonStage({
       jobId,
       name: `bible_ext_tap${start}`,
       label: `[2/5] Mở rộng Series Bible cho tập ${start}–${end}`,
       promptPath: config.promptSeriesBibleExtend,
-      input: `${scope}${jsonSection("SERIES BIBLE ĐÃ KHÓA", lockedBible)}${previousEndState}${dnaInput}${sourceAssets}`,
+      input: `${scope}${jsonSection("SERIES BIBLE ĐÃ KHÓA", lockedBible)}${previousEndState}${dnaInput}${sourceAssets}${globalOverview}`,
       outPath: path.join(seriesDir, `bible_ext_tap${start}.json`),
       protectedNames,
       validate: (v) => (isRecord(v) ? null : "Bible mở rộng không phải JSON object."),
@@ -461,7 +578,7 @@ export async function generateSeriesWithGemini(
 
   // 3. Season Arc của đợt.
   const previousArcSummary: unknown[] = [];
-  if (start > 1) {
+  if (!isFirstBatch) {
     for (const batch of await loadArcBatches(seriesDir)) {
       if (batch.start >= start) continue;
       for (const [i, e] of arcEpisodes(batch.arc).entries()) {
@@ -478,10 +595,10 @@ export async function generateSeriesWithGemini(
       }
     }
   }
-  const batchCount = end - start + 1;
+  const batchCount = taps.length;
   const arc = await runJsonStage({
     jobId,
-    name: start === 1 ? "arc" : `arc_tap${start}`,
+    name: isFirstBatch ? "arc" : `arc_tap${start}`,
     label: `[3/5] Tạo Season Arc tập ${start}–${end}`,
     promptPath: config.promptSeriesArc,
     input: [
@@ -490,12 +607,13 @@ export async function generateSeriesWithGemini(
       previousArcSummary.length > 0 ? jsonSection("SEASON ARC CÁC TẬP ĐÃ CÓ (tóm tắt)", previousArcSummary) : "",
       previousEndState,
       dnaInput,
+      globalOverview,
     ].join(""),
-    outPath: path.join(seriesDir, start === 1 ? "season_arc.json" : `season_arc_tap${start}.json`),
+    outPath: path.join(seriesDir, isFirstBatch ? "season_arc.json" : `season_arc_tap${start}.json`),
     protectedNames,
     validate: (v) => {
       const count = arcEpisodes(v).length;
-      return count === batchCount ? null : `Season Arc có ${count} tập, cần đúng ${batchCount} (tập ${start}–${end}).`;
+      return count === batchCount ? null : `Season Arc có ${count} tập, cần đúng ${batchCount} (tập ${taps.join(", ")}).`;
     },
     onStatus,
   });
@@ -504,16 +622,33 @@ export async function generateSeriesWithGemini(
   const masterPrompt = await fsp.readFile(config.promptGenerateScriptEpisode, "utf-8");
   const durationRange = parseDurationRange(masterPrompt);
   const assetLedger = new Map<string, unknown>();
+  // id lấy từ Bible (bản nháp) — tập đã viết khai báo asset cùng id thì bản
+  // của tập thắng (mô tả đầy đủ hơn, đã dùng để gen ảnh).
+  const bibleSeeded = new Set<string>();
   const addAssets = (episodeValue: unknown) => {
     for (const entry of Array.isArray(episodeValue) ? episodeValue : []) {
-      if (isRecord(entry) && entry.type !== "VIDEO" && typeof entry.id === "string" && !assetLedger.has(entry.id)) {
+      if (!isRecord(entry) || entry.type === "VIDEO" || typeof entry.id !== "string") continue;
+      if (!assetLedger.has(entry.id) || bibleSeeded.has(entry.id)) {
         assetLedger.set(entry.id, entry);
+        bibleSeeded.delete(entry.id);
       }
     }
   };
   // Tạo tiếp: sổ asset dựng lại từ mọi tập đã có trước đợt.
   for (let tap = 1; tap < start; tap++) {
     addAssets(await readJsonIfExists(episodePath(tap)));
+  }
+  // Bối cảnh/đạo cụ/vật thể chuẩn của cả phim (Bible core_locations/core_props)
+  // vào sổ asset ngay từ tập 1 — mọi tập dùng chung 1 id + mô tả, và ref
+  // thiếu khai báo được tự bổ sung (xem repairAssetRefs).
+  for (const asset of bibleSceneAssets(bible)) {
+    const id = String((asset as Record<string, unknown>).id);
+    if (assetLedger.has(id)) continue;
+    assetLedger.set(id, asset);
+    bibleSeeded.add(id);
+  }
+  if (bibleSeeded.size > 0) {
+    console.log(`[series] (${jobId}) sổ asset: thêm ${bibleSeeded.size} bối cảnh/đạo cụ/vật thể từ Bible: ${[...bibleSeeded].join(", ")}`);
   }
 
   const ledgers: unknown[] = [];
@@ -524,36 +659,42 @@ export async function generateSeriesWithGemini(
 
   for (const [index, ref] of references.entries()) {
     const tap = ref.tap;
+    // Tập remake liền trước (số tập gốc có thể không liền nhau: 3 → 6).
+    const prevTap = index === 0 ? prev : taps[index - 1];
     const targetName = `${remakeBaseName}_tap${tap}_full.json`;
     const checkpointPath = episodePath(tap);
     const resultPath = path.join(config.chatAIResultsDir, targetName);
 
     if (!fs.existsSync(checkpointPath)) {
-      const nextArc = arcEntry(arc, tap + 1, start);
+      const nextTap = taps[index + 1];
+      const nextArc = nextTap !== undefined ? arcEntry(arc, nextTap, index + 1) : null;
       const sections = [
         masterPrompt,
         `\n\n## VỊ TRÍ TRONG BỘ PHIM\nĐây là TẬP ${tap} của bộ phim mới.`,
         `\n\n${SERIES_EPISODE_RULES}`,
         jsonSection("TARGET SERIES BIBLE (đã khóa)", bible),
-        jsonSection(`SEASON ARC — TẬP ${tap}`, arcEntry(arc, tap, start)),
+        jsonSection(`SEASON ARC — TẬP ${tap}`, arcEntry(arc, tap, index)),
       ];
       if (isRecord(nextArc)) {
         sections.push(
-          jsonSection(`SEASON ARC — TẬP ${tap + 1} (chỉ để carry-out dẫn đúng vào tập sau)`, {
-            episode: tap + 1,
+          jsonSection(`SEASON ARC — TẬP ${nextTap} (chỉ để carry-out dẫn đúng vào tập sau)`, {
+            episode: nextTap,
             role_in_season: nextArc.role_in_season,
             carry_in: nextArc.carry_in,
           }),
         );
       }
       if (previousLedger) {
-        sections.push(jsonSection(`END STATE TẬP ${tap - 1} (CONTINUITY LEDGER — ưu tiên cao nhất)`, previousLedger));
+        sections.push(jsonSection(`END STATE TẬP ${prevTap} (CONTINUITY LEDGER — ưu tiên cao nhất)`, previousLedger));
       } else if (previousEpisodeValue) {
         // Ledger tập trước lỗi — dùng tạm VIDEO cuối tập trước làm end state.
         const last = videoEntries(previousEpisodeValue).at(-1);
-        sections.push(jsonSection(`END STATE TẬP ${tap - 1} (VIDEO cuối tập trước)`, last ?? null));
+        sections.push(jsonSection(`END STATE TẬP ${prevTap} (VIDEO cuối tập trước)`, last ?? null));
       }
       sections.push(jsonSection(`DRAMATIC DNA CỦA TẬP GỐC ${tap}`, dnas[index]));
+      if (opts.globalContext) {
+        sections.push(opts.globalContext.rules, opts.globalContext.episode(tap));
+      }
       sections.push(jsonSection(`TẬP GỐC (nguồn beat/DNA chi tiết): ${ref.name}`, ref.content));
       if (assetLedger.size > 0) {
         sections.push(
@@ -566,9 +707,12 @@ export async function generateSeriesWithGemini(
 
       await fsp.mkdir(config.uploadsDir, { recursive: true });
       const attachmentPath = path.join(config.uploadsDir, `${randomUUID()}-series-tap${tap}.txt`);
-      await fsp.writeFile(attachmentPath, sections.join(""), "utf-8");
+      const baseInput = sections.join("");
+      await fsp.writeFile(attachmentPath, baseInput, "utf-8");
+      // Bản cuối có JSON hợp lệ nhưng còn dangling ref — hết lượt thì vẫn dùng (ghi vào QA).
+      let fallbackContent: string | null = null;
       try {
-        for (let attempt = 1; attempt <= STAGE_ATTEMPTS && !fs.existsSync(checkpointPath); attempt++) {
+        for (let attempt = 1; attempt <= EPISODE_ATTEMPTS && !fs.existsSync(checkpointPath); attempt++) {
           await onStatus?.(
             `⏳ [4/5] Đang tạo tập ${tap} (đợt ${start}–${end}, tham chiếu ${ref.name})${attempt > 1 ? ` — thử lại lần ${attempt}` : ""}...`,
           );
@@ -583,11 +727,23 @@ export async function generateSeriesWithGemini(
             const produced = downloadedFiles.find((f) => f.toLowerCase().endsWith(".json"));
             if (!produced) throw new Error("Gemini không trả về file JSON nào.");
             const content = await fsp.readFile(produced, "utf-8");
-            JSON.parse(content);
-            await fsp.writeFile(checkpointPath, content, "utf-8");
+            const repaired = repairAssetRefs(JSON.parse(content), assetLedger);
+            const repairedContent = JSON.stringify(repaired.value, null, 2);
+            if (repaired.autoAdded.length > 0) {
+              console.log(`[series] (${jobId}) tập ${tap}: tự bổ sung asset từ các tập trước: ${repaired.autoAdded.join(", ")}`);
+            }
+            if (repaired.missing.length === 0) {
+              await fsp.writeFile(checkpointPath, repairedContent, "utf-8");
+            } else {
+              fallbackContent = repairedContent;
+              const detail = repaired.missing.map((m) => `${m.id} (${m.videos.join(", ")})`).join("; ");
+              console.warn(`[series] (${jobId}) tập ${tap}: ref tới asset không tồn tại (lần ${attempt}/${EPISODE_ATTEMPTS}): ${detail}`);
+              // Lần thử sau: báo Gemini đúng id/VIDEO bị thiếu.
+              await fsp.writeFile(attachmentPath, `${baseInput}${missingRefFeedback(repaired.missing)}`, "utf-8");
+            }
           } catch (err) {
             console.error(
-              `[series] (${jobId}) tập ${tap} lỗi (lần ${attempt}/${STAGE_ATTEMPTS}):`,
+              `[series] (${jobId}) tập ${tap} lỗi (lần ${attempt}/${EPISODE_ATTEMPTS}):`,
               err instanceof Error ? err.message : err,
             );
           } finally {
@@ -599,6 +755,10 @@ export async function generateSeriesWithGemini(
       } finally {
         await fsp.unlink(attachmentPath).catch(() => {});
       }
+      if (!fs.existsSync(checkpointPath) && fallbackContent) {
+        console.warn(`[series] (${jobId}) tập ${tap}: hết ${EPISODE_ATTEMPTS} lần thử vẫn còn ref tới asset không tồn tại — dùng bản cuối, ghi vào QA.`);
+        await fsp.writeFile(checkpointPath, fallbackContent, "utf-8");
+      }
       if (!fs.existsSync(checkpointPath)) {
         failedEpisode = tap;
         break;
@@ -609,7 +769,16 @@ export async function generateSeriesWithGemini(
 
     // Bản trả về cho processChatAIQueue (nó sẽ đổi tên/chuyển sang downloads);
     // bản trong seriesDir giữ lại làm checkpoint.
-    const content = await fsp.readFile(checkpointPath, "utf-8");
+    // Tập dùng lại từ checkpoint cũng được bổ sung asset từ sổ asset nếu thiếu.
+    const checked = repairAssetRefs(JSON.parse(await fsp.readFile(checkpointPath, "utf-8")), assetLedger);
+    const content = JSON.stringify(checked.value, null, 2);
+    if (checked.autoAdded.length > 0) await fsp.writeFile(checkpointPath, content, "utf-8");
+    if (checked.missing.length > 0) {
+      technicalIssues.push({
+        episode: tap,
+        issues: checked.missing.map((m) => `VIDEO.ref trỏ tới asset không khai báo: ${m.id} (${m.videos.join(", ")}).`),
+      });
+    }
     await fsp.writeFile(resultPath, content, "utf-8");
     episodeFiles.push(resultPath);
     const episodeValue: unknown = JSON.parse(content);
@@ -636,8 +805,8 @@ export async function generateSeriesWithGemini(
         promptPath: config.promptSeriesLedger,
         input: [
           jsonSection("SERIES BIBLE", bible),
-          previousLedger ? jsonSection(`CONTINUITY LEDGER SAU TẬP ${tap - 1}`, previousLedger) : "",
-          jsonSection(`SEASON ARC — TẬP ${tap}`, arcEntry(arc, tap, start)),
+          previousLedger ? jsonSection(`CONTINUITY LEDGER SAU TẬP ${prevTap}`, previousLedger) : "",
+          jsonSection(`SEASON ARC — TẬP ${tap}`, arcEntry(arc, tap, index)),
           jsonSection(`JSON TẬP VỪA VIẾT (TẬP ${tap}): ${targetName}`, content),
         ].join(""),
         outPath: path.join(seriesDir, `ledger_tap${tap}.json`),
@@ -660,12 +829,12 @@ export async function generateSeriesWithGemini(
   // 5. QA của đợt (chỉ khi đủ mọi tập của đợt). Tạo tiếp: kiểm thêm chỗ nối
   // tập start-1 → start.
   let qaReportPath: string | null = null;
-  if (failedEpisode === undefined && episodeValues.length > 0) {
+  if (!opts.skipQa && failedEpisode === undefined && episodeValues.length > 0) {
     try {
       const qa = await runJsonStage({
         jobId,
-        name: start === 1 ? "qa" : `qa_tap${start}`,
-        label: `[5/5] QA series (tập ${start}–${end})`,
+        name: isFirstBatch ? "qa" : `qa_tap${start}`,
+        label: `[5/5] QA series (tập ${taps.join(", ")})`,
         promptPath: config.promptSeriesQa,
         input: [
           scope,
@@ -673,11 +842,12 @@ export async function generateSeriesWithGemini(
           jsonSection(`SEASON ARC TẬP ${start}–${end}`, arc),
           previousEndState,
           dnaInput,
-          ...ledgers.map((l, i) => jsonSection(`CONTINUITY LEDGER SAU TẬP ${start + i}`, l)),
-          ...episodeValues.map((v, i) => jsonSection(`TÓM TẮT TẬP MỚI ${start + i}`, summarizeEpisode(v))),
+          globalOverview,
+          ...ledgers.map((l, i) => jsonSection(`CONTINUITY LEDGER SAU TẬP ${taps[i]}`, l)),
+          ...episodeValues.map((v, i) => jsonSection(`TÓM TẮT TẬP MỚI ${taps[i]}`, summarizeEpisode(v))),
           jsonSection("KIỂM TRA KỸ THUẬT BẰNG CODE (aspectRatio 9:16, frameRate theo tập gốc, duration)", technicalIssues),
         ].join(""),
-        outPath: path.join(seriesDir, start === 1 ? "qa_report.json" : `qa_report_tap${start}.json`),
+        outPath: path.join(seriesDir, isFirstBatch ? "qa_report.json" : `qa_report_tap${start}.json`),
         protectedNames,
         validate: (v) => (isRecord(v) ? null : "QA không phải JSON object."),
         onStatus,

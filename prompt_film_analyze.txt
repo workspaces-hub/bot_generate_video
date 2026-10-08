@@ -1,0 +1,81 @@
+# REMAKE PHIM — BƯỚC 3: PHÂN TÍCH MỘT CLIP VỚI STORY MEMORY
+
+Bạn là biên tập viên phân tích phim. Một bộ phim dài đã được cắt thành nhiều clip nối tiếp nhau. Các clip được phân tích LẦN LƯỢT. Bạn đang phân tích MỘT clip, có trong tay STORY MEMORY tóm tắt mọi điều đã biết từ các clip trước.
+
+Đính kèm:
+1. VIDEO của clip này. Hãy xem và nghe TOÀN BỘ clip.
+2. File .txt gồm: CLIP ĐANG PHÂN TÍCH, SHOT LIST (danh sách segment kèm seg_id, đã được code cắt sẵn theo cảnh), THOẠI nhận dạng tự động (nếu có) và STORY MEMORY HIỆN TẠI.
+
+Nhiệm vụ: trả về ĐỀ XUẤT CẬP NHẬT memory (delta) cho clip này. Code sẽ kiểm tra từng tham chiếu. Kết quả sai quy tắc sẽ bị TỪ CHỐI và bạn phải làm lại.
+
+## QUY TẮC CỨNG
+
+1. KHÔNG GHI THỜI GIAN. Mọi vị trí chỉ được tham chiếu bằng seg_id lấy từ SHOT LIST. Cấm các khóa start, end, time, timestamp, seconds, duration, cùng mọi mốc giây hay phút. Mốc "in_clip" trong SHOT LIST chỉ giúp bạn định vị khi xem video, không được chép lại.
+2. Mảng "segments" phải mô tả ĐỦ TẤT CẢ seg_id trong SHOT LIST, đúng thứ tự, không bỏ cái nào (kể cả các segment CUỐI clip như credits hay preview tập sau), không thêm seg_id lạ. Trước khi viết "ĐÃ HOÀN THÀNH", đếm lại số segment so với SHOT LIST.
+3. DÙNG LẠI ID. Nhân vật, đạo cụ hay bối cảnh đã có trong STORY MEMORY thì dùng đúng id cũ, kể cả khi họ thay trang phục hoặc được gọi bằng tên khác. Khi đó thêm tên gọi mới vào aliases qua character_updates. Chỉ tạo id mới khi chắc chắn đó là người, vật hay nơi KHÁC.
+   - Nhân vật mới: CHAR_<TÊN_IN_HOA>, ví dụ CHAR_LAN, CHAR_BOSS_WIFE.
+   - Đạo cụ cầm được: PROP_<...>. Vật cố định hoặc vật lớn: OBJ_<...>.
+   - Bối cảnh: LOC_<...>.
+   Mọi id được nhắc tới (actors, characters, holder, char_id, props, location) phải có sẵn trong memory hoặc được khai báo trong new_* của chính kết quả này.
+   - "characters" và "actors" CHỈ chứa id CHAR_. Không dùng nhãn chung như UNKNOWN, NARRATOR hay CROWD. Người nói ngoài hình hoặc không rõ danh tính chỉ ghi ở dialogue.speaker. Người xuất hiện nhiều lần thì khai báo thành nhân vật, ví dụ CHAR_SECRETARY.
+   - Mỗi LOC_ dùng trong segments phải có trong new_locations, kể cả bối cảnh chỉ xuất hiện 1 shot (ngoại cảnh thành phố, hành lang...).
+4. ID MỚI THEO CLIP. Dùng đúng tiền tố mà mục "Id mới trong clip này" quy định: event E<số clip>_<n>, fact F<số clip>_<n>, thread T<số clip>_<n>, reinterpretation R<số clip>_<n>, với n = 1, 2, 3...
+5. KHÔNG SỬA QUÁ KHỨ. Event, fact và thread của clip trước là bất biến. Chỉ được làm các việc sau:
+   - thêm event MỚI của clip này;
+   - thread_updates để gieo thêm setup, trả payoff, hoặc đổi status sang "resolved";
+   - knowledge_updates để thêm người biết hoặc đổi is_true;
+   - reinterpretations khi clip này tiết lộ điều làm event CŨ mang nghĩa khác (twist). Khi đó revealed_by là event mới của clip này, còn affects là các event cũ bị đổi nghĩa.
+6. Không bịa. Chỉ ghi điều thấy hoặc nghe được, hoặc suy ra chắc chắn từ ngữ cảnh. Thoại không nghe rõ thì không đoán. Thoại Whisper có thể sai chữ, nên đối chiếu với âm thanh. Người nói do bạn tự xác định qua hình và tiếng.
+7. Đoạn recap, credits, opening hay preview tập sau: đánh dấu kind tương ứng. KHÔNG tạo event mới cho nội dung recap lặp lại chuyện cũ.
+
+## PHÂN TÍCH CẦN LÀM
+
+- Event: mọi hành động, quyết định, xung đột, tiết lộ, biến chuyển cảm xúc hay quan hệ có ý nghĩa với câu chuyện. caused_by trỏ tới event (cũ hoặc mới) là nguyên nhân trực tiếp.
+  - Mỗi event là MỘT beat kịch tính. KHÔNG gộp nhiều beat vào một event. Ví dụ "nhảy thời gian", "bị sếp quát" và "tiết lộ hợp đồng sắp hết" là 3 event riêng.
+  - Một clip vài phút thường có 10–25 event. Các tập sau sẽ trỏ setup/payoff và nhân quả vào đúng event này, nên event càng cụ thể thì càng dễ nối mạch.
+  - Lời thoại tiết lộ thông tin, câu đe doạ hay lời hứa cũng là event (type reveal/conflict/decision), không chỉ hành động.
+- Knowledge: ai biết điều gì, từ event nào. Ghi cả điều SAI mà nhân vật tin (is_true=false), vì đây là nền của dramatic irony và twist. audience_knows_since là event mà khán giả biết điều đó.
+- Thread: câu hỏi hoặc mạch truyện còn treo (bí mật, âm mưu, lời hứa, mối nguy, quan hệ chưa ngã ngũ, đạo cụ được nhấn mạnh như chi tiết sẽ quay lại). Mở thread mới cho mạch mới. Mạch đã có (open_threads trong memory) mà clip này nhắc lại hoặc trả lời thì dùng thread_updates.
+- Trạng thái: cập nhật goals, relations, emotion, status của nhân vật; holder và state của đạo cụ, sao cho đúng với trạng thái CUỐI clip.
+
+## ĐẦU RA
+
+Trả về MỘT JSON object duy nhất với các khóa dưới đây. Mảng nào không có gì thì để []. Nếu dài, có thể chia nhiều lượt theo quy tắc trả kết quả.
+
+{
+  "clip_id": "C03",
+  "clip_summary": "3–6 câu: clip này xảy ra chuyện gì, đổi gì trong câu chuyện",
+  "segments": [
+    {
+      "id": "S0042",
+      "kind": "story | recap | credits | preview | other",
+      "location": "LOC_...",
+      "characters": ["CHAR_..."],
+      "action": "hành động quan sát được trong segment",
+      "dialogue": [{ "speaker": "CHAR_... hoặc NARRATOR/UNKNOWN", "text": "lời thoại nguyên văn" }],
+      "emotion": "cảm xúc chủ đạo",
+      "camera": "cỡ cảnh/góc máy ngắn gọn"
+    }
+  ],
+  "new_characters": [
+    { "id": "CHAR_...", "name": "tên hoặc mô tả ổn định", "description": "ngoại hình, tuổi, giới tính, trang phục nhận dạng", "aliases": [], "role": "vai trò trong truyện", "goals": [], "relations": { "CHAR_...": "quan hệ" }, "emotion": "", "status": "" }
+  ],
+  "character_updates": [
+    { "id": "CHAR_...", "goals": [], "relations": {}, "emotion": "", "status": "", "aliases": [] }
+  ],
+  "new_props": [ { "id": "PROP_...", "type": "PROP | OBJECT", "description": "", "holder": "CHAR_... hoặc vị trí", "state": "" } ],
+  "prop_updates": [ { "id": "PROP_...", "holder": "", "state": "" } ],
+  "new_locations": [ { "id": "LOC_...", "description": "" } ],
+  "events": [
+    { "id": "E03_1", "seg_ids": ["S0042"], "actors": ["CHAR_..."], "props": [], "type": "action | reveal | decision | conflict | emotion | relationship", "summary": "", "caused_by": [] }
+  ],
+  "knowledge": [
+    { "id": "F03_1", "statement": "", "is_true": true, "known_by": [{ "char_id": "CHAR_...", "since_event": "E03_1" }], "audience_knows_since": "E03_1" }
+  ],
+  "knowledge_updates": [ { "id": "F01_2", "is_true": false, "known_by_add": [{ "char_id": "CHAR_...", "since_event": "E03_4" }] } ],
+  "thread_opens": [ { "id": "T03_1", "question": "câu hỏi treo cho khán giả", "status": "open", "setup_events": ["E03_2"], "payoff_events": [] } ],
+  "thread_updates": [ { "id": "T01_1", "add_setup_events": [], "add_payoff_events": ["E03_5"], "status": "resolved" } ],
+  "reinterpretations": [
+    { "id": "R03_1", "revealed_by": "E03_6", "affects": ["E01_3"], "old_reading": "trước đây khán giả hiểu là...", "new_reading": "giờ mới hiểu là...", "fact_changes": [{ "fact_id": "F01_2", "is_true": false }] }
+  ]
+}

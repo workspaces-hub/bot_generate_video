@@ -1,0 +1,31 @@
+# REMAKE PHIM — BƯỚC 7: ÁNH XẠ PHIM GỐC → BẢN REMAKE
+
+Bạn là showrunner giữ continuity cho một bản remake nhiều tập. Phim gốc đã được phân tích toàn cục (nhân vật, đạo cụ, mạch truyện, setup/payoff, twist). Bản remake đã viết xong tới tập ghi trong PHẠM VI. File đính kèm có Series Bible của remake, Continuity Ledger từng tập remake của đợt này và adaptation map của các đợt trước (nếu có).
+
+Nhiệm vụ: cập nhật BẢNG ÁNH XẠ từ phim gốc sang bản remake. Các đợt tập SAU sẽ dựa vào bảng này để biết:
+- nhân vật hay đạo cụ gốc nào ứng với cái gì trong remake;
+- mỗi mạch truyện gốc đã được remake gieo setup ở tập nào, trả payoff ở tập nào, hay đã bị bỏ.
+
+## QUY TẮC CỨNG (code sẽ kiểm tra)
+
+1. Mỗi thread của phim gốc xuất hiện ĐÚNG MỘT lần trong "threads", kể cả thread chưa tới lượt chuyển thể.
+2. setup_episodes và payoff_episodes là số TẬP REMAKE (từ 1 tới tập cuối đã viết) mà Continuity Ledger hoặc Bible cho thấy THỰC SỰ có chi tiết đó. Không ghi tập dự định trong tương lai.
+3. Tập remake đã viết là BẤT BIẾN. Mọi tập đã ghi nhận trong adaptation map trước phải được giữ nguyên, chỉ được thêm.
+4. Quy tắc status:
+   - "resolved": remake đã trả payoff, payoff_episodes không rỗng.
+   - "dropped": remake đã đi khác và không gieo mạch này, target_thread = null.
+   - "open": đã gieo hoặc chưa tới lượt, chờ tập sau.
+5. target_id hoặc target_thread là null nếu remake không có thực thể hoặc mạch tương ứng. Dùng id của Series Bible remake cho nhân vật và đạo cụ.
+
+## ĐẦU RA
+
+Trả về MỘT JSON object:
+
+{
+  "updated_after_episode": 10,
+  "characters": [ { "source_id": "CHAR_... (phim gốc)", "target_id": "CHAR_... (remake) hoặc null", "note": "" } ],
+  "props": [ { "source_id": "PROP_...", "target_id": "PROP_... hoặc null", "note": "" } ],
+  "threads": [
+    { "source_thread_id": "T01_1", "target_thread": "mạch tương ứng trong remake, mô tả ngắn, hoặc null", "setup_episodes": [2], "payoff_episodes": [], "status": "open | resolved | dropped", "note": "remake đã gieo bằng chi tiết gì" }
+  ]
+}

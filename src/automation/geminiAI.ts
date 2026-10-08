@@ -80,6 +80,8 @@ export async function openGeminiPage(
   jobId: string,
   /** Context dùng để mở trang — mặc định tài khoản askGemini; tạo ảnh truyền getGeminiImageBrowserContext. */
   getContext: BrowserContextGetter = getGeminiBrowserContext,
+  /** Model cho riêng lần mở này — mặc định config.geminiModelLabel. */
+  modelLabel?: string,
 ): Promise<Page> {
   const context = await getContext();
   const page = await context.newPage();
@@ -107,7 +109,7 @@ export async function openGeminiPage(
         "Không tìm thấy ô nhập prompt của Gemini (selector có thể đã lỗi thời — xem debug snapshot).",
       );
     }
-    await selectModelIfConfigured(page, jobId);
+    await selectModelIfConfigured(page, jobId, modelLabel);
     return page;
   } catch (err) {
     await captureErrorSnapshot(page, `${jobId}_gemini-open`, err);
@@ -117,8 +119,8 @@ export async function openGeminiPage(
 }
 
 /** Chọn model theo config.geminiModelLabel (best-effort — lỗi chỉ log, giữ model mặc định). */
-async function selectModelIfConfigured(page: Page, jobId: string): Promise<void> {
-  const label = config.geminiModelLabel.trim();
+async function selectModelIfConfigured(page: Page, jobId: string, modelLabel?: string): Promise<void> {
+  const label = (modelLabel?.trim() || config.geminiModelLabel).trim();
   console.log("🚀 ~ selectModelIfConfigured ~ label:", label)
   if (!label) return;
   try {
@@ -1124,6 +1126,13 @@ export interface AskGeminiOptions {
   expectedFileCount?: number;
   /** Tên các file tham chiếu — chỉ để liệt kê trong tin nhắc. */
   expectedSourceNames?: string[];
+  /**
+   * File đính kèm THÊM sau attachmentPath (vd "Remake phim": video clip +
+   * file .txt ngữ cảnh story memory — quá dài để dán vào ô nhập).
+   */
+  extraAttachmentPaths?: string[];
+  /** Model riêng cho cuộc chat này (vd pipeline phim dùng model mạnh hơn) — mặc định config.geminiModelLabel. */
+  modelLabel?: string;
 }
 
 /**
@@ -1204,7 +1213,7 @@ export async function askGemini(
   options: AskGeminiOptions = {},
 ): Promise<{ downloadedFiles: string[] }> {
   console.log(`[gemini] askGemini(${jobId}): bắt đầu — mở Gemini...`);
-  const page = await openGeminiPage(jobId);
+  const page = await openGeminiPage(jobId, getGeminiBrowserContext, options.modelLabel);
   const baseName = promptFileName
     ? path.basename(promptFileName, path.extname(promptFileName))
     : jobId;
@@ -1214,6 +1223,11 @@ export async function askGemini(
     if (attachmentPath) {
       await uploadFileWithRetry(page, attachmentPath, jobId, { allowReload: true });
     }
+    const extraAttachments = options.extraAttachmentPaths ?? [];
+    for (const filePath of extraAttachments) {
+      await uploadFileWithRetry(page, filePath, jobId);
+    }
+    const allAttachments = [...(attachmentPath ? [attachmentPath] : []), ...extraAttachments];
     // await captureSnapshot(page, `${jobId}_gemini-before-send`, "gemini-before-send");
 
     const state: MergeState = { kind: "unset", items: [], obj: {} };
@@ -1255,12 +1269,12 @@ export async function askGemini(
         console.warn(
           `[gemini] askGemini(${jobId}): lượt trước không có item mới (Gemini có thể đã quên ngữ cảnh) — lượt ${turn} gửi lại prompt gốc${attachmentPath ? " + upload lại file" : ""} trong cùng cuộc chat.`,
         );
-        if (attachmentPath) await uploadFileWithRetry(page, attachmentPath, jobId);
+        for (const filePath of allAttachments) await uploadFileWithRetry(page, filePath, jobId);
         messageToSend = `${firstTurnMessage}\n\n${buildContextReminder(state, messageToSend)}`;
       }
       const response = await sendAndWaitWithRetry(page, messageToSend, jobId, {
         attachmentPaths:
-          (turn === 1 || remindContext) && attachmentPath ? [attachmentPath] : undefined,
+          (turn === 1 || remindContext) && allAttachments.length > 0 ? allAttachments : undefined,
       });
       if (turn === 1) {
         console.log(`[gemini] askGemini(${jobId}): url hội thoại: ${page.url()}`);

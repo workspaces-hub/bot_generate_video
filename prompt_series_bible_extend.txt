@@ -5,6 +5,7 @@ Bạn là showrunner micro-drama. Series đã có các tập trước; giờ t�
 Nhiệm vụ: xác định Bible cần THÊM gì để các tập mới tái tạo được DNA của tập gốc tương ứng.
 
 QUY TẮC KHÓA:
+- Mọi bối cảnh (kể cả ngoại cảnh/toàn cảnh) và đạo cụ/vật thể có vai trò hoặc xuất hiện rõ trong các tập gốc MỚI mà Bible chưa có → thêm vào core_locations/core_props (LOC_/PROP_/OBJ_, kèm source_ids và asset_prompt tiếng Anh). Vật đã có trong Bible → dùng lại id cũ, không tạo trùng.
 - KHÔNG sửa, KHÔNG định nghĩa lại bất kỳ nhân vật/bối cảnh/đạo cụ/vật thể nào đã có trong Bible (cùng id = đã khóa). Danh tính, tính cách, quan hệ, luật thế giới đã khóa giữ nguyên.
 - Ưu tiên giao dramatic role mới trong DNA cho nhân vật ĐÃ CÓ khi hợp lý; chỉ tạo nhân vật mới khi DNA thật sự cần một người khác (vd: một đối thủ mới, một nhân chứng mới).
 - Thực thể mới phải phù hợp thế giới, luật lệ và trạng thái hiện tại trong ledger.
@@ -19,8 +20,8 @@ MỘT JSON object duy nhất, CHỈ chứa phần THÊM MỚI (cùng cấu trúc
   "characters": [
     { "id": "CHAR_...", "name": "...", "source_roles": ["T11: ..."], "identity": "...", "personality": "...", "goal": "...", "flaw_fear": "...", "secret": "...", "season_arc": "..." }
   ],
-  "core_locations": [ { "id": "LOC_...", "description": "..." } ],
-  "core_props": [ { "id": "PROP_... hoặc OBJ_...", "description": "...", "dramatic_role": "..." } ],
+  "core_locations": [ { "id": "LOC_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English, self-contained location reference description" } ],
+  "core_props": [ { "id": "PROP_... hoặc OBJ_...", "source_ids": ["..."], "description": "...", "dramatic_role": "...", "asset_prompt": "English, self-contained prop/object reference description" } ],
   "relationships": [ { "a": "CHAR_...", "b": "CHAR_...", "type": "...", "starting_state": "...", "core_tension": "..." } ],
   "secrets": [ { "secret": "...", "who_knows_at_start": ["CHAR_..."], "hidden_from": ["CHAR_..."], "planned_reveal": "..." } ],
   "long_term_conflicts": [ { "conflict": "...", "sides": ["CHAR_..."], "stakes": "...", "planned_resolution": "..." } ],

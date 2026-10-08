@@ -19,6 +19,7 @@ import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
 import { askChatAI, compareOriginalWithFinalVideo, askChatAIAboutReferenceVideo } from "./automation/chatAI";
 import { askGemini, askGeminiAboutReferenceVideo } from "./automation/geminiAI";
 import { generateSeriesWithGemini } from "./automation/seriesScript";
+import { analyzeFilm, formatEpisodes, runFilmRemake, type RemakeChoice } from "./film/pipeline";
 import { probeFrameRate } from "./automation/videoConcat";
 import {
   getGeminiBrowserContext,
@@ -231,6 +232,14 @@ export interface GenerateScriptJob extends BaseJob {
   seriesStartEpisode?: number;
   /** Từ khoá tìm file tham chiếu đã dùng — lưu vào series_meta.json để "Tiếp tục tạo kịch bản" tìm lại. */
   seriesSearchTerm?: string;
+  /**
+   * "Remake phim"/"Tạo phim tiếp" (src/film/pipeline.ts): nguồn là phân
+   * tích phim gốc đã có (nút "Phân tích phim gốc") thay cho file JSON tham
+   * chiếu — chạy runFilmRemake thay cho generateScriptEpisodesWithGemini.
+   * choice: bản remake MỚI (kèm yêu cầu riêng) hay TIẾP bản cũ;
+   * remakeBaseName = tên gợi ý cho bản mới, thay bằng tên bản thật sau khi chạy.
+   */
+  film?: { filmId: string; choice: RemakeChoice };
 }
 
 /**
@@ -424,12 +433,27 @@ type PolloVideoJob = StoryboardVideoPolloJob;
  */
 type ComfyVideoJob = StoryboardVideoComfyJob;
 
+/**
+ * "Phân tích phim gốc" (FILM_ANALYZE_BUTTON_LABEL, analyzeFilm trong
+ * src/film/pipeline.ts): Stage 1–5 cho clip trong storage/films/<filmId>/source/
+ * — không viết kịch bản. Chung hàng đợi Gemini với ChatAIJob (chatAIJobs) để
+ * không chạy song song trên cùng browser; xử lý riêng ở đầu vòng
+ * processChatAIQueue (không qua bước hậu kiểm JSON).
+ */
+export interface FilmAnalyzeJob extends BaseJob {
+  type: "filmAnalyze";
+  filmId: string;
+  /** Tập user vừa gửi (liền nhau) — không có thì các tập mới trong thư mục nguồn. */
+  episodes?: number[];
+}
+
 export type GenerationJob =
   | AIImageJob
   | AIVideoJob
   | ChatAIJob
   | ScriptReferenceVideoJob
   | GenerateScriptJob
+  | FilmAnalyzeJob
   | PolloImageJob
   | PolloVideoJob
   | ComfyVideoJob;
@@ -513,7 +537,7 @@ let currentVideoJob: AIVideoJob | null = null;
 // getChatAIBrowserContext.close() ở processChatAIQueue) — gộp chung hẳn 1
 // hàng đợi/1 vòng xử lý duy nhất loại bỏ hoàn toàn khả năng 2 job dùng
 // CÙNG browser context chạy ĐỒNG THỜI.
-const chatAIJobs: (ChatAIJob | GenerateScriptJob | ScriptReferenceVideoJob)[] =
+const chatAIJobs: (ChatAIJob | GenerateScriptJob | ScriptReferenceVideoJob | FilmAnalyzeJob)[] =
   [];
 let chatAIProcessing = false;
 
@@ -1304,7 +1328,8 @@ export function enqueueJob(job: GenerationJob): void {
   if (
     job.type === "chatAI" ||
     job.type === "generateScript" ||
-    job.type === "scriptReferenceVideo"
+    job.type === "scriptReferenceVideo" ||
+    job.type === "filmAnalyze"
   ) {
     chatAIJobs.push(job);
     persistChatAIJobs();
@@ -1424,6 +1449,7 @@ export function stopAll(userId: number): StopAllResult {
     | ChatAIJob
     | ScriptReferenceVideoJob
     | GenerateScriptJob
+    | FilmAnalyzeJob
   )[] = [];
   // Job "scriptReferenceVideo" dùng CHUNG chatAIJobs với "chatAI"/
   // "generateScript" (xem docstring khai báo mảng chatAIJobs) — cùng 1 vòng
@@ -3120,6 +3146,84 @@ async function generateScriptEpisodesWithGemini(
 }
 
 /**
+ * "Phân tích phim gốc" — analyzeFilm (Stage 1–5), gửi file tóm tắt
+ * <phim>_tham_chieu.json + hướng dẫn bước tiếp.
+ */
+async function runFilmAnalyzeJob(job: FilmAnalyzeJob, jobId: string): Promise<void> {
+  const updateStatus = async (text: string): Promise<void> => {
+    if (!telegram || !job.statusMessageId) return;
+    await telegram
+      .editMessageText(job.chatId, job.statusMessageId, undefined, `🔍 ${job.filmId}\n${text}`)
+      .catch(() => {});
+  };
+  const result = await analyzeFilm({ jobId, filmId: job.filmId, episodes: job.episodes, onStatus: updateStatus });
+  const { stats } = result;
+  if (telegram && job.statusMessageId) {
+    await telegram.deleteMessage(job.chatId, job.statusMessageId).catch(() => {});
+  }
+  await sendDocumentMaybeSplit(
+    job.chatId,
+    result.referencePath,
+    [
+      `✅ Đã phân tích phim gốc "${job.filmId}" tập ${formatEpisodes(result.analyzedEpisodes)}`,
+      // `Toàn phim đã phân tích: ${stats.episodes} tập, ${stats.duration}, ${stats.segments} shot, ${stats.characters} nhân vật, ${stats.threads} mạch truyện (${stats.openThreads} còn mở).`,
+      // ...result.notes.map((n) => `• ${n}`),
+      `Tiếp: "Remake phim" + gõ "${job.filmId}" để tạo bản remake mới, hoặc "Tạo phim tiếp" + tên bản remake để remake thêm các tập vừa phân tích.`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    job.promptMessageId,
+  );
+}
+
+/**
+ * "Remake phim"/"Tạo phim tiếp" — viết bản remake (runFilmRemake, xem
+ * src/film/pipeline.ts) rồi trả file các tập như generateScriptEpisodesWithGemini
+ * để phần đổi tên/hậu kiểm/gửi nút phía sau dùng lại nguyên vẹn.
+ */
+async function generateFilmEpisodes(job: GenerateScriptJob, jobId: string): Promise<string[]> {
+  const filmId = job.film!.filmId;
+  const updateStatus = async (text: string): Promise<void> => {
+    if (!telegram || !job.statusMessageId) return;
+    await telegram
+      .editMessageText(job.chatId, job.statusMessageId, undefined, `🎬 ${filmId}\n${text}`)
+      .catch(() => {});
+  };
+  const reply = async (text: string): Promise<void> => {
+    if (!telegram) return;
+    await telegram
+      .sendMessage(job.chatId, text, { reply_parameters: { message_id: job.promptMessageId } })
+      .catch(() => {});
+  };
+
+  const result = await runFilmRemake({
+    jobId,
+    filmId,
+    choice: job.film!.choice,
+    suggestedNewName: job.remakeBaseName,
+    episodeMessage: job.prompt,
+    onStatus: updateStatus,
+  });
+  // Tên bản remake thật — bước đổi tên/folder generated phía sau dùng field này.
+  job.remakeBaseName = result.remakeBaseName;
+  await reply(
+    [
+      `🎬 Phim "${filmId}" → ${result.isNewRemake ? "bản remake MỚI" : "tạo tiếp bản"} "${result.remakeBaseName}": ${result.episodeFiles.length} tập (tập ${result.firstEpisode}–${result.lastEpisode} theo kế hoạch).`,
+      ...result.notes.map((n) => `• ${n}`),
+    ].join("\n"),
+  );
+  if (result.failedEpisode !== undefined) {
+    await reply(
+      `⚠️ Không tạo được tập ${result.failedEpisode} của "${result.remakeBaseName}" — dừng lại (các tập sau cần tập này để nối mạch). Đã xong ${result.episodeFiles.length} tập. Làm tiếp: bấm "Tạo phim tiếp", gõ "${result.remakeBaseName}".`,
+    );
+  }
+  if (result.episodeFiles.length === 0) {
+    throw new Error("Pipeline phim không tạo được tập nào.");
+  }
+  return result.episodeFiles;
+}
+
+/**
  * Theo yêu cầu người dùng: frameRate/fps của JSON "Tham chiếu video" theo
  * ĐÚNG video gốc. Model (Gemini web/ChatGPT) không đọc được metadata video
  * nên thường ghi mặc định 24 — đo fps bằng ffprobe (làm tròn về fps chuẩn
@@ -3216,6 +3320,18 @@ async function processChatAIQueue(): Promise<void> {
       console.log(
         `[queue] processChatAIQueue: bắt đầu job ${jobId} (type="${job.type}").`,
       );
+      if (job.type === "filmAnalyze") {
+        try {
+          await runFilmAnalyzeJob(job, jobId);
+        } catch (err) {
+          await notifyError(job, err);
+        } finally {
+          chatAIJobs.shift();
+          persistChatAIJobs();
+          if (chatAIJobs.length > 0) await sleep(30000);
+        }
+        continue;
+      }
       // "Tạo kịch bản mới": giữ bản gốc các file JSON tham chiếu — xem
       // backupReferenceJsonFiles.
       const referenceBackups =
@@ -3264,7 +3380,9 @@ async function processChatAIQueue(): Promise<void> {
             !job.generatedFolderNameOverride &&
             // "Tiếp tục tạo kịch bản" luôn đi pipeline series, kể cả còn 1 tập.
             (job.referenceFileNames.length > 1 || (job.seriesStartEpisode ?? 1) > 1);
-          ({ downloadedFiles } = geminiSequential && job.type === "generateScript"
+          ({ downloadedFiles } = job.type === "generateScript" && job.film
+            ? { downloadedFiles: await generateFilmEpisodes(job, jobId) }
+            : geminiSequential && job.type === "generateScript"
             ? { downloadedFiles: await generateScriptEpisodesWithGemini(job, jobId) }
             : config.chatAIProvider === "gemini"
               ? await askGemini(

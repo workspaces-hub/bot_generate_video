@@ -238,6 +238,36 @@ export const config = {
   // bước nào đã có file thì bỏ qua (bot restart giữa chừng chạy tiếp).
   seriesDir: path.resolve(process.env.SERIES_DIR ?? "./storage/series"),
 
+  // "Remake phim" (src/film/pipeline.ts): N clip của 1 phim → Global Timeline
+  // → phân tích từng clip với Story Memory cuốn chiếu → Story Structure →
+  // pipeline series ở trên. Dữ liệu từng phim ở filmsDir/<tên phim>/; clip
+  // nguồn đặt trong filmsDir/<tên phim>/source/ (bot tự lưu khi user gửi).
+  filmsDir: path.resolve(process.env.FILMS_DIR ?? "./storage/films"),
+  promptFilmAnalyze: "prompt_film_analyze.txt",
+  promptFilmReconstruct: "prompt_film_reconstruct.txt",
+  promptFilmAdaptMap: "prompt_film_adapt_map.txt",
+  // Worker xử lý video (workers/timeline_worker.py — chỉ cần stdlib + ffmpeg).
+  filmPythonBin: process.env.FILM_PYTHON_BIN ?? "python3",
+  // Ngưỡng đổi cảnh của ffmpeg (0..1) — nhỏ hơn = cắt nhiều shot hơn.
+  filmSceneThreshold: Number(process.env.FILM_SCENE_THRESHOLD ?? 0.3),
+  // Shot dài hơn mức này bị chia đều (đơn vị phân tích đủ nhỏ để tham chiếu).
+  filmMaxSegmentSeconds: Number(process.env.FILM_MAX_SEGMENT_SECONDS ?? 12),
+  // Shot ngắn hơn mức này gộp vào shot trước (giảm nhiễu scene-detect).
+  filmMinSegmentSeconds: Number(process.env.FILM_MIN_SEGMENT_SECONDS ?? 1),
+  // Model faster-whisper (tuỳ chọn — chưa cài thì bỏ qua, Gemini tự nghe thoại).
+  filmWhisperModel: process.env.FILM_WHISPER_MODEL ?? "small",
+  // Phân tích phim gốc xong thì xoá video gốc trong source/ (giữ clip cuối
+  // để đợt sau dò ranh giới). FILM_KEEP_SOURCE_VIDEOS=true để giữ lại.
+  filmDeleteSourceAfterAnalyze: process.env.FILM_KEEP_SOURCE_VIDEOS?.toLowerCase() !== "true",
+  // Model Gemini RIÊNG cho các bước LLM của pipeline phim (phân tích tập, cấu
+  // trúc truyện, ánh xạ) — xem video dài + giữ đủ schema cần model mạnh hơn
+  // Flash-Lite. Ghi đúng tên trong menu chọn model của Gemini (vd "3.5 Pro");
+  // để trống = dùng GEMINI_MODEL_LABEL như mọi tác vụ khác.
+  filmGeminiModelLabel: process.env.FILM_GEMINI_MODEL_LABEL ?? "",
+  // Số tập tối đa mỗi đợt viết kịch bản remake (1 Season Arc/QA mỗi đợt) — bản
+  // remake mới của phim dài được chia nhiều đợt nối tiếp trong cùng 1 job.
+  filmRemakeChunkEpisodes: Number(process.env.FILM_REMAKE_CHUNK_EPISODES ?? 10),
+
   // Theo yêu cầu người dùng: bản clone của askChatAIAboutReferenceVideo dùng
   // API Qwen (qua OpenRouter, KHÔNG phải browser automation) thay vì
   // ChatGPT/Playwright — xem askQwenAboutReferenceVideo trong qwenAI.ts. Lấy

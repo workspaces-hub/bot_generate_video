@@ -10,6 +10,11 @@ Yêu cầu:
 - Bí mật và conflict dài hạn phải đủ "nhiên liệu" cho toàn bộ số tập.
 - id asset theo dạng CHAR_<TEN>, LOC_<TEN>, PROP_<TEN>, OBJ_<TEN> (viết HOA, không dấu) — các tập sẽ dùng ĐÚNG các id này.
 
+ASSET DÙNG CHUNG TOÀN PHIM — BỐI CẢNH, ĐẠO CỤ, VẬT THỂ
+- "core_locations" và "core_props" là DANH SÁCH ASSET CHUẨN của cả phim, không chỉ thứ quan trọng nhất: liệt kê MỌI bối cảnh (kể cả ngoại cảnh/toàn cảnh thành phố, mặt tiền toà nhà dùng làm cảnh chuyển) và MỌI đạo cụ/vật thể có vai trò hoặc xuất hiện rõ trong bất kỳ tập gốc nào (giấy tờ/di chúc, điện thoại, trang sức, quà tặng, bảng tên, hộp, xe, vũ khí, vật báu...), mỗi thứ ánh xạ sang MỘT thực thể target.
+- id: bối cảnh LOC_<TEN>; đạo cụ cầm/di chuyển được PROP_<TEN>; vật cố định/vật lớn OBJ_<TEN> (viết HOA, không dấu). Cùng một vật xuất hiện ở nhiều tập → cùng một id; các tập sẽ dùng ĐÚNG id này.
+- Mỗi mục có "source_ids" (id asset ở các tập gốc tương ứng) và "asset_prompt": mô tả nhận dạng BẰNG TIẾNG ANH, tự chứa, dùng trực tiếp để gen ảnh tham chiếu (hình dáng, chất liệu, màu, kích thước, chi tiết phân biệt; bối cảnh: kiến trúc, bố cục, ánh sáng, mốc nhận dạng). Không đưa trạng thái tạm thời theo cảnh (vỡ, rơi, đang cầm) vào asset_prompt.
+
 ## ĐẦU RA
 
 MỘT JSON object duy nhất:
@@ -40,10 +45,10 @@ MỘT JSON object duy nhất:
     { "a": "CHAR_...", "b": "CHAR_...", "type": "...", "starting_state": "...", "core_tension": "..." }
   ],
   "core_locations": [
-    { "id": "LOC_...", "description": "kiến trúc, ánh sáng, mốc nhận dạng" }
+    { "id": "LOC_...", "source_ids": ["LOC_... của tập gốc"], "description": "kiến trúc, ánh sáng, mốc nhận dạng", "asset_prompt": "English, self-contained location reference description" }
   ],
   "core_props": [
-    { "id": "PROP_... hoặc OBJ_...", "description": "...", "dramatic_role": "..." }
+    { "id": "PROP_... hoặc OBJ_...", "source_ids": ["PROP_.../OBJ_... của tập gốc"], "description": "...", "dramatic_role": "...", "asset_prompt": "English, self-contained prop/object reference description" }
   ],
   "secrets": [
     { "secret": "...", "who_knows_at_start": ["CHAR_..."], "hidden_from": ["CHAR_..."], "planned_reveal": "khoảng tập nào, bằng cách nào" }

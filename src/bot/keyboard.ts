@@ -86,6 +86,19 @@ export const GENERATE_SCRIPT_EPISODE_BUTTON_LABEL = "Tạo kịch bản theo t�
  */
 export const CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL = "Tiếp tục tạo kịch bản";
 /**
+ * Pipeline phim (src/film/pipeline.ts), 3 nút:
+ * - FILM_ANALYZE: gửi các tập gốc (tên file có tên phim + số tập) → "xong" →
+ *   timeline → phân tích từng tập với Story Memory → cấu trúc truyện. Chỉ
+ *   phân tích, không viết kịch bản; gửi thêm tập mới sau = phân tích thêm.
+ * - REMAKE_FILM: gõ tên phim đã phân tích (dòng 2+ tuỳ chọn: yêu cầu riêng)
+ *   → bản remake MỚI <phim>_remake_N cho toàn bộ tập đã phân tích.
+ * - CONTINUE_FILM: gõ tên bản remake (vd sinhton_remake_1) → viết tiếp các
+ *   tập gốc đã phân tích mà bản đó chưa remake.
+ */
+export const FILM_ANALYZE_BUTTON_LABEL = "Phân tích phim gốc";
+export const REMAKE_FILM_BUTTON_LABEL = "Remake phim";
+export const CONTINUE_FILM_BUTTON_LABEL = "Tạo phim tiếp";
+/**
  * Bất kỳ ai trong nhóm được phép dùng bot (isAllowedGroup, KHÔNG giới hạn
  * admin — theo yêu cầu người dùng) đều bấm được — user upload 1 file .txt
  * để GHI ĐÈ master prompt prompt_generate_script.txt (dùng cho
@@ -130,6 +143,10 @@ export const UPDATE_SERIES_BIBLE_EXTEND_PROMPT_BUTTON_LABEL = "Cập nhật prom
 export const UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL = "Cập nhật prompt series Arc";
 export const UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL = "Cập nhật prompt series Ledger";
 export const UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL = "Cập nhật prompt series QA";
+/** Master prompt các bước LLM của "Remake phim" — cùng cơ chế với các nút prompt series ở trên. */
+export const UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL = "Cập nhật prompt phim phân tích clip";
+export const UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL = "Cập nhật prompt phim cấu trúc truyện";
+export const UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL = "Cập nhật prompt phim ánh xạ";
 /** Dừng SỚM các job đang chờ/đang gen ảnh-video của CHARACTER_REF_BUTTON_LABEL và CHATAI_BUTTON_LABEL — xem stopAll() trong queue.ts. */
 export const STOP_ALL_BUTTON_LABEL = "🛑 Stop All";
 /** Retry job "storyboardVideo" đã lỗi trước đó (xem failedStoryboardJobs/continueFailedStoryboardVideo trong queue.ts) — user nhập tên file json, bot tự tra lại. */
@@ -191,12 +208,15 @@ export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
   [CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL],
+  [FILM_ANALYZE_BUTTON_LABEL, REMAKE_FILM_BUTTON_LABEL, CONTINUE_FILM_BUTTON_LABEL],
   [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL],
   [CONTINUE_IMAGE_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
   [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   [UPDATE_SERIES_DNA_PROMPT_BUTTON_LABEL, UPDATE_SERIES_BIBLE_PROMPT_BUTTON_LABEL],
   [UPDATE_SERIES_BIBLE_EXTEND_PROMPT_BUTTON_LABEL, UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL],
   [UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL, UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL],
+  [UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL, UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL],
+  [UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL],
   // [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   [MERGE_VIDEO_BUTTON_LABEL, REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL],
   [STOP_ALL_BUTTON_LABEL],

@@ -1,0 +1,40 @@
+# REMAKE PHIM — BƯỚC 5: DỰNG CẤU TRÚC TRUYỆN TOÀN CỤC
+
+Bạn là script analyst. Một bộ phim gồm nhiều clip đã được phân tích lần lượt thành STORY MEMORY: event ledger, nhân vật, knowledge (ai biết gì), thread (mạch truyện) và reinterpretation (twist đổi nghĩa). File đính kèm chứa memory đó cùng mô tả từng segment của các clip trong ĐỢT này. Nếu đây là đợt tạo tiếp, file còn có structure của các đợt trước, chỉ để đọc.
+
+Nhiệm vụ: dựng CẤU TRÚC KỊCH TÍNH cho các clip của đợt này, nhìn trên toàn bộ phim: scene → dramatic beat → nhân quả → setup/payoff, cùng đường cảm xúc, twist, power shift và arc nhân vật.
+
+## QUY TẮC CỨNG (code sẽ kiểm tra và từ chối nếu sai)
+
+1. Chỉ tham chiếu id ĐÃ CÓ: segId (S....) và eventId (E.._..) lấy từ dữ liệu. KHÔNG tạo event mới, KHÔNG ghi mốc thời gian.
+2. Scene: gom các segment liên tiếp của CÙNG một clip thành scene, theo đơn vị địa điểm, thời gian và mục tiêu kịch tính. Mọi segment có kind "story" của đợt phải thuộc ĐÚNG MỘT scene. Segment recap, credits hay preview có thể bỏ ngoài. Mỗi scene có ít nhất 1 beat. event_ids của beat phải là event của chính clip đó. intensity là số nguyên từ 1 đến 10.
+3. cause_effect: nguyên nhân phải xảy ra TRƯỚC hoặc cùng lúc với kết quả. Ít nhất một đầu phải thuộc đợt này. Được trỏ về event của đợt cũ.
+4. setup_payoff: setup phải đứng TRƯỚC payoff. Ít nhất một event phải thuộc đợt này. Gắn thread_id nếu khớp một thread có sẵn. Setup đã gieo mà CHƯA có payoff thì vẫn ghi, với payoff_events: []. Đây là thông tin quan trọng nhất cho các tập sau.
+5. emotion_curve: mỗi clip của đợt có ĐÚNG 1 mục.
+6. twists và power_shifts: event_id phải thuộc đợt này. Twist có reinterpretation tương ứng thì ghi reinterpretation_id.
+
+## ĐẦU RA
+
+Trả về MỘT JSON object:
+
+{
+  "batch": 1,
+  "scenes": [
+    {
+      "id": "SC1",
+      "clip_id": "C01",
+      "seg_ids": ["S0001", "S0002"],
+      "location": "LOC_...",
+      "summary": "scene này làm gì trong câu chuyện",
+      "beats": [
+        { "id": "B1", "event_ids": ["E01_1"], "function": "chức năng kịch tính: setup/escalation/reversal/reveal/climax/release...", "emotion": "cảm xúc khán giả", "intensity": 6 }
+      ]
+    }
+  ],
+  "cause_effect": [ { "cause": "E01_1", "effect": "E01_3", "note": "" } ],
+  "setup_payoff": [ { "thread_id": "T01_1", "setup_events": ["E01_2"], "payoff_events": [], "note": "chi tiết được gieo, sẽ trả thế nào" } ],
+  "emotion_curve": [ { "clip_id": "C01", "intensity": 7, "dominant_emotion": "", "note": "" } ],
+  "twists": [ { "event_id": "E03_6", "type": "reveal | reversal | twist", "withheld_from": "ai bị giấu (nhân vật/khán giả)", "reinterpretation_id": "R03_1", "note": "" } ],
+  "power_shifts": [ { "event_id": "E02_4", "before": "ai mạnh/ai yếu", "after": "cán cân sau đó" } ],
+  "arcs": [ { "char_id": "CHAR_...", "arc": "nhân vật thay đổi thế nào qua các clip tới hết đợt này" } ]
+}

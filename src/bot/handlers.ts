@@ -10,6 +10,19 @@ import {
 import { MAX_REFERENCE_IMAGES } from "../automation/aiVideoImage";
 import { SCRIPT_SECTION_MARKER } from "../automation/chatAI";
 import { lastSeriesEpisode, readSeriesMeta } from "../automation/seriesScript";
+import {
+  describeFilm,
+  filmSourceDir,
+  findFilmByRemake,
+  FilmPlanError,
+  invalidateEpisodeCache,
+  formatEpisodes,
+  planFilmAnalyze,
+  planFilmRemake,
+  resolveFilmId,
+  type RemakeChoice,
+} from "../film/pipeline";
+import { normalizeFilmId, parseClipFileName, sameFilm } from "../film/naming";
 import { downloadTelegramMediaViaMTProto } from "../automation/telegramMTProto";
 import { DEFAULT_MODEL, parsePromptMessage } from "../automation/promptParser";
 import {
@@ -50,6 +63,12 @@ import {
   GENERATE_SCRIPT_BUTTON_LABEL,
   GENERATE_SCRIPT_EPISODE_BUTTON_LABEL,
   CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL,
+  REMAKE_FILM_BUTTON_LABEL,
+  FILM_ANALYZE_BUTTON_LABEL,
+  CONTINUE_FILM_BUTTON_LABEL,
+  UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL,
   IMAGE_BUTTON_LABEL,
   MERGE_VIDEO_BUTTON_LABEL,
   OMNI_REF_BUTTON_LABEL,
@@ -96,7 +115,11 @@ type PendingMode =
   | "updateGenerateScriptEpisodePrompt"
   | "updateVideoReferencePrompt"
   | "updateTestVideoReferencePrompt"
-  | "updateSeriesPrompt";
+  | "updateSeriesPrompt"
+  | "filmAnalyze"
+  | "filmAnalyzeUpload"
+  | "filmRemake"
+  | "filmContinue";
 // userId đang chờ nhập prompt, theo chế độ đã chọn (bấm nút Prompt/Image/Video - Image Reference/Video - Character Reference/Video - Omni Reference).
 const waitingMode = new Map<number, PendingMode>();
 
@@ -108,9 +131,35 @@ const SERIES_PROMPT_CONFIG_KEYS = {
   [UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL]: "promptSeriesArc",
   [UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL]: "promptSeriesLedger",
   [UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL]: "promptSeriesQa",
+  [UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL]: "promptFilmAnalyze",
+  [UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL]: "promptFilmReconstruct",
+  [UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL]: "promptFilmAdaptMap",
 } as const satisfies Record<string, keyof typeof config>;
 // Mode "updateSeriesPrompt": userId → file prompt series sẽ bị ghi đè.
 const pendingSeriesPromptPath = new Map<number, string>();
+
+/**
+ * Mode "filmAnalyzeUpload": đang nhận clip cho 1 phim. Clip tải ở nền vào
+ * storage/films/<filmId>/source/, đặt tên "<số tập 3 chữ số>_<tên phim>"
+ * theo SỐ TẬP trong tên file gửi lên (parseClipFileName) — không theo thứ tự
+ * gửi. Tên file không có số tập thì dùng số thứ tự nhận (seq). Gõ "xong" →
+ * chờ tải hết, kiểm tra các tập gửi liền nhau (planFilmAnalyze) rồi enqueue.
+ */
+interface PendingFilmUpload {
+  filmId: string;
+  chatId: number;
+  /** Số tập/seq tiếp theo cho file KHÔNG có số tập trong tên. */
+  nextSeq: number;
+  /** Đếm file có sẵn trong source/ — tạo ĐỒNG BỘ cùng state để video gửi dồn (album) không tạo 2 state. */
+  ready: Promise<void>;
+  /** Tập đã nhận trong lượt này (phát hiện gửi trùng). */
+  episodes: Set<number>;
+  downloads: Promise<void>[];
+  failed: string[];
+}
+const pendingFilmUploads = new Map<number, PendingFilmUpload>();
+const FILM_VIDEO_FILE = /\.(mp4|mov|mkv|webm|m4v|avi)$/i;
+const CANCEL_PATTERN = /^\s*(huỷ|hủy|huy|cancel)\s*[.!]*\s*$/i;
 
 // Gom ảnh tham chiếu gửi liên tiếp từ CÙNG 1 user trong 1 khoảng thời gian
 // ngắn (tối đa MAX_REFERENCE_IMAGES ảnh). KHÔNG dựa vào media_group_id của
@@ -218,6 +267,12 @@ function clearPendingUploads(userId: number): boolean {
         `❌ Đã huỷ tham chiếu ${referenceVideoBuffer.items.length} video (chưa gõ "xong"/"done").`,
       )
       .catch(() => {});
+    hadSomething = true;
+  }
+
+  if (pendingFilmUploads.delete(userId)) {
+    // Clip đã/đang tải vẫn nằm trong source/ — lần sau gõ lại tên phim sẽ thấy.
+    if (waitingMode.get(userId) === "filmAnalyzeUpload") waitingMode.delete(userId);
     hadSomething = true;
   }
 
@@ -1478,6 +1533,13 @@ async function handleGenerateScriptRequest(
     return;
   }
   const seriesMeta = continueSeries ? await readSeriesMeta(continueSeries) : null;
+  if (seriesMeta?.filmId) {
+    await ctx.reply(
+      `❌ Series "${continueSeries}" được tạo từ "${REMAKE_FILM_BUTTON_LABEL}" (phim "${seriesMeta.filmId}") — tạo tiếp bằng nút "${CONTINUE_FILM_BUTTON_LABEL}" (tập gốc mới thì "${FILM_ANALYZE_BUTTON_LABEL}" trước).`,
+      { reply_parameters: { message_id: promptMessageId }, ...promptMenu },
+    );
+    return;
+  }
   const lastEpisode = continueSeries ? await lastSeriesEpisode(continueSeries) : 0;
   if (continueSeries && lastEpisode === 0) {
     await ctx.reply(
@@ -1618,6 +1680,312 @@ async function handleGenerateScriptRequest(
     seriesStartEpisode: startEpisode,
     seriesSearchTerm: searchTerm,
   });
+}
+
+/** Video trong source/ của phim → tập (theo tên file). */
+async function existingFilmEpisodes(filmId: string): Promise<Map<number, string>> {
+  const files = (await fs.readdir(filmSourceDir(filmId)).catch(() => [] as string[])).filter((f) => FILM_VIDEO_FILE.test(f));
+  const map = new Map<number, string>();
+  for (const f of files) {
+    const ep = parseClipFileName(f).episode;
+    if (ep !== null) map.set(ep, f);
+  }
+  return map;
+}
+
+/**
+ * Tạo state nhận clip ĐỒNG BỘ (trước mọi await) — Telegram giao album nhiều
+ * video gần như cùng lúc, tạo state sau await thì video thứ 2 sẽ tạo state
+ * thứ 2 đè lên, "xong" không chờ được clip của state bị đè.
+ */
+function beginFilmUpload(userId: number, chatId: number, filmId: string): PendingFilmUpload {
+  const upload: PendingFilmUpload = {
+    filmId,
+    chatId,
+    nextSeq: 1,
+    ready: Promise.resolve(),
+    episodes: new Set(),
+    downloads: [],
+    failed: [],
+  };
+  upload.ready = (async () => {
+    await fs.mkdir(filmSourceDir(filmId), { recursive: true });
+    const existing = await existingFilmEpisodes(filmId);
+    upload.nextSeq = Math.max(0, ...existing.keys()) + 1;
+  })();
+  pendingFilmUploads.set(userId, upload);
+  waitingMode.set(userId, "filmAnalyzeUpload");
+  return upload;
+}
+
+/** Tình trạng phim (tập gốc đã phân tích, các bản remake, tập chờ) — trả lời sau khi biết tên phim. */
+async function describeFilmForUser(filmId: string, inferredFrom?: string): Promise<string> {
+  // const status = await describeFilm(filmId);
+  const lines = [`🎬 Phim "${filmId}"${inferredFrom ? ` (lấy từ tên file "${inferredFrom}")` : ""}`];
+  // if (status.analyzedEpisodes.length > 0) {
+  //   lines.push(`Đã phân tích tập gốc ${formatEpisodes(status.analyzedEpisodes)} (các bản remake dùng chung).`);
+  //   if (status.remakes.length > 0) {
+  //     lines.push("Các bản remake:");
+  //     for (const r of status.remakes) {
+  //       lines.push(
+  //         `• ${r.name}: xong ${r.doneUntil} tập${r.unfinished ? ` (dở tập ${r.unfinished})` : ""}${r.note ? ` — yêu cầu: ${r.note}` : ""}`,
+  //       );
+  //     }
+  //   }
+  // } else {
+  //   lines.push("Chưa phân tích tập nào.");
+  // }
+  // if (status.pendingEpisodes.length > 0) {
+  //   lines.push(`Thư mục nguồn có sẵn tập ${formatEpisodes(status.pendingEpisodes)} chưa phân tích (gõ "xong" không gửi gì = phân tích các tập này).`);
+  // }
+  return lines.join("\n");
+}
+
+const FILM_UPLOAD_HELP =
+  'Gửi các tập muốn phân tích (tên file có tên phim + số tập, vd "02_tenphim.mp4", "tenphim_tap3.mp4"; các tập trong 1 lượt phải liền nhau, lộn thứ tự cũng được). Gõ "xong" để phân tích, "huỷ" để thoát.';
+
+/**
+ * "Phân tích phim gốc" — user gõ tên phim: báo tình trạng phim rồi chuyển sang mode
+ * nhận clip. (Cũng có thể bỏ qua bước gõ tên: gửi video luôn, tên phim lấy
+ * từ tên file — xem startFilmUploadFromClip.)
+ */
+async function handleFilmAnalyzeName(ctx: Context, typedText: string, promptMessageId: number): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId || !ctx.chat) return;
+  const filmId = normalizeFilmId(typedText);
+  if (!filmId) {
+    await ctx.reply("Tên phim trống/không hợp lệ, đã huỷ.", promptMenu);
+    return;
+  }
+  const upload = beginFilmUpload(userId, ctx.chat.id, filmId);
+  await upload.ready;
+  await ctx.reply(`${await describeFilmForUser(filmId)}\n\n${FILM_UPLOAD_HELP}\nHoặc chép thẳng vào ${filmSourceDir(filmId)}.`, {
+    reply_parameters: { message_id: promptMessageId },
+    ...promptMenu,
+  });
+}
+
+/**
+ * "Phân tích phim gốc" — chưa gõ tên phim mà gửi video luôn: lấy tên phim từ tên
+ * file. Trả về null (đã báo user) nếu tên file không có tên phim.
+ */
+async function startFilmUploadFromClip(
+  ctx: Context,
+  userId: number,
+  rawFileName: string | undefined,
+  messageId: number,
+): Promise<PendingFilmUpload | null> {
+  const filmId = rawFileName ? normalizeFilmId(parseClipFileName(rawFileName).title) : "";
+  if (!filmId) {
+    await ctx.reply('Không đọc được tên phim từ tên file — gõ tên phim trước rồi gửi lại video.', {
+      reply_parameters: { message_id: messageId },
+    });
+    return null;
+  }
+  const upload = beginFilmUpload(userId, ctx.chat!.id, filmId);
+  void (async () => {
+    await upload.ready;
+    await ctx.reply(`${await describeFilmForUser(filmId, rawFileName)}\n\n${FILM_UPLOAD_HELP}`, promptMenu);
+  })().catch((err) => console.error("[bot] Báo tình trạng phim thất bại:", err));
+  return upload;
+}
+
+/**
+ * "Phân tích phim gốc" — nhận 1 clip: số tập lấy từ tên file Telegram (rawFileName;
+ * không có số tập thì dùng seq), tải ở nền vào source/ thành
+ * "<tập 3 chữ số>_<tên phim>.<ext>".
+ */
+async function addFilmClip(
+  ctx: Context,
+  upload: PendingFilmUpload,
+  fileId: string,
+  rawFileName: string | undefined,
+  messageId: number,
+): Promise<void> {
+  await upload.ready; // các clip cùng chờ 1 promise → tiếp tục đúng thứ tự nhận
+  const displayName = rawFileName ?? `video-${messageId}`;
+  const parsed = rawFileName ? parseClipFileName(rawFileName) : { episode: null, title: "" };
+  const notes: string[] = [];
+  let episode = parsed.episode;
+  if (episode === null) {
+    episode = upload.nextSeq;
+    notes.push("tên file không có số tập — đánh số theo thứ tự nhận");
+  }
+  upload.nextSeq = Math.max(upload.nextSeq, episode + 1);
+  if (upload.episodes.has(episode)) {
+    await ctx.reply(`❌ Tập ${episode} đã gửi trong lượt này — bỏ qua "${displayName}".`, { reply_parameters: { message_id: messageId } });
+    return;
+  }
+  const previous = (await existingFilmEpisodes(upload.filmId)).get(episode);
+  if (previous) notes.push(`thay bản cũ "${previous}" — tập này sẽ được phân tích lại`);
+  if (parsed.title && !sameFilm(parsed.title, upload.filmId)) {
+    notes.push(`⚠️ tên phim trong file "${parsed.title}" khác "${upload.filmId}" — kiểm tra có gửi nhầm phim không`);
+  }
+  upload.episodes.add(episode);
+
+  const ext = path.extname(displayName) || ".mp4";
+  const target = path.join(filmSourceDir(upload.filmId), `${String(episode).padStart(3, "0")}_${upload.filmId}${ext}`);
+  const download = (async () => {
+    const tmp = await downloadTelegramVideoRobust(ctx, fileId, upload.chatId, messageId, ext);
+    await fs.rename(tmp, target).catch(async () => {
+      // Khác ổ đĩa (EXDEV) → copy rồi xoá.
+      await fs.copyFile(tmp, target);
+      await fs.unlink(tmp).catch(() => {});
+    });
+    // Bản cũ cùng tập khác tên/đuôi → xoá, để thư mục nguồn chỉ còn 1 file mỗi tập.
+    if (previous && previous !== path.basename(target)) {
+      await fs.unlink(path.join(filmSourceDir(upload.filmId), previous)).catch(() => {});
+    }
+    // Video mới của tập này (có thể cùng tên mà khác nội dung) → xoá ngay cache
+    // analysis/transcripts cũ để chắc chắn phân tích lại.
+    await invalidateEpisodeCache(upload.filmId, episode);
+  })().catch((err) => {
+    console.error(`[bot] Tải clip phim "${displayName}" thất bại:`, err);
+    upload.episodes.delete(episode);
+    upload.failed.push(`tập ${episode} (${displayName})${isTelegramFileTooBigError(err) ? " — quá 20MB, MTProto cũng lỗi" : ""}`);
+  });
+  upload.downloads.push(download);
+  await ctx.reply([`📥 Tập ${episode}: ${displayName}`, ...notes.map((n) => `  ${n}`)].join("\n"), {
+    reply_parameters: { message_id: messageId },
+  });
+}
+
+/** "Phân tích phim gốc" — text trong lúc nhận clip: "xong" → kiểm tra + phân tích, "huỷ" → thoát, khác → nhắc. */
+async function handleFilmUploadText(ctx: Context, userId: number, text: string, messageId: number): Promise<void> {
+  const upload = pendingFilmUploads.get(userId);
+  if (!upload) {
+    waitingMode.delete(userId);
+    return;
+  }
+  if (CANCEL_PATTERN.test(text)) {
+    pendingFilmUploads.delete(userId);
+    waitingMode.delete(userId);
+    await ctx.reply(`Đã thoát "${FILM_ANALYZE_BUTTON_LABEL}". Clip đã gửi vẫn giữ trong thư mục nguồn của phim "${upload.filmId}".`, promptMenu);
+    return;
+  }
+  if (!REFERENCE_VIDEO_DONE_PATTERN.test(text)) {
+    await ctx.reply(`Đang nhận tập gốc cho phim "${upload.filmId}". ${FILM_UPLOAD_HELP}`, {
+      reply_parameters: { message_id: messageId },
+    });
+    return;
+  }
+  if (upload.downloads.length > 0) {
+    await ctx.reply(`⏳ Chờ tải xong ${upload.downloads.length} clip...`, { reply_parameters: { message_id: messageId } });
+    await Promise.all(upload.downloads);
+  }
+  // Lỗi tải / thiếu / trùng tập → GIỮ mode nhận clip để gửi bổ sung rồi "xong" lại.
+  const keepWaiting = async (problem: string) => {
+    upload.downloads = [];
+    upload.failed = [];
+    await ctx.reply(`❌ ${problem}\n\nChưa chạy. Gửi bổ sung/sửa rồi gõ "xong" lại (hoặc "huỷ").`, {
+      reply_parameters: { message_id: messageId },
+    });
+  };
+  if (upload.failed.length > 0) {
+    await keepWaiting(`${upload.failed.length} clip tải lỗi: ${upload.failed.join(", ")}.`);
+    return;
+  }
+  // Tập vừa gửi trong lượt này; không gửi gì → các tập mới có sẵn trong thư mục nguồn.
+  const sent = [...upload.episodes];
+  let plan: Awaited<ReturnType<typeof planFilmAnalyze>>;
+  try {
+    plan = await planFilmAnalyze(upload.filmId, sent.length > 0 ? sent : undefined);
+  } catch (err) {
+    if (!(err instanceof FilmPlanError)) throw err;
+    await keepWaiting(err.message);
+    return;
+  }
+  pendingFilmUploads.delete(userId);
+  waitingMode.delete(userId);
+  const warnings = [
+    plan.reanalyze.length > 0 ? `♻️ Phân tích LẠI tập ${formatEpisodes(plan.reanalyze)}.` : "",
+    plan.dropped.length > 0
+      ? `⚠️ Tập ${formatEpisodes(plan.dropped)} đã phân tích nhưng nằm sau tập phân tích lại — sẽ bị BỎ khỏi phân tích (gửi lại nếu cần).`
+      : "",
+  ].filter(Boolean);
+  const statusMessage = await ctx.reply(
+    [
+      `⏳ Phân tích phim gốc "${upload.filmId}" tập ${formatEpisodes(plan.episodes)}: timeline → phân tích từng tập với story memory → cấu trúc truyện...`,
+      ...warnings,
+    ].join("\n"),
+    { reply_parameters: { message_id: messageId }, ...promptMenu },
+  );
+  enqueueJob({
+    type: "filmAnalyze",
+    chatId: upload.chatId,
+    userId,
+    prompt: "",
+    promptMessageId: messageId,
+    statusMessageId: statusMessage.message_id,
+    filmId: upload.filmId,
+    episodes: plan.episodes,
+  });
+}
+
+/** Đưa job viết bản remake (mới/tiếp) vào hàng đợi Gemini — dùng chung luồng hậu kiểm của "Tạo kịch bản mới". */
+async function enqueueFilmRemake(
+  ctx: Context,
+  filmId: string,
+  choice: RemakeChoice,
+  promptMessageId: number,
+): Promise<void> {
+  const reply = (text: string) => ctx.reply(text, { reply_parameters: { message_id: promptMessageId }, ...promptMenu });
+  const suggestedNewName = `${filmId}_remake_${await resolveNextRemakeVersion(filmId)}`;
+  let plan;
+  try {
+    plan = await planFilmRemake(filmId, choice, suggestedNewName);
+  } catch (err) {
+    if (!(err instanceof FilmPlanError)) throw err;
+    await reply(`❌ ${err.message}`);
+    return;
+  }
+  const statusMessage = await reply(
+    `⏳ Phim "${filmId}" → ${plan.isNew ? "bản remake MỚI" : "tạo tiếp bản"} "${plan.name}" tập ${plan.from}–${plan.to}${plan.note ? `\nYêu cầu riêng: ${plan.note}` : ""}...`,
+  );
+  enqueueJob({
+    type: "generateScript",
+    chatId: ctx.chat!.id,
+    userId: ctx.from!.id,
+    prompt: GENERATE_SCRIPT_ATTACHMENT_PROMPT,
+    promptMessageId,
+    statusMessageId: statusMessage.message_id,
+    referenceFileNames: [],
+    promptAttachmentPath: "",
+    remakeBaseName: plan.name,
+    film: { filmId, choice },
+  });
+}
+
+/**
+ * "Remake phim": dòng 1 = tên phim đã phân tích (hoặc tên file
+ * <phim>_tham_chieu.json), dòng 2+ (tuỳ chọn) = yêu cầu riêng của bản này
+ * → bản remake MỚI cho toàn bộ tập gốc đã phân tích.
+ */
+async function handleFilmRemakeRequest(ctx: Context, text: string, promptMessageId: number): Promise<void> {
+  const [firstLine, ...rest] = text.normalize("NFC").split("\n");
+  const note = rest.join("\n").trim() || undefined;
+  let filmId: string;
+  try {
+    filmId = await resolveFilmId(firstLine);
+  } catch (err) {
+    if (!(err instanceof FilmPlanError)) throw err;
+    await ctx.reply(`❌ ${err.message}`, { reply_parameters: { message_id: promptMessageId }, ...promptMenu });
+    return;
+  }
+  await enqueueFilmRemake(ctx, filmId, { mode: "new", note }, promptMessageId);
+}
+
+/** "Tạo phim tiếp": tên bản remake (vd sinhton_remake_1) → remake tiếp các tập gốc đã phân tích mà bản đó chưa có. */
+async function handleFilmContinueRequest(ctx: Context, text: string, promptMessageId: number): Promise<void> {
+  let target: { filmId: string; remake: string };
+  try {
+    target = await findFilmByRemake(text.split("\n")[0]);
+  } catch (err) {
+    if (!(err instanceof FilmPlanError)) throw err;
+    await ctx.reply(`❌ ${err.message}`, { reply_parameters: { message_id: promptMessageId }, ...promptMenu });
+    return;
+  }
+  await enqueueFilmRemake(ctx, target.filmId, { mode: "continue", name: target.remake }, promptMessageId);
 }
 
 /**
@@ -2240,6 +2608,36 @@ export function registerHandlers(bot: Telegraf): void {
     );
   });
 
+  bot.hears(FILM_ANALYZE_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "filmAnalyze");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gửi các tập gốc của phim (tên file có tên phim + số tập, vd "02_tenphim.mp4" — bot tự lấy tên phim và sắp theo số tập), hoặc gõ tên phim trước. Phim đã phân tích thì gửi các tập MỚI để phân tích thêm.`,
+      promptMenu,
+    );
+  });
+
+  bot.hears(REMAKE_FILM_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "filmRemake");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên phim đã phân tích (hoặc tên file <phim>_tham_chieu.json) — bot tạo 1 bản remake MỚI cho toàn bộ tập đã phân tích.\nTuỳ chọn: từ dòng 2 ghi yêu cầu riêng cho bản này, vd:\nsinhton\nbối cảnh cổ trang, nữ chính là tiểu thư`,
+      promptMenu,
+    );
+  });
+
+  bot.hears(CONTINUE_FILM_BUTTON_LABEL, async (ctx) => {
+    if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
+    clearPendingUploads(ctx.from.id);
+    waitingMode.set(ctx.from.id, "filmContinue");
+    await ctx.reply(
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên bản remake (vd sinhton_remake_1) — bot tạo tiếp các tập gốc đã phân tích mà bản đó chưa remake.`,
+      promptMenu,
+    );
+  });
+
   bot.hears(GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, async (ctx) => {
     if (!ctx.from || !ctx.chat || !isAllowedGroup(ctx.chat.id)) return;
     clearPendingUploads(ctx.from.id);
@@ -2378,6 +2776,9 @@ export function registerHandlers(bot: Telegraf): void {
       ctx.message.text === GENERATE_SCRIPT_BUTTON_LABEL ||
       ctx.message.text === GENERATE_SCRIPT_EPISODE_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL ||
+      ctx.message.text === REMAKE_FILM_BUTTON_LABEL ||
+      ctx.message.text === FILM_ANALYZE_BUTTON_LABEL ||
+      ctx.message.text === CONTINUE_FILM_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_VIDEO_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_SCENE_FRAME_BUTTON_LABEL ||
       ctx.message.text === CONTINUE_IMAGE_BUTTON_LABEL ||
@@ -2397,6 +2798,11 @@ export function registerHandlers(bot: Telegraf): void {
     // "Tham chiếu video" nhiều video: gõ "xong"/"done" mới bắt đầu phân tích
     // (xem REFERENCE_VIDEO_DONE_PATTERN). Đang gom video mà gõ text khác thì
     // nhắc lại, giữ nguyên lô.
+    if (waitingMode.get(userId) === "filmAnalyzeUpload") {
+      await handleFilmUploadText(ctx, userId, ctx.message.text, ctx.message.message_id);
+      return;
+    }
+
     const referenceVideoBuffer = pendingReferenceVideoBuffers.get(userId);
     const isReferenceVideoDone = REFERENCE_VIDEO_DONE_PATTERN.test(ctx.message.text);
     if (referenceVideoBuffer) {
@@ -2504,6 +2910,12 @@ export function registerHandlers(bot: Telegraf): void {
         ctx.message.text,
         ctx.message.message_id,
       );
+    } else if (mode === "filmAnalyze") {
+      await handleFilmAnalyzeName(ctx, ctx.message.text, ctx.message.message_id);
+    } else if (mode === "filmRemake") {
+      await handleFilmRemakeRequest(ctx, ctx.message.text, ctx.message.message_id);
+    } else if (mode === "filmContinue") {
+      await handleFilmContinueRequest(ctx, ctx.message.text, ctx.message.message_id);
     } else if (mode === "continueGenerateScript") {
       await handleGenerateScriptRequest(
         ctx,
@@ -3006,6 +3418,17 @@ export function registerHandlers(bot: Telegraf): void {
 
     const userId = ctx.from.id;
 
+    // "Phân tích phim gốc": đang nhận clip (hoặc chưa gõ tên phim → lấy từ tên file) — xem addFilmClip.
+    if (waitingMode.get(userId) === "filmAnalyzeUpload" || waitingMode.get(userId) === "filmAnalyze") {
+      const fileName = ctx.message.video.file_name;
+      const upload =
+        waitingMode.get(userId) === "filmAnalyzeUpload"
+          ? pendingFilmUploads.get(userId)
+          : await startFilmUploadFromClip(ctx, userId, fileName, ctx.message.message_id);
+      if (upload) await addFilmClip(ctx, upload, ctx.message.video.file_id, fileName, ctx.message.message_id);
+      return;
+    }
+
     // Chế độ "Tham chiếu kịch bản" (SCRIPT_REFERENCE_BUTTON_LABEL) — video
     // Telegram nén sẵn (không qua nút đính kèm 📎, khác nhánh document bên
     // dưới) được nhận diện qua message("video") này. Tải về rồi đẩy job
@@ -3133,6 +3556,26 @@ export function registerHandlers(bot: Telegraf): void {
   // mime_type; bỏ qua (báo lại cho user) nếu không phải 1 trong 3 loại này.
   bot.on(message("document"), async (ctx, next) => {
     if (!ctx.from || !isAllowedGroup(ctx.chat.id)) return next();
+
+    // "Phân tích phim gốc": clip gửi qua nút đính kèm 📎 — kiểm TRƯỚC
+    // tryReplaceGeneratedFile để clip trùng tên file generated không bị hiểu
+    // nhầm thành "thay file".
+    const filmMode = waitingMode.get(ctx.from.id);
+    if (filmMode === "filmAnalyzeUpload" || filmMode === "filmAnalyze") {
+      if (!(ctx.message.document.mime_type ?? "").startsWith("video/")) {
+        await ctx.reply(`"${FILM_ANALYZE_BUTTON_LABEL}" chỉ nhận file video.`, {
+          reply_parameters: { message_id: ctx.message.message_id },
+        });
+        return;
+      }
+      const fileName = ctx.message.document.file_name;
+      const upload =
+        filmMode === "filmAnalyzeUpload"
+          ? pendingFilmUploads.get(ctx.from.id)
+          : await startFilmUploadFromClip(ctx, ctx.from.id, fileName, ctx.message.message_id);
+      if (upload) await addFilmClip(ctx, upload, ctx.message.document.file_id, fileName, ctx.message.message_id);
+      return;
+    }
 
     if (
       await tryReplaceGeneratedFile(
