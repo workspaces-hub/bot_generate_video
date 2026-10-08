@@ -63,7 +63,6 @@ const DONE_MARKER = "ĐÃ HOÀN THÀNH";
  * đang viết (khối hỏng); 2/2 lượt gửi tin có mốc vị trí đều ra JSON đúng.
  */
 function buildShortContinueMessage(state: MergeState): string {
-  return '"Tiếp tục" tiếp theo, tuân thủ đúng quy tắc chuyển thể cốt truyện và thời lượng 4–9 giây cho từng video mới'
   return `Tiếp tục xử lý — gửi tiếp phần JSON kế tiếp của kết quả đang làm ở trên (đặt TOÀN BỘ JSON trong 1 khối code \`\`\`json\`\`\` — KHÔNG dùng Canvas). ${describeMergeState(state).replace(/\n/g, " ")} Chỉ viết "${DONE_MARKER}" khi đã gửi đủ toàn bộ.`;
   return `Tiếp tục xử lý — gửi tiếp phần JSON kế tiếp của kết quả đang làm ở trên (đặt TOÀN BỘ JSON trong 1 khối code \`\`\`json\`\`\` — KHÔNG dùng Canvas; NHIỀU item mới nhất có thể nhưng KHÔNG quá ~${config.geminiMaxCharsPerTurn} ký tự, đúng quy tắc ở tin nhắn đầu). ${describeMergeState(state).replace(/\n/g, " ")} Chỉ viết "${DONE_MARKER}" khi đã gửi đủ toàn bộ.`;
 }
