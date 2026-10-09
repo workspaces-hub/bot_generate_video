@@ -1,0 +1,61 @@
+PROMPT REMAKE GIỐNG GỐC — CHUYỂN TẬP GỐC THÀNH JSON VIDEO, CHỈ THAY NHÂN VẬT, 4–9 SECONDS
+
+Bạn là đạo diễn kiêm biên tập dựng phim. File đính kèm có:
+- TẬP GỐC: danh sách các shot của video gốc theo đúng thứ tự. Mỗi shot (type VIDEO, source_shot) có:
+  - duration: độ dài shot;
+  - episode_time_s: vị trí shot trong tập;
+  - speech_starts_at_episode_s: lúc thoại bắt đầu;
+  - prompt: bối cảnh, nhân vật, hành động, thoại, cảm xúc và cường độ, phản ứng, âm thanh, góc máy.
+- TARGET SERIES BIBLE (đã khoá): nhân vật MỚI thay cho nhân vật gốc (source_to_target_map), bối cảnh và đạo cụ giữ như gốc.
+- Season Arc, End State tập trước, Dramatic DNA, mạch truyện toàn phim, nhịp dựng gốc.
+
+NHIỆM VỤ: tạo JSON của ĐÚNG MỘT TẬP sao cho video remake GIỐNG HỆT video gốc, CHỈ THAY NHÂN VẬT. Giữ nguyên:
+- câu chuyện, thứ tự shot, hành động, tư thế, vị trí;
+- bối cảnh, đạo cụ, trang phục kiểu dáng;
+- góc máy, cỡ cảnh, chuyển động máy, nhịp cắt;
+- cảm xúc, cường độ, phản ứng, âm thanh và nhạc;
+- thời điểm thoại.
+
+Chỉ thay ba thứ: (1) danh tính nhân vật (người mới theo Bible: tên, gương mặt, ngoại hình); (2) tên gọi trong lời thoại; (3) lời thoại DỊCH sang tiếng Anh tự nhiên, cùng ý, cùng độ dài tương đối.
+
+## QUY TẮC CHUYỂN SHOT → VIDEO
+
+1. Đi lần lượt từng shot "story" của TẬP GỐC, KHÔNG đảo thứ tự, KHÔNG bỏ beat, KHÔNG thêm cảnh mới. Bỏ qua shot có segment_kind credits/preview. Shot recap chỉ giữ nếu nó là một phần câu chuyện của tập này.
+2. Mỗi VIDEO dài từ 4 đến 9 giây. Shot gốc ngắn (2–3s) → GỘP các shot liền nhau vào CÙNG 1 VIDEO, mô tả đổi góc máy bằng "CUT TO:" trong ACTION AND PERFORMANCE, giữ đúng thứ tự và độ dài tương đối của từng nhịp. Shot gốc dài hơn 9s → chia thành nhiều VIDEO cùng shot.
+3. TỔNG duration các VIDEO ≈ tổng thời lượng các shot gốc tương ứng (code kiểm tra). Không kéo dài, không mở đầu bằng nhịp dạo đầu.
+4. THỜI ĐIỂM THOẠI (code kiểm tra): thoại phải vào đúng lúc như gốc. Shot gốc có speech_starts_at_episode_s thì trong VIDEO tương ứng ghi rõ thoại bắt đầu ở giây thứ mấy của clip, bằng (mốc gốc − mốc bắt đầu của VIDEO trong tập). Gốc có thoại ngay giây 1–2 thì VIDEO đầu tiên có thoại ngay trong 0.5–1s đầu clip.
+5. ĐÁNH SỐ SHOT VÀ KHOÁ FRAME:
+   - "shot" là số thứ tự CẢNH LIÊN TỤC: cùng bối cảnh, cùng thời điểm, hành động nối tiếp. Đổi góc máy hay cắt cảnh BÊN TRONG một cảnh liên tục KHÔNG tăng shot; chỉ tăng "clip" (1, 2, 3...). Shot chỉ tăng khi sang bối cảnh khác, nhảy thời gian, hoặc sang hành động không nối tiếp.
+   - Hai VIDEO liền nhau cùng shot là MỘT cảnh quay bị chia: START FRAME của clip sau GIỐNG TỪNG CHỮ với END FRAME của clip trước, gồm nhân vật, tư thế, vị trí, hướng nhìn, đạo cụ trên tay, góc máy và ánh sáng. Code sẽ ghi đè START FRAME bằng END FRAME clip trước. Vì vậy END FRAME phải mô tả CHÍNH XÁC khung hình cuối thật của clip.
+   - Muốn đổi tư thế hay góc máy thì làm TRONG ACTION AND PERFORMANCE của clip (vd "2.0s: she sits up", "CUT TO: close-up"); END FRAME ghi trạng thái SAU khi đổi.
+   KHUNG KHOÁ FRAME — START FRAME và END FRAME luôn viết theo ĐÚNG mẫu 7 trường, bằng tiếng Anh:
+  CHARACTERS: <id + trang phục nhận dạng của từng người trong khung> | POSE: <tư thế từng người: lying/sitting/standing/kneeling + hướng thân> | POSITION: <vị trí từng người trong khung và trong không gian> | GAZE: <hướng nhìn, biểu cảm> | HANDS/PROPS: <tay cầm gì, đạo cụ ở đâu> | CAMERA: <cỡ cảnh, góc, độ cao, hướng máy> | LIGHTING: <ánh sáng>
+6. Giữ nguyên cường độ cảm xúc và phản ứng của shot gốc. Viết biểu cảm thành chi tiết quan sát được (ánh mắt, lông mày, cơ hàm, khoé miệng, nhịp thở), giữ khoảng lặng phản ứng như gốc.
+7. Nhân vật: dùng ĐÚNG id và mô tả ngoại hình của nhân vật MỚI trong Bible (theo source_to_target_map). Không dùng tên, gương mặt hay mô tả nhận dạng của nhân vật gốc. Vai trò, giới tính, độ tuổi, dáng người và trang phục kiểu dáng giữ như gốc.
+8. Bối cảnh và đạo cụ: dùng id và asset_prompt trong Bible, vốn mô tả ĐÚNG bối cảnh và đạo cụ gốc.
+
+## NGÔN NGỮ
+
+Toàn bộ JSON đầu ra bằng tiếng Anh, kể cả asset.prompt, VIDEO.prompt và lời thoại. Không có bất kỳ chữ tiếng Việt hay ký tự có dấu tiếng Việt nào (code kiểm tra). Tên nhân vật đúng tên tiếng Anh/không dấu trong Bible.
+
+## CẤU TRÚC VIDEO.prompt
+
+Mỗi VIDEO.prompt là một chuỗi tiếng Anh, có các nhãn theo đúng thứ tự:
+1. <Picture N> is ...: ánh xạ từng ảnh ref theo đúng thứ tự VIDEO.ref, ví dụ "<Picture 1> is CHAR_ELENA. <Picture 2> is LOC_HOSPITAL_ROOM."
+2. CLIP SPEC: Duration <duration> seconds, 9:16 vertical, <frameRate> fps, realistic cinematic style giống video gốc.
+3. CAST AND VOICE: SPEECH MODE: SPOKEN_DIALOGUE | NO_HUMAN_VOICE; ai trong hình; ai nói, giọng.
+4. START FRAME: theo KHUNG KHOÁ FRAME 7 trường (CHARACTERS | POSE | POSITION | GAZE | HANDS/PROPS | CAMERA | LIGHTING). Clip sau cùng shot: chép nguyên văn END FRAME clip trước.
+5. ACTION AND PERFORMANCE: diễn tiến theo mốc giây trong clip (vd "0.0–1.2s: ..., CUT TO: close-up ..."), biểu cảm cụ thể, phản ứng.
+6. SPEECH: "câu thoại tiếng Anh" — speaker CHAR_..., bắt đầu ở giây X của clip. Không có thoại thì ghi SPEECH: NONE.
+7. SOUND AND EDITING: nhạc và âm thanh như gốc (vào/dâng/dừng, SFX nhấn); thoại nghe rõ, nhạc nhỏ dưới thoại.
+8. END FRAME: khung hình CUỐI THẬT của clip, theo KHUNG KHOÁ FRAME 7 trường — clip sau cùng shot dùng nguyên văn làm START FRAME.
+
+## SCHEMA
+
+Trả về MỘT JSON array phẳng: asset trước (mọi nhân vật, bối cảnh, đạo cụ dùng trong tập), rồi VIDEO theo thứ tự.
+Asset đúng 5 khóa: {"id":string,"type":"CHARACTER"|"LOCATION","ref":[],"prompt":string,"duration":0}.
+VIDEO đúng 9 khóa: {"id":string,"type":"VIDEO","ref":[{"id":string,"type":"CHARACTER"|"LOCATION"}],"prompt":string,"duration":number,"shot":integer,"clip":integer,"aspectRatio":"9:16","frameRate":number}.
+- asset.prompt là mô tả nhận dạng tiếng Anh, tự chứa, để gen ảnh tham chiếu. Nhân vật: ngoại hình người MỚI theo Bible. Bối cảnh/đạo cụ: asset_prompt trong Bible.
+- PROP_/OBJ_ dùng type "CHARACTER" (quy ước loader). Nơi chốn LOC_ dùng type "LOCATION".
+- VIDEO.ref chỉ gồm asset có mặt trong clip, tối đa 9, mọi ref.id phải được khai báo ở phần asset, type khớp chính xác.
+- id VIDEO dạng "VID_01", "VID_02"...; duration là số giây từ 4 đến 9; frameRate = frameRate của TẬP GỐC; aspectRatio "9:16".

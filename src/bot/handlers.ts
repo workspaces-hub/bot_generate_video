@@ -71,6 +71,9 @@ import {
   CONTINUE_FILM_BUTTON_LABEL,
   FILM_TEST_BUTTON_LABEL,
   UPDATE_FILM_COMPARE_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_FAITHFUL_EPISODE_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_FAITHFUL_BIBLE_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_FAITHFUL_BIBLE_EXTEND_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL,
@@ -141,6 +144,9 @@ const SERIES_PROMPT_CONFIG_KEYS = {
   [UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL]: "promptFilmReconstruct",
   [UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL]: "promptFilmAdaptMap",
   [UPDATE_FILM_COMPARE_PROMPT_BUTTON_LABEL]: "promptFilmCompare",
+  [UPDATE_FILM_FAITHFUL_EPISODE_PROMPT_BUTTON_LABEL]: "promptFilmFaithfulEpisode",
+  [UPDATE_FILM_FAITHFUL_BIBLE_PROMPT_BUTTON_LABEL]: "promptFilmFaithfulBible",
+  [UPDATE_FILM_FAITHFUL_BIBLE_EXTEND_PROMPT_BUTTON_LABEL]: "promptFilmFaithfulBibleExtend",
 } as const satisfies Record<string, keyof typeof config>;
 // Mode "updateSeriesPrompt": userId → file prompt series sẽ bị ghi đè.
 const pendingSeriesPromptPath = new Map<number, string>();
@@ -1923,8 +1929,8 @@ async function handleFilmUploadText(ctx: Context, userId: number, text: string, 
   }
   // Test: dòng 1 "xong", dòng 2+ (tuỳ chọn) = yêu cầu riêng của bản remake test.
   const [firstLine, ...restLines] = text.normalize("NFC").split("\n");
-  const testNote =
-    upload.purpose === "test" ? expandStyleNote(restLines.join("\n").trim() || undefined).note : undefined;
+  const testStyle = upload.purpose === "test" ? expandStyleNote(restLines.join("\n").trim() || undefined) : undefined;
+  const testNote = testStyle?.note;
   if (!REFERENCE_VIDEO_DONE_PATTERN.test(upload.purpose === "test" ? firstLine : text)) {
     await ctx.reply(`Đang nhận tập gốc cho phim "${upload.filmId}". ${filmUploadHelp(upload.purpose)}`, {
       reply_parameters: { message_id: messageId },
@@ -1990,6 +1996,7 @@ async function handleFilmUploadText(ctx: Context, userId: number, text: string, 
       filmId: upload.filmId,
       episodes: plan.episodes,
       note: testNote,
+      style: testStyle?.mode ?? "faithful",
       testId: newTestId(),
     });
     return;
@@ -2031,7 +2038,7 @@ async function enqueueFilmRemake(
     return;
   }
   const statusMessage = await reply(
-    `⏳ Phim "${filmId}" → ${plan.isNew ? "bản remake MỚI" : "tạo tiếp bản"} "${plan.name}" tập ${plan.from}–${plan.to}${plan.note ? `\nYêu cầu riêng: ${plan.note}` : ""}...`,
+    `⏳ Phim "${filmId}" → ${plan.isNew ? "bản remake MỚI" : "tạo tiếp bản"} "${plan.name}" tập ${plan.from}–${plan.to}\nChế độ: ${plan.style === "faithful" ? "giống gốc, chỉ thay nhân vật (thoại tiếng Anh)" : "đổi thế giới, giữ chất drama"}${plan.note ? `\nYêu cầu riêng: ${plan.note}` : ""}...`,
   );
   enqueueJob({
     type: "generateScript",
@@ -2055,7 +2062,8 @@ async function enqueueFilmRemake(
 async function handleFilmRemakeRequest(ctx: Context, text: string, promptMessageId: number): Promise<void> {
   const [firstLine, ...rest] = text.normalize("NFC").split("\n");
   // "phương tây"/"phương đông" (1 dòng) → mô tả phong cách đầy đủ, xem stylePresets.ts.
-  const { note } = expandStyleNote(rest.join("\n").trim() || undefined);
+  // Mặc định GIỐNG GỐC (chỉ thay nhân vật); dòng "đổi thế giới" → remake đổi thế giới như cũ.
+  const { note, mode: style } = expandStyleNote(rest.join("\n").trim() || undefined);
   let filmId: string;
   try {
     filmId = await resolveFilmId(firstLine);
@@ -2064,7 +2072,7 @@ async function handleFilmRemakeRequest(ctx: Context, text: string, promptMessage
     await ctx.reply(`❌ ${err.message}`, { reply_parameters: { message_id: promptMessageId }, ...promptMenu });
     return;
   }
-  await enqueueFilmRemake(ctx, filmId, { mode: "new", note }, promptMessageId);
+  await enqueueFilmRemake(ctx, filmId, { mode: "new", note, style }, promptMessageId);
 }
 
 /** "Tạo phim tiếp": tên bản remake (vd sinhton_remake_1) → remake tiếp các tập gốc đã phân tích mà bản đó chưa có. */
@@ -2725,7 +2733,7 @@ export function registerHandlers(bot: Telegraf): void {
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "filmRemake");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gõ tên phim đã phân tích (hoặc tên file <phim>_tham_chieu.json) — bot tạo 1 bản remake MỚI cho toàn bộ tập đã phân tích.\nTuỳ chọn: từ dòng 2 ghi yêu cầu riêng cho bản này — gõ nhanh "phương tây" hoặc "phương đông", hoặc mô tả tự do, vd:\nsinhton\nphương đông\nbối cảnh cổ trang, nữ chính là tiểu thư`,
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên phim đã phân tích (hoặc tên file <phim>_tham_chieu.json) — bot tạo 1 bản remake MỚI cho toàn bộ tập đã phân tích.\nMặc định remake GIỐNG GỐC: giữ nguyên bối cảnh/hành động/góc máy/nhịp, chỉ thay nhân vật, thoại tiếng Anh. Tuỳ chọn từ dòng 2: "đổi thế giới" (remake đổi cả thế giới như cũ), "phương tây"/"phương đông", hoặc mô tả tự do, vd:\nsinhton\nphương đông\nbối cảnh cổ trang, nữ chính là tiểu thư`,
       promptMenu,
     );
   });

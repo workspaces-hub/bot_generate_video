@@ -35,6 +35,9 @@ import {
   buildGlobalOverview,
   buildSourceEpisode,
   checkEpisodeDuration,
+  checkSpeechOnset,
+  FAITHFUL_SERIES_RULES,
+  speechTimeline,
   episodeMapper,
   storyDurationOf,
   FILM_EPISODE_RULES,
@@ -62,6 +65,7 @@ import type {
   SourceClip,
   StoryMemory,
   StoryStructure,
+  RemakeMode,
 } from "./types";
 
 export function filmDirFor(filmId: string): string {
@@ -188,7 +192,9 @@ function remakeDoneUntil(remake: RemakeRecord): number {
 export class FilmPlanError extends Error {}
 
 /** Bản remake: tạo MỚI (kèm yêu cầu riêng) hay TIẾP bản đã có. */
-export type RemakeChoice = { mode: "new"; note?: string } | { mode: "continue"; name: string };
+export type RemakeChoice =
+  | { mode: "new"; note?: string; style?: RemakeMode }
+  | { mode: "continue"; name: string };
 
 /** Số clip ĐẦU manifest đã phân tích xong (các đợt đã xong đứng liền từ đầu phim). */
 function analyzedClipCount(record: FilmRecord | null): number {
@@ -589,6 +595,8 @@ export interface RemakePlan {
   name: string;
   isNew: boolean;
   note?: string;
+  /** Chế độ remake: giống gốc (mặc định) hoặc đổi thế giới. */
+  style: RemakeMode;
   from: number;
   to: number;
 }
@@ -628,7 +636,7 @@ export async function planFilmRemake(filmId: string, choice: RemakeChoice, sugge
   }
   if (choice.mode === "new") {
     const version = Math.max(remakeVersion(suggestedNewName), ...record.remakes.map((r) => remakeVersion(r.name) + 1), 1);
-    return { name: `${filmId}_remake_${version}`, isNew: true, note: choice.note, from: analyzed[0], to: last };
+    return { name: `${filmId}_remake_${version}`, isNew: true, note: choice.note, style: choice.style ?? "faithful", from: analyzed[0], to: last };
   }
   const remake = record.remakes.find((r) => r.name.toLowerCase() === choice.name.toLowerCase());
   if (!remake) throw new FilmPlanError(`Phim "${filmId}" không có bản remake "${choice.name}".`);
@@ -646,7 +654,7 @@ export async function planFilmRemake(filmId: string, choice: RemakeChoice, sugge
       `Bản "${remake.name}" đã remake tới tập ${doneUntil} = tập gốc cuối đã phân tích.${pendingSource ? " Có tập gốc chưa phân tích xong — chạy lại" : " Muốn thêm tập: gửi tập gốc mới qua"} nút "Phân tích phim gốc" rồi quay lại "Tạo phim tiếp".`,
     );
   }
-  return { name: remake.name, isNew: false, note: remake.note, from: unfinished?.firstEpisode ?? pending[0], to: last };
+  return { name: remake.name, isNew: false, note: remake.note, style: remake.mode ?? "transform", from: unfinished?.firstEpisode ?? pending[0], to: last };
 }
 
 /** Tình trạng phim cho bot trả lời. */
@@ -777,6 +785,11 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
   const analyzed = await analyzedClipsOf(filmId, record);
   const manifest = analyzed.map((a) => a.clip);
   const clipByEpisode = new Map(analyzed.map((a) => [a.episode, a.clip]));
+  // Thoại có mốc thời gian (Whisper) — để tập remake cho thoại vào đúng lúc như gốc.
+  const transcripts = new Map<string, ClipTranscript | null>();
+  for (const c of manifest) {
+    transcripts.set(c.clipId, await readJson<ClipTranscript>(path.join(dir, "transcripts", `${c.clipId}.json`)));
+  }
   const memory = (await readJson<StoryMemory>(path.join(dir, "story_memory.json")))!;
   const timeline = (await readJson<GlobalTimeline>(path.join(dir, "timeline.json")))!;
   const structures = await loadStructures(dir, record.sourceBatches.filter((b) => b.analyzed));
@@ -785,7 +798,7 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
 
   let remake = record.remakes.find((r) => r.name === plan.name);
   if (!remake) {
-    remake = { name: plan.name, createdAt: new Date().toISOString(), note: plan.note, numbering: "source", batches: [] };
+    remake = { name: plan.name, createdAt: new Date().toISOString(), note: plan.note, numbering: "source", mode: plan.style, batches: [] };
     record.remakes.push(remake);
     await writeJson(recordPath, record);
   }
@@ -821,7 +834,7 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
     const series = await generateSeriesWithGemini({
       jobId,
       referenceFileNames: chunkClips.map((c) => `${filmId}_${c.clipId}`),
-      sourceEpisodes: chunkClips.map((c) => buildSourceEpisode(c, timeline, memory)),
+      sourceEpisodes: chunkClips.map((c) => buildSourceEpisode(c, timeline, memory, transcripts.get(c.clipId))),
       globalContext: {
         overview: `${buildGlobalOverview(memory, structures, adaptationMap, episodeOf)}${noteSection}`,
         episode: (tap) => buildEpisodeContext(clipByEpisode.get(tap)!.clipId, memory, structures, adaptationMap, episodeOf, timeline),
@@ -834,9 +847,25 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
       previousEpisode: doneUntil,
       // Flow phim không chạy QA — viết xong tập là gửi JSON.
       skipQa: true,
+      // Giống gốc (mặc định): bộ prompt riêng — chỉ thay nhân vật, giữ nguyên mọi thứ khác.
+      ...(plan.style === "faithful"
+        ? {
+            prompts: {
+              bible: config.promptFilmFaithfulBible,
+              bibleExtend: config.promptFilmFaithfulBibleExtend,
+              episode: config.promptFilmFaithfulEpisode,
+            },
+            episodeRules: FAITHFUL_SERIES_RULES,
+          }
+        : {}),
       // Tổng thời lượng tập remake phải gần tập gốc (lệch → Gemini viết lại kèm lỗi).
-      checkEpisode: (tap, value) =>
-        checkEpisodeDuration(value, storyDurationOf(clipByEpisode.get(tap)!.clipId, timeline, memory)),
+      checkEpisode: (tap, value) => {
+        const clip = clipByEpisode.get(tap)!;
+        return [
+          ...checkEpisodeDuration(value, storyDurationOf(clip.clipId, timeline, memory)),
+          ...checkSpeechOnset(value, speechTimeline(clip, timeline, memory, transcripts.get(clip.clipId))[0]?.start ?? null),
+        ];
+      },
       filmId,
       onStatus,
     });

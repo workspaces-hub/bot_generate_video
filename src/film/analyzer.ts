@@ -49,7 +49,10 @@ export function buildAnalyzeContext(
     gapNote,
     jsonSection(`SHOT LIST (${segs.length} segment — mô tả ĐỦ TẤT CẢ, tham chiếu bằng seg_id)`, shotList),
     transcript?.available && transcript.lines.length > 0
-      ? jsonSection("THOẠI NHẬN DẠNG TỰ ĐỘNG (Whisper — có thể sai chữ, đối chiếu với âm thanh; người nói tự xác định)", transcript.lines)
+      ? jsonSection(
+          "THOẠI NHẬN DẠNG TỰ ĐỘNG (Whisper — có thể sai chữ, đối chiếu với âm thanh; người nói tự xác định)",
+          transcript.lines.map((l) => ({ segId: l.segId, text: l.text })),
+        )
       : "\n\n## THOẠI\nKhông có bản nhận dạng tự động — tự nghe thoại trong video.",
     memory.analyzed_clips.length > 0
       ? jsonSection("STORY MEMORY HIỆN TẠI (các clip trước — DÙNG LẠI id đã có cho cùng nhân vật/đạo cụ/bối cảnh)", compactMemory(memory))

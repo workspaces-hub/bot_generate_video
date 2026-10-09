@@ -28,6 +28,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "../config";
 import { askGemini } from "./geminiAI";
+import { getPromptSection, lockContinuousFrames } from "./frameLock";
 
 export interface SeriesGenerationOptions {
   jobId: string;
@@ -78,6 +79,12 @@ export interface SeriesGenerationOptions {
    * bản cuối (cảnh báo trong log).
    */
   checkEpisode?: (tap: number, value: unknown) => string[];
+  /**
+   * "Remake phim" chế độ giống gốc: thay master prompt Bible / Bible mở rộng /
+   * tạo tập và quy tắc series (mặc định là bộ prompt đổi thế giới).
+   */
+  prompts?: { bible?: string; bibleExtend?: string; episode?: string };
+  episodeRules?: string;
   onStatus?: (text: string) => Promise<void>;
 }
 
@@ -209,6 +216,49 @@ function vietnameseTextIssues(episode: unknown): string[] {
     if (words.length > 0) {
       issues.push(`${String(entry.id)}: có chữ tiếng Việt (${words.join(", ")}) — prompt, lời thoại và TÊN nhân vật phải bằng tiếng Anh/tên không phải tiếng Việt, đúng tên trong Series Bible.`);
     }
+  }
+  return issues;
+}
+
+/** Nhóm tư thế đọc từ mô tả khung hình (tiếng Anh). */
+const POSTURES: [string, RegExp][] = [
+  ["nằm", /\b(lying|lies|lay|laid|sprawled|collapsed on|reclin\w*|on (?:her|his|their) back|face[- ]down)\b/i],
+  ["ngồi", /\b(sitting|sits|seated|sat)\b/i],
+  ["quỳ", /\b(kneeling|kneels|knelt|on (?:her|his|their) knees)\b/i],
+  ["đứng", /\b(standing|stands|stood|upright|on (?:her|his|their) feet)\b/i],
+];
+
+function postureSet(text: string): Set<string> {
+  return new Set(POSTURES.filter(([, re]) => re.test(text)).map(([name]) => name));
+}
+
+/**
+ * Liền mạch tư thế giữa 2 VIDEO kề nhau (cùng shot, hoặc cùng bối cảnh + nhân
+ * vật): END FRAME clip trước và START FRAME clip sau không được đổi tư thế —
+ * xác nhận qua lỗi thật (iop_remake_1_tap11): cuối clip trước nhân vật nằm,
+ * đầu clip sau lại đứng.
+ */
+export function continuityIssues(episode: unknown): string[] {
+  const videos = (Array.isArray(episode) ? episode : []).filter(
+    (e): e is Record<string, unknown> => isRecord(e) && e.type === "VIDEO" && typeof e.prompt === "string",
+  );
+  const refIds = (v: Record<string, unknown>, type: string) =>
+    new Set((Array.isArray(v.ref) ? v.ref : []).filter((r) => isRecord(r) && r.type === type).map((r) => String((r as Record<string, unknown>).id)));
+  const issues: string[] = [];
+  for (let i = 1; i < videos.length; i++) {
+    const [a, b] = [videos[i - 1], videos[i]];
+    const sameShot = Number(a.shot) === Number(b.shot);
+    const locA = refIds(a, "LOCATION");
+    const sameScene =
+      [...refIds(b, "LOCATION")].some((id) => locA.has(id)) &&
+      [...refIds(b, "CHARACTER")].some((id) => refIds(a, "CHARACTER").has(id));
+    if (!sameShot && !sameScene) continue;
+    const end = postureSet(getPromptSection(String(a.prompt), "END FRAME") ?? "");
+    const start = postureSet(getPromptSection(String(b.prompt), "START FRAME") ?? "");
+    if (end.size === 0 || start.size === 0 || [...end].some((p) => start.has(p))) continue;
+    issues.push(
+      `${String(a.id)} → ${String(b.id)}: END FRAME nhân vật đang ${[...end].join("/")} nhưng START FRAME clip sau lại ${[...start].join("/")} — clip sau phải bắt đầu ĐÚNG tư thế/vị trí cuối clip trước (chép nguyên END FRAME sang START FRAME), muốn đổi tư thế thì cho nhân vật đổi trong ACTION.`,
+    );
   }
   return issues;
 }
@@ -629,7 +679,7 @@ export async function generateSeriesWithGemini(
       jobId,
       name: "bible",
       label: `[2/5] Tạo Series Bible`,
-      promptPath: config.promptSeriesBible,
+      promptPath: opts.prompts?.bible ?? config.promptSeriesBible,
       input: `${scope}${dnaInput}${sourceAssets}${globalOverview}`,
       outPath: biblePath,
       protectedNames,
@@ -655,7 +705,7 @@ export async function generateSeriesWithGemini(
       jobId,
       name: `bible_ext_tap${start}`,
       label: `[2/5] Mở rộng Series Bible cho tập ${start}–${end}`,
-      promptPath: config.promptSeriesBibleExtend,
+      promptPath: opts.prompts?.bibleExtend ?? config.promptSeriesBibleExtend,
       input: `${scope}${jsonSection("SERIES BIBLE ĐÃ KHÓA", lockedBible)}${previousEndState}${dnaInput}${sourceAssets}${globalOverview}`,
       outPath: path.join(seriesDir, `bible_ext_tap${start}.json`),
       protectedNames,
@@ -713,7 +763,7 @@ export async function generateSeriesWithGemini(
   });
 
   // 4. Từng tập + Continuity Ledger.
-  const masterPrompt = await fsp.readFile(config.promptGenerateScriptEpisode, "utf-8");
+  const masterPrompt = await fsp.readFile(opts.prompts?.episode ?? config.promptGenerateScriptEpisode, "utf-8");
   const durationRange = parseDurationRange(masterPrompt);
   const assetLedger = new Map<string, unknown>();
   // id lấy từ Bible (bản nháp) — tập đã viết khai báo asset cùng id thì bản
@@ -765,7 +815,7 @@ export async function generateSeriesWithGemini(
       const sections = [
         masterPrompt,
         `\n\n## VỊ TRÍ TRONG BỘ PHIM\nĐây là TẬP ${tap} của bộ phim mới.`,
-        `\n\n${SERIES_EPISODE_RULES}`,
+        `\n\n${opts.episodeRules ?? SERIES_EPISODE_RULES}`,
         jsonSection("TARGET SERIES BIBLE (đã khóa)", bible),
         jsonSection(`SEASON ARC — TẬP ${tap}`, arcEntry(arc, tap, index)),
       ];
@@ -822,11 +872,18 @@ export async function generateSeriesWithGemini(
             if (!produced) throw new Error("Gemini không trả về file JSON nào.");
             const content = await fsp.readFile(produced, "utf-8");
             const repaired = repairAssetRefs(JSON.parse(content), assetLedger);
+            // KHOÁ FRAME: clip liền mạch (cùng shot, clip kế tiếp) — START FRAME = đúng END FRAME clip trước.
+            const locked = Array.isArray(repaired.value) ? lockContinuousFrames(repaired.value) : [];
+            if (locked.length > 0) console.log(`[series] (${jobId}) tập ${tap}: khoá START FRAME = END FRAME clip trước cho ${locked.join(", ")}`);
             const repairedContent = JSON.stringify(repaired.value, null, 2);
             if (repaired.autoAdded.length > 0) {
               console.log(`[series] (${jobId}) tập ${tap}: tự bổ sung asset từ các tập trước: ${repaired.autoAdded.join(", ")}`);
             }
-            const checkErrors = [...vietnameseTextIssues(repaired.value), ...(opts.checkEpisode?.(tap, repaired.value) ?? [])];
+            const checkErrors = [
+              ...vietnameseTextIssues(repaired.value),
+              ...continuityIssues(repaired.value),
+              ...(opts.checkEpisode?.(tap, repaired.value) ?? []),
+            ];
             if (repaired.missing.length === 0 && checkErrors.length === 0) {
               await fsp.writeFile(checkpointPath, repairedContent, "utf-8");
             } else {

@@ -78,6 +78,9 @@ export interface GlobalTimeline {
 export interface TranscriptLine {
   segId: string;
   text: string;
+  /** Mốc câu thoại trong FILE clip (giây) — chỉ dùng cho người viết remake/kiểm tra nhịp thoại, không gửi bước phân tích. */
+  start?: number;
+  end?: number;
 }
 
 export interface ClipTranscript {
@@ -300,6 +303,8 @@ export interface SourceBatch {
   analyzed: boolean;
 }
 
+export type RemakeMode = "faithful" | "transform";
+
 /** 1 đợt tập của 1 bản remake (Stage 6–7). */
 export interface RemakeBatch {
   firstEpisode: number;
@@ -320,6 +325,12 @@ export interface RemakeRecord {
    * phân tích — không tạo tiếp được (lệch số với cách mới).
    */
   numbering?: "source";
+  /**
+   * "faithful" (mặc định từ nay): video remake GIỐNG GỐC — giữ bối cảnh/hành
+   * động/góc máy/nhịp, chỉ thay nhân vật, thoại dịch tiếng Anh. "transform":
+   * đổi cả thế giới, giữ chất drama. Không có = bản cũ (transform).
+   */
+  mode?: RemakeMode;
   batches: RemakeBatch[];
 }
 

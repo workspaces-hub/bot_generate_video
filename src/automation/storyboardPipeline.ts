@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { getPromptSection, isContinuation, setPromptSection } from "./frameLock";
 import { config } from "../config";
 import { generateReferenceImage } from "./chatAIImage";
 import { generateVideo, type GenerateVideoOptions } from "./aiVideo";
@@ -2100,6 +2103,34 @@ const COMFYUI_DEFAULT_DURATION_SECONDS = 5;
  * 3. Lưu lại "comfyPromptId" (prompt_id ComfyUI) vào entry — cùng lý do với
  *    "polloResultId" ở generateVideosForFilePollo.
  */
+const execFileAsync = promisify(execFile);
+
+/**
+ * Frame cuối của clip NGAY TRƯỚC trong cùng shot (shot bằng nhau, clip = clip
+ * trước + 1) đã gen xong — cắt bằng ffmpeg ra <id>_continuity.png. Không có
+ * (clip đầu shot, clip trước chưa gen) → null.
+ */
+async function previousClipLastFrame(
+  entry: StoryboardEntry,
+  allVideos: StoryboardEntry[],
+  outputDir: string,
+): Promise<{ framePath: string; previousId: string } | null> {
+  const index = allVideos.indexOf(entry);
+  const prev = index > 0 ? allVideos[index - 1] : undefined;
+  if (!prev?.id || !entry.id) return null;
+  if (!isContinuation(prev, entry)) return null;
+  const prevVideo = path.join(outputDir, `${sanitizeId(prev.id)}.mp4`);
+  if (!fs.existsSync(prevVideo)) return null;
+  const framePath = path.join(outputDir, `${sanitizeId(entry.id)}_continuity.png`);
+  try {
+    await execFileAsync("ffmpeg", ["-y", "-loglevel", "error", "-sseof", "-0.3", "-i", prevVideo, "-frames:v", "1", "-update", "1", framePath]);
+    return fs.existsSync(framePath) ? { framePath, previousId: prev.id } : null;
+  } catch (err) {
+    console.warn(`[storyboardPipeline] Không cắt được frame cuối của ${prev.id}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 export async function generateVideosForFileComfyUI(
   inputPath: string,
   onEntryDone?: (filePath: string) => Promise<void>,
@@ -2141,6 +2172,9 @@ export async function generateVideosForFileComfyUI(
   let failed = 0;
   const failedEntries: FailedEntry[] = [];
   const jsonBaseName = path.basename(inputPath, path.extname(inputPath));
+  // Thứ tự VIDEO đầy đủ (kể cả entry đã xong/không nằm trong onlyEntryIds) —
+  // để tìm clip ngay trước trong cùng shot khi nối frame cuối.
+  const allVideos = entries.filter((e) => e.type === "VIDEO");
   for (const entry of targets) {
     if (isStopStoryboardRequested(inputPath)) break;
     if (entry?.success) continue;
@@ -2164,6 +2198,29 @@ export async function generateVideosForFileComfyUI(
       const refPaths: string[] = [];
       for (const ref of refs) {
         refPaths.push(await resolveRefImagePath(imageDir, sanitizeId(ref.id)));
+      }
+
+      // NỐI FRAME CUỐI: clip sau trong CÙNG shot nhận frame cuối của clip
+      // trước làm ảnh tham chiếu thêm + chỉ dẫn bắt đầu đúng từ đó — xác nhận
+      // qua lỗi thật (iop_remake_1_tap11): cuối clip trước nhân vật đang nằm,
+      // đầu clip sau lại đứng (mỗi clip gen độc lập, model không biết tư thế cuối).
+      // KHOÁ FRAME lúc gen (kể cả JSON cũ): clip liền mạch → START FRAME = đúng
+      // END FRAME clip trước; lưu lại vào JSON để thấy prompt thật đã gen.
+      const prevVideo = allVideos[allVideos.indexOf(entry) - 1];
+      if (prevVideo && typeof prevVideo.prompt === "string" && isContinuation(prevVideo, entry)) {
+        const prevEnd = getPromptSection(prevVideo.prompt, "END FRAME");
+        if (prevEnd && getPromptSection(entry.prompt, "START FRAME")?.replace(/\s+/g, " ") !== prevEnd.replace(/\s+/g, " ")) {
+          entry.prompt = setPromptSection(entry.prompt, "START FRAME", prevEnd);
+          console.log(`[storyboardPipeline] [VIDEO] ${entry.id} — khoá START FRAME = END FRAME của ${prevVideo.id}`);
+        }
+      }
+      let prompt = entry.prompt;
+      const continuity = config.comfyUIChainLastFrame
+        ? await previousClipLastFrame(entry, allVideos, outputDir)
+        : null;
+      if (continuity && refPaths.length < MAX_MINIMAX_H3_REFERENCE_IMAGES) {
+        refPaths.push(continuity.framePath);
+        prompt = `${prompt}\nCONTINUITY FRAME: <Picture ${refPaths.length}> is the exact final frame of the previous clip (${continuity.previousId}) in this same shot. The first frame of this clip MUST continue directly from <Picture ${refPaths.length}>: identical body poses (lying/sitting/standing/kneeling), positions, framing, lighting, wardrobe and props in hand. Do not reset or change any character's pose at the cut.`;
       }
 
       // SỬA (theo yêu cầu người dùng): làm tròn LÊN (Math.ceil, vd 2.1 → 3)
@@ -2204,7 +2261,7 @@ export async function generateVideosForFileComfyUI(
           refPaths.length > 0
             ? generateVideoComfyMiniMaxH3(
                 refPaths,
-                entry.prompt!,
+                prompt,
                 duration,
                 jobId,
                 aspectRatio,
@@ -2213,7 +2270,7 @@ export async function generateVideosForFileComfyUI(
                 frameRate,
               )
             : generateVideoComfyMiniMaxH3TextToVideo(
-                entry.prompt!,
+                prompt,
                 duration,
                 jobId,
                 aspectRatio,

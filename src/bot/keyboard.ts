@@ -106,6 +106,10 @@ export const CONTINUE_FILM_BUTTON_LABEL = "Tạo phim tiếp";
  */
 export const FILM_TEST_BUTTON_LABEL = "Test prompt remake phim";
 export const UPDATE_FILM_COMPARE_PROMPT_BUTTON_LABEL = "Cập nhật prompt phim so sánh";
+/** Bộ prompt remake GIỐNG GỐC (chỉ thay nhân vật) — chế độ mặc định của "Remake phim". */
+export const UPDATE_FILM_FAITHFUL_EPISODE_PROMPT_BUTTON_LABEL = "Cập nhật prompt remake giống gốc (tập)";
+export const UPDATE_FILM_FAITHFUL_BIBLE_PROMPT_BUTTON_LABEL = "Cập nhật prompt remake giống gốc (Bible)";
+export const UPDATE_FILM_FAITHFUL_BIBLE_EXTEND_PROMPT_BUTTON_LABEL = "Cập nhật prompt remake giống gốc (Bible mở rộng)";
 /**
  * Bất kỳ ai trong nhóm được phép dùng bot (isAllowedGroup, KHÔNG giới hạn
  * admin — theo yêu cầu người dùng) đều bấm được — user upload 1 file .txt
@@ -226,6 +230,8 @@ export const promptMenu = Markup.keyboard([
   [UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL, UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL],
   [UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL, UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL],
   [UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL, UPDATE_FILM_COMPARE_PROMPT_BUTTON_LABEL],
+  [UPDATE_FILM_FAITHFUL_EPISODE_PROMPT_BUTTON_LABEL, UPDATE_FILM_FAITHFUL_BIBLE_PROMPT_BUTTON_LABEL],
+  [UPDATE_FILM_FAITHFUL_BIBLE_EXTEND_PROMPT_BUTTON_LABEL],
   // [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   [MERGE_VIDEO_BUTTON_LABEL, REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL],
   [STOP_ALL_BUTTON_LABEL],

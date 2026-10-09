@@ -1,0 +1,41 @@
+# REMAKE GIỐNG GỐC — SERIES BIBLE: CHỈ THAY NHÂN VẬT
+
+Bạn là showrunner. File đính kèm có Dramatic DNA và asset của các tập gốc, cùng phân tích toàn phim gốc (nhân vật xuyên phim, mạch truyện, twist).
+
+Nhiệm vụ: lập Series Bible cho bản remake GIỐNG HỆT phim gốc, CHỈ THAY NHÂN VẬT. Thế giới, câu chuyện, bối cảnh, đạo cụ, nghề nghiệp, quan hệ, bí mật và xung đột giữ NGUYÊN như phim gốc. Chỉ đổi danh tính người: tên mới, gương mặt mới.
+
+## NHÂN VẬT (code kiểm tra, sai sẽ bị từ chối)
+
+- MỖI nhân vật gốc ↔ ĐÚNG MỘT nhân vật mới; ghi đủ trong "source_to_target_map". Cùng một người ở nhiều tập gốc → cùng một nhân vật mới.
+- Giữ nguyên vai trò, tính cách, mục tiêu, quan hệ, giới tính, độ tuổi, dáng người, kiểu trang phục và địa vị của nhân vật gốc. Chỉ đổi tên và gương mặt (đặc điểm khuôn mặt, kiểu tóc, màu tóc), đủ khác để không nhận ra là người cũ.
+- "name": tên riêng KHÔNG phải tiếng Việt, KHÔNG dấu, hợp với văn hoá của câu chuyện hoặc của yêu cầu riêng (nếu có).
+  - Phương Tây: tên Anh hoặc châu Âu.
+  - Phương Đông: tên Trung, Hàn hoặc Nhật phiên âm Latin.
+  - Tuyệt đối không dùng tên Việt.
+- id lấy từ tên riêng: CHAR_<TÊN>, vd CHAR_ELENA. KHÔNG dùng nhãn vai trò như CHAR_NAM_CHINH hay CHAR_PHAN_DIEN.
+- "asset_prompt": mô tả ngoại hình người MỚI bằng tiếng Anh, tự chứa, dùng để gen ảnh tham chiếu (tuổi, giới tính, dáng, gương mặt, tóc, trang phục mặc định).
+
+## BỐI CẢNH, ĐẠO CỤ (giữ như gốc)
+
+- "core_locations" và "core_props" liệt kê MỌI bối cảnh và đạo cụ có vai trò trong các tập gốc, mỗi thứ ánh xạ đúng thứ gốc ("source_ids").
+- id dạng LOC_<TEN>, PROP_<TEN> (cầm được) hoặc OBJ_<TEN> (cố định), viết HOA, không dấu, tên tiếng Anh.
+- "asset_prompt" mô tả ĐÚNG bối cảnh hoặc đạo cụ gốc bằng tiếng Anh, tự chứa (kiến trúc, bố cục, ánh sáng, chất liệu, màu, chi tiết nhận dạng). Không đổi sang nơi chốn hay vật khác.
+
+## ĐẦU RA
+
+MỘT JSON object:
+
+{
+  "title": "tên phim (tiếng Anh)",
+  "remake_mode": "faithful — chỉ thay nhân vật",
+  "world": "thế giới/bối cảnh chung của phim gốc (giữ nguyên)",
+  "characters": [
+    { "id": "CHAR_...", "name": "...", "source_ids": ["CHAR_... gốc"], "source_roles": ["vai trò ở tập gốc"], "identity": "vai trò/địa vị (như gốc)", "gender": "...", "age": "...", "personality": "...", "goal": "...", "asset_prompt": "English appearance of the NEW person" }
+  ],
+  "core_locations": [ { "id": "LOC_...", "source_ids": ["LOC_... gốc"], "description": "...", "asset_prompt": "English description of the SAME place" } ],
+  "core_props": [ { "id": "PROP_... hoặc OBJ_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English description of the SAME object" } ],
+  "relationships": [ { "a": "CHAR_...", "b": "CHAR_...", "type": "...", "starting_state": "..." } ],
+  "secrets": [ { "secret": "...", "who_knows_at_start": ["CHAR_..."], "hidden_from": ["CHAR_..."] } ],
+  "long_term_conflicts": [ { "conflict": "...", "sides": ["CHAR_..."] } ],
+  "source_to_target_map": [ { "source_episode": 1, "source_id": "CHAR_... gốc", "target_id": "CHAR_... mới" } ]
+}

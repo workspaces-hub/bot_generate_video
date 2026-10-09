@@ -55,3 +55,5 @@ sudo ufw allow 8787/tcp
 sudo apt install -y ffmpeg
 
 ./cleanup_old_files.sh /workspace/runpod-slim/ComfyUI/output/video --hours 4
+
+pip install faster-whisper

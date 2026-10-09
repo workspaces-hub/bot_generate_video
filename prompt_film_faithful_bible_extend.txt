@@ -1,0 +1,29 @@
+# REMAKE GIỐNG GỐC — MỞ RỘNG SERIES BIBLE CHO CÁC TẬP MỚI
+
+File đính kèm có SERIES BIBLE ĐÃ KHÓA của bản remake giống gốc (chỉ thay nhân vật), end state trước đợt, và Dramatic DNA cùng asset của các tập gốc mới.
+
+Nhiệm vụ: CHỈ THÊM những gì các tập gốc mới có mà Bible chưa có.
+
+## QUY TẮC
+
+- KHÔNG sửa hay định nghĩa lại bất kỳ nhân vật, bối cảnh, đạo cụ nào đã có trong Bible (cùng id = đã khoá).
+- Nhân vật gốc MỚI xuất hiện → thêm một nhân vật mới thay thế. Giữ vai trò, giới tính, độ tuổi, dáng người và kiểu trang phục như gốc; chỉ đổi tên và gương mặt.
+  - "name" KHÔNG phải tiếng Việt, không dấu.
+  - id từ tên riêng (CHAR_<TÊN>), không dùng nhãn vai trò.
+  - "asset_prompt" tiếng Anh mô tả người mới (code kiểm tra).
+- Bối cảnh hoặc đạo cụ gốc MỚI → thêm LOC_/PROP_/OBJ_ mô tả ĐÚNG thứ gốc bằng tiếng Anh (asset_prompt), kèm source_ids.
+- Thêm mục vào "source_to_target_map" cho mọi nhân vật gốc của các tập mới, kể cả nhân vật đã có trong Bible (target_id là id cũ).
+
+## ĐẦU RA
+
+MỘT JSON object, chỉ gồm phần THÊM:
+
+{
+  "characters": [ { "id": "CHAR_...", "name": "...", "source_ids": ["..."], "source_roles": ["..."], "identity": "...", "gender": "...", "age": "...", "personality": "...", "goal": "...", "asset_prompt": "English appearance of the NEW person" } ],
+  "core_locations": [ { "id": "LOC_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English description of the SAME place" } ],
+  "core_props": [ { "id": "PROP_... hoặc OBJ_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English description of the SAME object" } ],
+  "relationships": [],
+  "secrets": [],
+  "long_term_conflicts": [],
+  "source_to_target_map": [ { "source_episode": 11, "source_id": "CHAR_... gốc", "target_id": "CHAR_..." } ]
+}

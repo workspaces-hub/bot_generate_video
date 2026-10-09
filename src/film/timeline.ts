@@ -362,7 +362,8 @@ export async function transcribeClip(clip: SourceClip, tl: GlobalTimeline): Prom
   const lines = result.segments.flatMap((line) => {
     const mid = (line.start + line.end) / 2;
     const seg = own.find((s) => mid >= s.localStart && mid < s.localEnd);
-    return seg ? [{ segId: seg.segId, text: line.text }] : []; // ngoài segment = nằm trong phần trim đầu
+    // ngoài segment = nằm trong phần trim đầu
+    return seg ? [{ segId: seg.segId, text: line.text, start: round3(line.start), end: round3(line.end) }] : [];
   });
   return { clipId: clip.clipId, available: result.available, language: result.language, lines };
 }

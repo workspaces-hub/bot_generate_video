@@ -7,7 +7,7 @@
  *   nào đổi nghĩa tập trước, ai biết gì tới đâu.
  * Mỗi clip nguồn = 1 tập (tập N ↔ clip thứ N của manifest).
  */
-import type { AdaptationMap, GlobalTimeline, SourceClip, StoryMemory, StoryStructure } from "./types";
+import type { AdaptationMap, ClipTranscript, GlobalTimeline, SourceClip, StoryMemory, StoryStructure } from "./types";
 import { jsonSection } from "./llm";
 
 export type EpisodeOf = (clipId: string | undefined) => number | undefined;
@@ -24,7 +24,36 @@ function targetFrameRate(fps: number): number {
   return rounded > 0 ? rounded : 24;
 }
 
-export function buildSourceEpisode(clip: SourceClip, tl: GlobalTimeline, memory: StoryMemory): string {
+/**
+ * Mốc có thoại trong TẬP GỐC (giây tính từ đầu tập, sau phần trim đầu): theo
+ * Whisper (mốc thật từng câu) nếu có, không thì theo đầu segment có dialogue.
+ */
+export function speechTimeline(
+  clip: SourceClip,
+  tl: GlobalTimeline,
+  memory: StoryMemory,
+  transcript?: ClipTranscript | null,
+): { segId: string; start: number; text: string }[] {
+  const trim = tl.clips.find((c) => c.clipId === clip.clipId)?.trimHead ?? 0;
+  const timed = (transcript?.lines ?? []).filter((l) => typeof l.start === "number");
+  if (timed.length > 0) return timed.map((l) => ({ segId: l.segId, start: round1(Math.max(0, l.start! - trim)), text: l.text }));
+  const segById = new Map(tl.segments.map((s) => [s.segId, s]));
+  return (memory.clips.find((c) => c.clip_id === clip.clipId)?.segments ?? [])
+    .filter((s) => s.kind === "story" && s.dialogue.length > 0)
+    .map((s) => ({ segId: s.id, start: round1(Math.max(0, (segById.get(s.id)?.localStart ?? 0) - trim)), text: s.dialogue.map((d) => d.text).join(" ") }));
+}
+
+export function buildSourceEpisode(
+  clip: SourceClip,
+  tl: GlobalTimeline,
+  memory: StoryMemory,
+  transcript?: ClipTranscript | null,
+): string {
+  const trim = tl.clips.find((c) => c.clipId === clip.clipId)?.trimHead ?? 0;
+  const speechBySeg = new Map<string, number>();
+  for (const line of speechTimeline(clip, tl, memory, transcript)) {
+    if (!speechBySeg.has(line.segId)) speechBySeg.set(line.segId, line.start);
+  }
   const record = memory.clips.find((c) => c.clip_id === clip.clipId);
   if (!record) throw new Error(`Clip ${clip.clipId} chưa được phân tích.`);
   const segById = new Map(tl.segments.map((s) => [s.segId, s]));
@@ -49,6 +78,9 @@ export function buildSourceEpisode(clip: SourceClip, tl: GlobalTimeline, memory:
       segment_kind: s.kind,
       duration: Math.round((seg.localEnd - seg.localStart) * 10) / 10,
       frameRate: fps,
+      // Vị trí shot trong tập gốc + lúc thoại bắt đầu — remake phải cho thoại vào ĐÚNG lúc này.
+      episode_time_s: `${round1(seg.localStart - trim)}–${round1(seg.localEnd - trim)}`,
+      ...(speechBySeg.has(s.id) ? { speech_starts_at_episode_s: speechBySeg.get(s.id) } : {}),
       prompt: [
         s.location ? `LOCATION: ${s.location}.` : "",
         s.characters.length ? `CHARACTERS: ${s.characters.join(", ")}.` : "",
@@ -124,6 +156,34 @@ export function storyDurationOf(clipId: string, tl: GlobalTimeline, memory: Stor
  * (xác nhận qua so sánh video thật: tập gốc 26.7s → remake 8 VIDEO 42s, mỗi
  * câu thoại 1 VIDEO ≥4.5s → mọi điểm hook/payoff/cliffhanger trễ ~1.6×).
  */
+/** Có thoại nói thành lời trong VIDEO.prompt (SPEECH: "..."). */
+function hasSpokenLine(prompt: string): boolean {
+  return /SPEECH:\s*["“']/.test(prompt) && !/SPEECH MODE:\s*(NO_HUMAN_VOICE|NONE|INTERNAL)/i.test(prompt);
+}
+
+/**
+ * Thoại đầu tiên của remake phải vào gần lúc tập gốc có thoại — xác nhận qua
+ * lỗi thật (iop_remake_1_tap11): gốc nói ở giây 1–2, remake 4–5s mới có thoại.
+ * Đo ở mức VIDEO: mốc bắt đầu của VIDEO đầu tiên có thoại.
+ */
+export function checkSpeechOnset(value: unknown, sourceFirstSpeech: number | null): string[] {
+  if (!Array.isArray(value) || sourceFirstSpeech === null) return [];
+  const videos = value.filter((e) => e && typeof e === "object" && (e as { type?: string }).type === "VIDEO") as { id?: string; duration?: number; prompt?: string }[];
+  let t = 0;
+  for (const v of videos) {
+    if (hasSpokenLine(String(v.prompt ?? ""))) {
+      if (t > sourceFirstSpeech + 2) {
+        return [
+          `Thoại đầu tiên của remake nằm ở ${v.id} bắt đầu từ giây ${round1(t)}, trong khi tập gốc có thoại từ giây ${sourceFirstSpeech} — đưa thoại vào sớm như gốc: VIDEO đầu có thoại ngay (trong 0.5–1s đầu clip), không mở bằng clip chỉ có hình/không khí.`,
+        ];
+      }
+      return [];
+    }
+    t += Number(v.duration) || 0;
+  }
+  return [];
+}
+
 export function checkEpisodeDuration(value: unknown, sourceSeconds: number): string[] {
   if (!Array.isArray(value) || sourceSeconds <= 0) return [];
   const videos = value.filter((e) => e && typeof e === "object" && (e as { type?: string }).type === "VIDEO") as { id?: string; duration?: number }[];
@@ -261,9 +321,21 @@ export const FILM_EPISODE_RULES = `\n\n## QUY TẮC MẠCH TRUYỆN TOÀN PHIM (
 (Kiểm chứng qua so sánh video thật: remake giữ cấu trúc tốt nhưng hụt ở biểu cảm chưa sắc, phản ứng quá nhanh, chuyển cảnh trễ làm loãng cao trào, nhạc lấn thoại.)
 - CƯỜNG ĐỘ: mỗi VIDEO chuyển thể shot có "cường độ N/10" trong TẬP GỐC phải đạt cường độ tương đương. Viết biểu cảm thành chi tiết QUAN SÁT ĐƯỢC, không viết tính từ chung chung ("tức giận"): ánh mắt (nheo, trợn, liếc, nhìn xoáy), lông mày, cơ hàm/nghiến răng, khoé miệng (nhếch, mím), nhịp thở, tư thế đầu/vai. Cường độ ≥ 8 → biểu cảm rõ, mạnh, có chuyển động cơ mặt thấy được ở cận cảnh. Phản diện chế giễu → nụ cười nhếch + ánh mắt khinh miệt nhìn xuống, giữ đủ lâu để khán giả ghét.
 - PHẢN ỨNG: shot gốc có REACTION (hoặc nhân vật chịu đựng/sững người/kìm nén) → VIDEO remake phải có khoảnh khắc phản ứng riêng: cận mặt, giữ khoảng lặng 1–2 giây TRƯỚC khi nói/đáp, có thể push-in chậm. Không để nhân vật đáp lời ngay lập tức ở beat cảm xúc mạnh.
+- KHOÁ FRAME (ưu tiên hơn quy định đánh số shot của master prompt): "shot" = CẢNH LIÊN TỤC (cùng bối cảnh, cùng thời điểm, hành động nối tiếp) — đổi góc máy/cắt cảnh bên trong cảnh liên tục KHÔNG tăng shot, chỉ tăng clip. Hai VIDEO liền nhau cùng shot: START FRAME clip sau GIỐNG TỪNG CHỮ END FRAME clip trước (code ghi đè START FRAME bằng END FRAME). START/END FRAME viết theo mẫu 7 trường: "CHARACTERS: ... | POSE: ... | POSITION: ... | GAZE: ... | HANDS/PROPS: ... | CAMERA: ... | LIGHTING: ..." — END FRAME là khung hình cuối THẬT của clip; đổi tư thế/góc máy thì làm trong ACTION.
 - TỔNG THỜI LƯỢNG (BẮT BUỘC, code kiểm tra): tổng duration các VIDEO phải nằm trong "ngan_sach_remake" — gần bằng tập gốc, KHÔNG dài hơn nhiều. Shot gốc ngắn (trung bình 2–3s) mà mỗi VIDEO tối thiểu 4s → KHÔNG được làm mỗi câu thoại/mỗi phản ứng thành 1 VIDEO riêng: gộp các nhịp ngắn liền nhau (câu thoại + phản ứng của người nghe, 2 câu đối đáp ngắn, câu nịnh/đệm của vai phụ) vào CÙNG 1 VIDEO bằng đổi góc máy rõ ràng. Mốc hook/đảo chiều/cao trào/cliffhanger của remake phải rơi vào CÙNG TỶ LỆ thời gian như tập gốc (vd gốc cliffhanger ở 90% thời lượng → remake cũng ~90%).
 - NHỊP DỰNG: bám mục "NHỊP DỰNG + ĐƯỜNG CƯỜNG ĐỘ". Đoạn gốc cắt dày (shot < 2–3s) → dùng VIDEO ngắn nhất cho phép, mỗi VIDEO bắt đầu NGAY vào hành động (không có nhịp dạo đầu/đi vào khung hình), có thể dồn 2–3 nhịp ngắn trong 1 VIDEO bằng đổi góc máy rõ ràng; đoạn gốc giữ shot lâu → cho VIDEO dài, máy chậm. Tỷ lệ thời lượng giữa các scene giữ gần tỷ lệ gốc (ty_le_tap).
 - CAO TRÀO: shot cường độ đỉnh của tập gốc → remake dồn nhịp nhanh nhất ngay trước đỉnh, đỉnh là cận cảnh biểu cảm mạnh nhất tập; không chèn shot phụ/cảnh rộng giữa chuỗi leo thang làm loãng.
 - TÍCH TỤ: khi bản gốc dồn ức chế liên tục, giữ liên tục trên nhân vật chịu đựng (cận/trung cảnh), không cắt sang cảnh rộng hay nhân vật phụ giữa chừng.
 - TRẢ THƯỞNG: khoảnh khắc giải toả/hả hê/quyết tâm của nhân vật chính phải có biểu cảm ấm, kiên định, rõ ràng (ánh mắt vững, cằm nâng, nụ cười nhẹ đúng lúc) — tránh mặt đơ/trung tính.
 - ÂM THANH: theo SOUND của shot gốc (nhạc vào/tăng/dừng, im lặng, SFX nhấn). Mỗi VIDEO có thoại: ghi rõ thoại nghe rõ, nhạc nền nhỏ dưới thoại (ducking); nhạc chỉ dâng ở khoảng không thoại và ở cao trào; khoảnh khắc sốc có thể cắt nhạc thành im lặng. Khoảnh khắc hook, đảo chiều hoặc phản diện bùng nổ (cười lớn, ra đòn, tuyên bố): đặt SFX nhấn (stinger/hit) ĐÚNG frame bắt đầu hành động và nhạc dâng theo — không để nhạc nền đều đều suốt.`;
+
+/**
+ * Quy tắc series cho chế độ GIỐNG GỐC — thay SERIES_EPISODE_RULES (vốn bắt đổi
+ * thế giới, không dùng lại tên/thế giới gốc).
+ */
+export const FAITHFUL_SERIES_RULES = `## QUY TẮC REMAKE GIỐNG GỐC (ưu tiên CAO HƠN mọi mục mâu thuẫn bên trên)
+Video remake phải GIỐNG HỆT video gốc — cùng câu chuyện, thứ tự shot, hành động, tư thế, bối cảnh, đạo cụ, góc máy, nhịp cắt, cảm xúc, âm thanh, thời điểm thoại — CHỈ THAY NHÂN VẬT (người mới theo Series Bible) và lời thoại DỊCH sang tiếng Anh.
+- Thế giới, bối cảnh, đạo cụ, nghề nghiệp, quan hệ GIỮ NGUYÊN như phim gốc; KHÔNG chuyển thể sang thế giới khác, KHÔNG thêm/bỏ beat.
+- Nhân vật: dùng ĐÚNG id + ngoại hình người MỚI trong Bible (source_to_target_map); tên trong thoại đổi thành tên mới.
+- CARRY-IN: tập này tiếp đúng END STATE tập trước. Tập kết thúc đúng như tập gốc (cliffhanger của gốc).
+- Bám TẬP GỐC từng shot (episode_time_s, speech_starts_at_episode_s): tổng thời lượng ≈ gốc, thoại vào đúng lúc, clip liền nhau cùng shot giữ nguyên tư thế ở chỗ chia.`;

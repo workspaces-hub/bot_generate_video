@@ -248,6 +248,11 @@ export const config = {
   promptFilmAdaptMap: "prompt_film_adapt_map.txt",
   // "Test prompt remake phim": so sánh video gốc ↔ video remake theo tiêu chí drama (src/film/compare.ts).
   promptFilmCompare: "prompt_film_compare.txt",
+  // "Remake phim" chế độ GIỐNG GỐC (mặc định): giữ nguyên bối cảnh/hành động/
+  // góc máy/nhịp shot, chỉ thay nhân vật, thoại dịch sang tiếng Anh.
+  promptFilmFaithfulBible: "prompt_film_faithful_bible.txt",
+  promptFilmFaithfulBibleExtend: "prompt_film_faithful_bible_extend.txt",
+  promptFilmFaithfulEpisode: "prompt_film_faithful_episode.txt",
   // Worker xử lý video (workers/timeline_worker.py — chỉ cần stdlib + ffmpeg).
   filmPythonBin: process.env.FILM_PYTHON_BIN ?? "python3",
   // Ngưỡng đổi cảnh của ffmpeg (0..1) — nhỏ hơn = cắt nhiều shot hơn.
@@ -419,6 +424,10 @@ export const config = {
   // xuất ra ĐÚNG 480x864, hình không đủ nét cho nội dung premium). Mặc định
   // 0.4 (giữ nguyên hành vi cũ) — tăng lên (vd 1.0, gần 720p) cho hình nét
   // hơn, đổi lại generate chậm hơn/tốn VRAM hơn trên ComfyUI.
+  // Nối frame cuối clip trước (cùng shot) làm ảnh tham chiếu cho clip sau khi
+  // gen ComfyUI — giữ liền mạch tư thế/vị trí qua chỗ chia clip (xem
+  // previousClipLastFrame trong storyboardPipeline.ts). "false" để tắt.
+  comfyUIChainLastFrame: (process.env.COMFYUI_CHAIN_LAST_FRAME ?? "false").toLowerCase() !== "false",
   comfyUIMiniMaxH3Megapixels: Number(
     process.env.COMFYUI_MINIMAX_H3_MEGAPIXELS ?? 0.4,
   ),
