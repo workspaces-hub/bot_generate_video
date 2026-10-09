@@ -113,6 +113,14 @@ export function repairDelta(
   const fixes: string[] = [];
   const isCharId = (id: string) => /^CHAR_[A-Z0-9_]+$/.test(id);
 
+  // intensity tuỳ chọn: chữ số → số, ngoài 1–10 → kẹp, không phải số → bỏ.
+  for (const seg of delta.segments) {
+    if (seg.intensity === undefined || seg.intensity === null) continue;
+    const n = Number(seg.intensity);
+    if (Number.isFinite(n)) seg.intensity = Math.min(10, Math.max(1, Math.round(n)));
+    else delete seg.intensity;
+  }
+
   for (const seg of delta.segments) {
     const generic = seg.characters.filter((c) => !isCharId(c));
     if (generic.length > 0) {

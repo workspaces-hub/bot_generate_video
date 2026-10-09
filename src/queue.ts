@@ -18,8 +18,21 @@ import { askQwen, askQwenAboutReferenceVideo } from "./automation/qwenAI";
 // sánh video gốc với video cuối cùng do pipeline tái tạo ra.
 import { askChatAI, compareOriginalWithFinalVideo, askChatAIAboutReferenceVideo } from "./automation/chatAI";
 import { askGemini, askGeminiAboutReferenceVideo } from "./automation/geminiAI";
-import { generateSeriesWithGemini } from "./automation/seriesScript";
-import { analyzeFilm, formatEpisodes, runFilmRemake, type RemakeChoice } from "./film/pipeline";
+import { generateSeriesWithGemini, seriesDirFor } from "./automation/seriesScript";
+import {
+  analyzeFilm,
+  episodeAnalysisSummary,
+  filmSourceDir,
+  formatEpisodes,
+  planFilmAnalyze,
+  planFilmRemake,
+  readFilmRecord,
+  runFilmRemake,
+  type RemakeChoice,
+} from "./film/pipeline";
+import { newTestId, readTestState, saveTestState, testDirFor, type FilmTestState } from "./film/testState";
+import { compareEpisode, renderCompareReport, type CompareResult } from "./film/compare";
+import { concatVideos } from "./automation/videoConcat";
 import { probeFrameRate } from "./automation/videoConcat";
 import {
   getGeminiBrowserContext,
@@ -48,6 +61,7 @@ import {
   generateVideosForFilePollo,
   loadPersistedStopStoryboardRequests,
   mergeVideosForFile,
+  resolveNextRemakeVersion,
   reconcileAssetLedgerAcrossFiles,
   requestStopStoryboardPipeline,
   sleep,
@@ -447,6 +461,27 @@ export interface FilmAnalyzeJob extends BaseJob {
   episodes?: number[];
 }
 
+/**
+ * "Test prompt remake phim" (FILM_TEST_BUTTON_LABEL): tập gốc user vừa gửi →
+ * phân tích → bản remake MỚI → gen ảnh + video các tập đó → ghép từng tập →
+ * nối thành video mới hoàn chỉnh → Gemini so sánh gốc ↔ remake theo
+ * COMPARE_CRITERIA (src/film/compare.ts) → gửi file báo cáo. Tự chạy hết, không
+ * chờ nút xác nhận (chế độ TEST, giống "Test prompt tham chiếu video").
+ */
+export interface FilmTestJob extends BaseJob {
+  type: "filmTest";
+  filmId: string;
+  /** Tập gốc user vừa gửi (liền nhau) — chỉ các tập này được gen video + so sánh. */
+  episodes: number[];
+  /** Yêu cầu riêng của bản remake test (tuỳ chọn). */
+  note?: string;
+  /**
+   * Id lần test (thư mục storage/films/<phim>/tests/<testId>/ + state.json) —
+   * job chạy lại (restart/"tiếp") làm tiếp từ bước dở. Job cũ không có thì tự cấp.
+   */
+  testId?: string;
+}
+
 export type GenerationJob =
   | AIImageJob
   | AIVideoJob
@@ -454,6 +489,7 @@ export type GenerationJob =
   | ScriptReferenceVideoJob
   | GenerateScriptJob
   | FilmAnalyzeJob
+  | FilmTestJob
   | PolloImageJob
   | PolloVideoJob
   | ComfyVideoJob;
@@ -537,7 +573,7 @@ let currentVideoJob: AIVideoJob | null = null;
 // getChatAIBrowserContext.close() ở processChatAIQueue) — gộp chung hẳn 1
 // hàng đợi/1 vòng xử lý duy nhất loại bỏ hoàn toàn khả năng 2 job dùng
 // CÙNG browser context chạy ĐỒNG THỜI.
-const chatAIJobs: (ChatAIJob | GenerateScriptJob | ScriptReferenceVideoJob | FilmAnalyzeJob)[] =
+const chatAIJobs: (ChatAIJob | GenerateScriptJob | ScriptReferenceVideoJob | FilmAnalyzeJob | FilmTestJob)[] =
   [];
 let chatAIProcessing = false;
 
@@ -1329,7 +1365,8 @@ export function enqueueJob(job: GenerationJob): void {
     job.type === "chatAI" ||
     job.type === "generateScript" ||
     job.type === "scriptReferenceVideo" ||
-    job.type === "filmAnalyze"
+    job.type === "filmAnalyze" ||
+    job.type === "filmTest"
   ) {
     chatAIJobs.push(job);
     persistChatAIJobs();
@@ -1450,6 +1487,7 @@ export function stopAll(userId: number): StopAllResult {
     | ScriptReferenceVideoJob
     | GenerateScriptJob
     | FilmAnalyzeJob
+    | FilmTestJob
   )[] = [];
   // Job "scriptReferenceVideo" dùng CHUNG chatAIJobs với "chatAI"/
   // "generateScript" (xem docstring khai báo mảng chatAIJobs) — cùng 1 vòng
@@ -3177,6 +3215,245 @@ async function runFilmAnalyzeJob(job: FilmAnalyzeJob, jobId: string): Promise<vo
 }
 
 /**
+ * "Test prompt remake phim" — chạy trọn chuỗi tự động (xem FilmTestJob):
+ *  1. sao lưu video gốc các tập test (pipeline có thể xoá video gốc sau phân tích)
+ *  2. phân tích phim gốc các tập đó
+ *  3. bản remake MỚI (Bible/Arc/từng tập; tập remake = số tập gốc)
+ *  4. mỗi tập test: ảnh CHARACTER/LOCATION/PROP/OBJECT (Pollo, DÙNG CHUNG giữa
+ *     các tập trong generated/<bản remake>/) → video từng clip (ComfyUI) → ghép tập
+ *  5. nối các tập thành 1 video mới hoàn chỉnh
+ *  6. Gemini so sánh video gốc ↔ remake từng tập theo COMPARE_CRITERIA
+ *  7. gửi file báo cáo .md
+ * Bước nào lỗi (ảnh/video có entry fail, ghép lỗi...) → dừng, báo lỗi — so
+ * sánh trên video thiếu clip thì vô nghĩa.
+ */
+async function runFilmTestJob(job: FilmTestJob, jobId: string): Promise<void> {
+  const tag = `🧪 ${job.filmId}`;
+  const updateStatus = async (text: string): Promise<void> => {
+    if (!telegram || !job.statusMessageId) return;
+    await telegram.editMessageText(job.chatId, job.statusMessageId, undefined, `${tag}\n${text}`).catch(() => {});
+  };
+  const reply = async (text: string): Promise<void> => {
+    await telegram?.sendMessage(job.chatId, text, { reply_parameters: { message_id: job.promptMessageId } }).catch(() => {});
+  };
+
+  // Id cố định cho lần test — job cũ chưa có thì cấp và LƯU vào hàng đợi, để
+  // bot restart giữa chừng vẫn quay về đúng thư mục/state này.
+  if (!job.testId) {
+    job.testId = newTestId();
+    persistChatAIJobs();
+  }
+  const testDir = testDirFor(job.filmId, job.testId);
+  await fsp.mkdir(testDir, { recursive: true });
+  const state: FilmTestState = (await readTestState(job.filmId, job.testId)) ?? {
+    testId: job.testId,
+    filmId: job.filmId,
+    episodes: job.episodes,
+    note: job.note,
+    status: "running",
+    step: "bắt đầu",
+    finals: {},
+    updatedAt: "",
+  };
+  const resumed = state.step !== "bắt đầu";
+  state.status = "running";
+  delete state.error;
+  const step = async (name: string) => {
+    state.step = name;
+    await saveTestState(state);
+    await updateStatus(name);
+  };
+  if (resumed) await reply(`🧪 Chạy tiếp lần test ${job.testId} từ bước: ${state.step}`);
+
+  try {
+    // 1. Sao lưu video gốc (bỏ qua tập đã sao lưu — file nguồn có thể đã bị xoá sau phân tích).
+    const originals = new Map<number, string>();
+    for (const ep of state.episodes) {
+      const existing = (await fsp.readdir(testDir)).find((f) => f.startsWith(`goc_tap${ep}.`));
+      if (existing) {
+        originals.set(ep, path.join(testDir, existing));
+        continue;
+      }
+      const plan = await planFilmAnalyze(job.filmId, [ep]);
+      const { fileName } = plan.files[0];
+      const dest = path.join(testDir, `goc_tap${ep}${path.extname(fileName)}`);
+      await fsp.copyFile(path.join(filmSourceDir(job.filmId), fileName), dest);
+      originals.set(ep, dest);
+    }
+
+    // 2. Phân tích phim gốc (analyzeFilm tự làm tiếp đợt dở).
+    if (!state.analyzed) {
+      await step(`[1/6] Phân tích phim gốc tập ${formatEpisodes(state.episodes)}...`);
+      // Video nguồn đã bị xoá (sau 1 lần phân tích trước) → khôi phục từ bản sao lưu.
+      for (const ep of state.episodes) {
+        const inSource = await planFilmAnalyze(job.filmId, [ep]).then(() => true).catch(() => false);
+        if (!inSource) {
+          const backup = originals.get(ep)!;
+          await fsp.copyFile(backup, path.join(filmSourceDir(job.filmId), `${String(ep).padStart(3, "0")}_${job.filmId}${path.extname(backup)}`));
+        }
+      }
+      const analysis = await analyzeFilm({ jobId, filmId: job.filmId, episodes: state.episodes, onStatus: updateStatus });
+      state.analyzed = true;
+      await saveTestState(state);
+      await reply(
+        [
+          `🧪 [1/6] Đã phân tích tập ${formatEpisodes(analysis.analyzedEpisodes)}: ${analysis.stats.characters} nhân vật, ${analysis.stats.threads} mạch truyện.`,
+          ...analysis.notes.map((n) => `• ${n}`),
+        ].join("\n"),
+      );
+    }
+
+    // 3. Bản remake: chốt tên TRƯỚC khi viết; chạy lại thì viết tiếp đúng bản đó.
+    if (!state.remakeName) {
+      const plan = await planFilmRemake(
+        job.filmId,
+        { mode: "new", note: state.note },
+        `${job.filmId}_remake_${await resolveNextRemakeVersion(job.filmId)}`,
+      );
+      state.remakeName = plan.name;
+      await saveTestState(state);
+    }
+    const remakeName = state.remakeName;
+    const episodeCheckpoint = (ep: number) => path.join(seriesDirFor(remakeName), "episodes", `${remakeName}_tap${ep}_full.json`);
+    if (!state.remakeDone) {
+      await step(`[2/6] Viết kịch bản remake "${remakeName}"...`);
+      const exists = (await readFilmRecord(job.filmId))?.remakes.some((r) => r.name === remakeName);
+      const pending = !exists
+        ? true
+        : await planFilmRemake(job.filmId, { mode: "continue", name: remakeName }, remakeName).then(() => true).catch(() => false);
+      if (pending) {
+        const remake = await runFilmRemake({
+          jobId,
+          filmId: job.filmId,
+          choice: exists ? { mode: "continue", name: remakeName } : { mode: "new", note: state.note },
+          suggestedNewName: remakeName,
+          // Cùng tin nhắn kèm file như "Remake phim" thật (handlers truyền GENERATE_SCRIPT_ATTACHMENT_PROMPT).
+          episodeMessage: job.prompt,
+          onStatus: updateStatus,
+        });
+        // Bản copy trong chatAIResultsDir không dùng (test đọc checkpoint trong series/).
+        for (const f of remake.episodeFiles) await fsp.unlink(f).catch(() => {});
+        if (remake.remakeBaseName !== remakeName) throw new Error(`Bản remake lệch tên: ${remake.remakeBaseName} ≠ ${remakeName}`);
+        if (remake.failedEpisode !== undefined) throw new Error(`Không viết được tập remake ${remake.failedEpisode}.`);
+      }
+      const missing = state.episodes.filter((ep) => !fs.existsSync(episodeCheckpoint(ep)));
+      if (missing.length > 0) throw new Error(`Bản remake thiếu JSON tập ${formatEpisodes(missing)}.`);
+      state.remakeDone = true;
+      await saveTestState(state);
+      await reply(`🧪 [2/6] Bản remake "${remakeName}": đã viết xong, test tập ${formatEpisodes(state.episodes)}.`);
+    }
+
+    // 4. Folder generated/<bản remake>/ — tạo (archive nội dung cũ) ĐÚNG 1 lần.
+    if (!state.genRoot) {
+      state.genRoot = await ensureGeneratedFolderForName(remakeName);
+      await saveTestState(state);
+    }
+    const root = state.genRoot;
+    await fsp.mkdir(root, { recursive: true });
+    const jsonInGenerated = (ep: number) => {
+      const base = path.basename(episodeCheckpoint(ep), ".json");
+      return path.join(root, base, `${base}.json`);
+    };
+    if (!state.jsonPrepared) {
+      for (const ep of state.episodes) {
+        const dest = jsonInGenerated(ep);
+        await fsp.mkdir(path.dirname(dest), { recursive: true });
+        // JSON trong generated/ giữ cờ success từng ảnh/clip — chỉ copy khi chưa có.
+        if (!fs.existsSync(dest)) await fsp.copyFile(episodeCheckpoint(ep), dest);
+        await fsp.copyFile(episodeCheckpoint(ep), path.join(testDir, path.basename(dest)));
+      }
+      const files = state.episodes.map(jsonInGenerated);
+      if (files.length > 1) await reconcileAssetLedgerAcrossFiles(files);
+      for (const f of files) {
+        await sendDocumentMaybeSplit(job.chatId, f, `📄 ${path.basename(f)}`, job.promptMessageId).catch(() => {});
+      }
+      state.jsonPrepared = true;
+      await saveTestState(state);
+    }
+
+    // 5. Ảnh + video + ghép từng tập — ảnh/clip đã success trong JSON được bỏ qua (làm tiếp chỗ dở).
+    for (const ep of state.episodes) {
+      if (state.finals[ep] && fs.existsSync(state.finals[ep])) continue;
+      const jsonPath = jsonInGenerated(ep);
+      await step(`[3/6] Tập ${ep}: tạo ảnh nhân vật/bối cảnh/đạo cụ (Pollo)...`);
+      const images = await generateReferenceImagesForFileViaPollo(
+        jsonPath,
+        async (imagePath) => sendGeneratedImage(job.chatId, imagePath, `🖼️ ${path.parse(imagePath).name}`, job.promptMessageId),
+        async (id, message) => console.error(`[queue] (${jobId}) [film-test] ảnh "${id}" lỗi:`, message),
+      );
+      if (images.failed > 0) throw new Error(`Tập ${ep}: tạo ảnh lỗi ${images.failedEntries.map((e) => e.id).join(", ")}`);
+
+      await step(`[4/6] Tập ${ep}: tạo video từng clip (ComfyUI)...`);
+      const videos = await generateVideosForFileComfyUI(
+        jsonPath,
+        async (videoPath) =>
+          sendGeneratedVideo(job.chatId, videoPath, `🎬 ${path.parse(videoPath).name}`, job.promptMessageId, path.basename(videoPath)),
+        async (id, message) => console.error(`[queue] (${jobId}) [film-test] video "${id}" lỗi:`, message),
+      );
+      if (videos.failed > 0) throw new Error(`Tập ${ep}: tạo video lỗi ${videos.failedEntries.map((e) => e.id).join(", ")}`);
+
+      const finalPath = path.join(path.dirname(jsonPath), `${path.basename(jsonPath, ".json")}_final.mp4`);
+      const { videoCount } = await mergeVideosForFile(jsonPath, finalPath);
+      console.log(`[queue] (${jobId}) [film-test] tập ${ep}: đã ghép ${videoCount} clip → ${finalPath}`);
+      state.finals[ep] = finalPath;
+      await saveTestState(state);
+      await sendGeneratedVideo(job.chatId, finalPath, `🎬 Remake tập ${ep} (ghép ${videoCount} clip)`, job.promptMessageId, path.basename(finalPath));
+    }
+
+    // 6. Video mới hoàn chỉnh.
+    if (state.episodes.length > 1 && !(state.fullPath && fs.existsSync(state.fullPath))) {
+      await step("[5/6] Nối các tập thành video mới hoàn chỉnh...");
+      const fullPath = path.join(root, `${remakeName}_tap${formatEpisodes(state.episodes).replace(/[–, ]+/g, "-")}_full.mp4`);
+      await concatVideos(state.episodes.map((ep) => state.finals[ep]), fullPath);
+      state.fullPath = fullPath;
+      await saveTestState(state);
+      await sendGeneratedVideo(job.chatId, fullPath, `🎬 Video remake hoàn chỉnh (tập ${formatEpisodes(state.episodes)})`, job.promptMessageId, path.basename(fullPath));
+    }
+
+    // 7. So sánh gốc ↔ remake từng tập — kết quả lưu so_sanh_tap<N>.json, có rồi thì dùng lại.
+    const results: CompareResult[] = [];
+    for (const ep of state.episodes) {
+      await step(`[6/6] So sánh video gốc ↔ remake tập ${ep}...`);
+      const script = JSON.parse(await fsp.readFile(jsonInGenerated(ep), "utf-8")) as { type?: string; id?: string; duration?: number; prompt?: string }[];
+      results.push(
+        await compareEpisode({
+          jobId,
+          episode: ep,
+          originalVideo: originals.get(ep)!,
+          remakeVideo: state.finals[ep],
+          originalAnalysis: await episodeAnalysisSummary(job.filmId, ep),
+          remakeScript: script
+            .filter((e) => e.type === "VIDEO")
+            .map((e) => ({ id: e.id, duration: e.duration, prompt: (e.prompt ?? "").slice(0, 500) })),
+          outPath: path.join(testDir, `so_sanh_tap${ep}.json`),
+          onStatus: updateStatus,
+        }),
+      );
+    }
+    const reportPath = path.join(testDir, `${remakeName}_so_sanh.md`);
+    await fsp.writeFile(reportPath, renderCompareReport({ filmId: job.filmId, remakeName, note: state.note, results }), "utf-8");
+    state.status = "done";
+    state.step = "xong";
+    await saveTestState(state);
+    if (telegram && job.statusMessageId) await telegram.deleteMessage(job.chatId, job.statusMessageId).catch(() => {});
+    await sendDocumentMaybeSplit(
+      job.chatId,
+      reportPath,
+      `📋 So sánh video gốc ↔ remake "${remakeName}": ${results.map((r) => `tập ${r.episode} ${r.overall_score}/100`).join(", ")}`,
+      job.promptMessageId,
+    );
+  } catch (err) {
+    state.status = "failed";
+    state.error = err instanceof Error ? err.message : String(err);
+    await saveTestState(state).catch(() => {});
+    await reply(
+      `❌ Test dừng ở bước: ${state.step}\n${state.error}\nChạy tiếp từ bước này: bấm "Test prompt remake phim", gõ "${job.filmId}" rồi "tiếp".`,
+    );
+    throw err;
+  }
+}
+
+/**
  * "Remake phim"/"Tạo phim tiếp" — viết bản remake (runFilmRemake, xem
  * src/film/pipeline.ts) rồi trả file các tập như generateScriptEpisodesWithGemini
  * để phần đổi tên/hậu kiểm/gửi nút phía sau dùng lại nguyên vẹn.
@@ -3320,9 +3597,10 @@ async function processChatAIQueue(): Promise<void> {
       console.log(
         `[queue] processChatAIQueue: bắt đầu job ${jobId} (type="${job.type}").`,
       );
-      if (job.type === "filmAnalyze") {
+      if (job.type === "filmAnalyze" || job.type === "filmTest") {
         try {
-          await runFilmAnalyzeJob(job, jobId);
+          if (job.type === "filmAnalyze") await runFilmAnalyzeJob(job, jobId);
+          else await runFilmTestJob(job, jobId);
         } catch (err) {
           await notifyError(job, err);
         } finally {

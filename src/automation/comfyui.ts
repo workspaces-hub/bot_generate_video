@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { config } from "../config";
 import { GenerationError } from "./aiVideo";
 
@@ -169,6 +171,40 @@ const MINIMAX_H3_T2V_DURATION_FORMULA_NODE_ID = "140:132";
  */
 function buildMiniMaxH3LengthExpression(fps: number): string {
   return `max(5, round(a * ${fps})) + (5 - (max(5, round(a * ${fps})) % 17)) % 17`;
+}
+
+/**
+ * fps GỐC của model MiniMax H3: model sinh frame + tiếng theo nhịp này (node
+ * MiniMaxH3ReferenceToVideo/ImageToVideo không nhận fps, chỉ nhận số frame).
+ * Đóng gói ở fps khác (vd 30 theo video gốc) làm hình chạy nhanh hơn tiếng →
+ * tiếng trễ khẩu hình, cuối câu thoại bị cắt (xác nhận qua clip thật VID_01
+ * test-prompt_remake_1 ở 30fps: kịch bản "Where are we... is this real?" chỉ
+ * còn "Where are we?"). Vì vậy workflow LUÔN chạy ở fps này; fps đích đổi SAU
+ * bằng ffmpeg (matchMiniMaxH3FrameRate).
+ */
+const MINIMAX_H3_NATIVE_FPS = 24;
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Đổi clip MiniMax H3 (sinh ở MINIMAX_H3_NATIVE_FPS) sang fps đích: filter
+ * "fps" nhân bản/bỏ frame, KHÔNG đổi thời lượng, tiếng chép nguyên (-c:a
+ * copy) → hình/tiếng vẫn khớp. Ghi đè file tại chỗ; fps đích = fps gốc thì bỏ qua.
+ */
+async function matchMiniMaxH3FrameRate(filePath: string, fps: number): Promise<void> {
+  if (!fps || fps === MINIMAX_H3_NATIVE_FPS) return;
+  console.log(`[comfyui] MiniMax H3: sinh ở ${MINIMAX_H3_NATIVE_FPS}fps (fps gốc model) → đổi sang ${fps}fps, giữ khớp hình/tiếng.`);
+  const tmp = `${filePath}.${fps}fps.mp4`;
+  await execFileAsync("ffmpeg", [
+    "-y", "-loglevel", "error",
+    "-i", filePath,
+    "-vf", `fps=${fps}`,
+    "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p",
+    "-c:a", "copy",
+    "-movflags", "+faststart",
+    tmp,
+  ]);
+  await fs.promises.rename(tmp, filePath);
 }
 
 /**
@@ -531,9 +567,11 @@ export async function generateVideoComfyMiniMaxH3(
   // chỗ, không chỉ 1). Giờ truyền được: set thẳng node "130", và REBUILD lại
   // cả chuỗi expression của node "131" qua buildMiniMaxH3LengthExpression
   // (không chỉ set 1 field số vì fps nằm ngay trong text công thức).
-  workflow[MINIMAX_H3_CREATE_VIDEO_NODE_ID].inputs.fps = fps;
+  // Workflow chạy ở fps GỐC model (khớp hình/tiếng) — fps truyền vào áp SAU
+  // khi tải về (matchMiniMaxH3FrameRate), xem MINIMAX_H3_NATIVE_FPS.
+  workflow[MINIMAX_H3_CREATE_VIDEO_NODE_ID].inputs.fps = MINIMAX_H3_NATIVE_FPS;
   workflow[MINIMAX_H3_DURATION_FORMULA_NODE_ID].inputs.expression =
-    buildMiniMaxH3LengthExpression(fps);
+    buildMiniMaxH3LengthExpression(MINIMAX_H3_NATIVE_FPS);
   // Random seed mỗi lần gọi — cùng lý do đã giải thích ở generateVideoComfyUI
   // (tránh ComfyUI trả cache kết quả cũ, và cùng giới hạn range của
   // crypto.randomInt).
@@ -549,6 +587,7 @@ export async function generateVideoComfyMiniMaxH3(
     config.comfyUIGenerationTimeoutMs,
   );
   const filePath = await downloadOutputFile(outputFile, jobId);
+  await matchMiniMaxH3FrameRate(filePath, fps);
 
   return { filePath, promptId };
 }
@@ -589,9 +628,10 @@ export async function generateVideoComfyMiniMaxH3TextToVideo(
   // fps — cùng lý do đã giải thích ở generateVideoComfyUI: phải set CẢ node
   // CreateVideo lẫn rebuild chuỗi expression của node ComfyMathExpression
   // (fps nằm ngay trong text công thức, không phải input riêng).
-  workflow[MINIMAX_H3_T2V_CREATE_VIDEO_NODE_ID].inputs.fps = fps;
+  // fps gốc model — cùng lý do ở generateVideoComfyMiniMaxH3.
+  workflow[MINIMAX_H3_T2V_CREATE_VIDEO_NODE_ID].inputs.fps = MINIMAX_H3_NATIVE_FPS;
   workflow[MINIMAX_H3_T2V_DURATION_FORMULA_NODE_ID].inputs.expression =
-    buildMiniMaxH3LengthExpression(fps);
+    buildMiniMaxH3LengthExpression(MINIMAX_H3_NATIVE_FPS);
   // Random seed mỗi lần gọi — cùng lý do đã giải thích ở generateVideoComfyUI.
   workflow[MINIMAX_H3_T2V_NOISE_SEED_NODE_ID].inputs.noise_seed =
     crypto.randomInt(0, 281_474_976_710_655);
@@ -603,6 +643,7 @@ export async function generateVideoComfyMiniMaxH3TextToVideo(
     config.comfyUIGenerationTimeoutMs,
   );
   const filePath = await downloadOutputFile(outputFile, jobId);
+  await matchMiniMaxH3FrameRate(filePath, fps);
 
   return { filePath, promptId };
 }

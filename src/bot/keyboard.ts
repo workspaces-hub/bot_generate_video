@@ -99,6 +99,14 @@ export const FILM_ANALYZE_BUTTON_LABEL = "Phân tích phim gốc";
 export const REMAKE_FILM_BUTTON_LABEL = "Remake phim";
 export const CONTINUE_FILM_BUTTON_LABEL = "Tạo phim tiếp";
 /**
+ * Test trọn luồng phim: gửi tập gốc → "xong" (dòng 2+: yêu cầu riêng tuỳ
+ * chọn) → phân tích → bản remake mới → gen ảnh + video → ghép → nối thành
+ * video mới → Gemini so sánh gốc ↔ remake theo các tiêu chí drama → gửi file
+ * báo cáo (runFilmTestJob trong queue.ts).
+ */
+export const FILM_TEST_BUTTON_LABEL = "Test prompt remake phim";
+export const UPDATE_FILM_COMPARE_PROMPT_BUTTON_LABEL = "Cập nhật prompt phim so sánh";
+/**
  * Bất kỳ ai trong nhóm được phép dùng bot (isAllowedGroup, KHÔNG giới hạn
  * admin — theo yêu cầu người dùng) đều bấm được — user upload 1 file .txt
  * để GHI ĐÈ master prompt prompt_generate_script.txt (dùng cho
@@ -209,6 +217,7 @@ export const promptMenu = Markup.keyboard([
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
   [CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL],
   [FILM_ANALYZE_BUTTON_LABEL, REMAKE_FILM_BUTTON_LABEL, CONTINUE_FILM_BUTTON_LABEL],
+  [FILM_TEST_BUTTON_LABEL],
   [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL],
   [CONTINUE_IMAGE_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],
   [UPDATE_GENERATE_SCRIPT_PROMPT_BUTTON_LABEL, UPDATE_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
@@ -216,7 +225,7 @@ export const promptMenu = Markup.keyboard([
   [UPDATE_SERIES_BIBLE_EXTEND_PROMPT_BUTTON_LABEL, UPDATE_SERIES_ARC_PROMPT_BUTTON_LABEL],
   [UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL, UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL],
   [UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL, UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL],
-  [UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL],
+  [UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL, UPDATE_FILM_COMPARE_PROMPT_BUTTON_LABEL],
   // [TEST_VIDEO_REFERENCE_BUTTON_LABEL, UPDATE_TEST_VIDEO_REFERENCE_PROMPT_BUTTON_LABEL],
   [MERGE_VIDEO_BUTTON_LABEL, REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL],
   [STOP_ALL_BUTTON_LABEL],

@@ -246,6 +246,8 @@ export const config = {
   promptFilmAnalyze: "prompt_film_analyze.txt",
   promptFilmReconstruct: "prompt_film_reconstruct.txt",
   promptFilmAdaptMap: "prompt_film_adapt_map.txt",
+  // "Test prompt remake phim": so sánh video gốc ↔ video remake theo tiêu chí drama (src/film/compare.ts).
+  promptFilmCompare: "prompt_film_compare.txt",
   // Worker xử lý video (workers/timeline_worker.py — chỉ cần stdlib + ffmpeg).
   filmPythonBin: process.env.FILM_PYTHON_BIN ?? "python3",
   // Ngưỡng đổi cảnh của ffmpeg (0..1) — nhỏ hơn = cắt nhiều shot hơn.

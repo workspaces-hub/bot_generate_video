@@ -43,6 +43,8 @@ export interface FilmStageOptions<T> {
   context: string;
   /** Clip video đính kèm (nếu có). */
   videoPath?: string;
+  /** Video đính kèm THÊM sau videoPath (vd so sánh video gốc ↔ remake). */
+  extraVideoPaths?: string[];
   outPath: string;
   attempts?: number;
   /** JSON thô → giá trị (chuẩn hoá). */
@@ -82,9 +84,13 @@ export async function runFilmStage<T>(opts: FilmStageOptions<T>): Promise<T> {
         : "";
     const contextPath = path.join(config.uploadsDir, `${randomUUID()}-film-${opts.name}.txt`);
     await fsp.writeFile(contextPath, `${opts.context}${feedback}`, "utf-8");
-    const attachNote = opts.videoPath
-      ? "Đính kèm: (1) video clip nguồn cần phân tích, (2) file .txt chứa dữ liệu đầu vào."
-      : "Dữ liệu đầu vào nằm trong file .txt đính kèm.";
+    const videoCount = opts.videoPath ? 1 + (opts.extraVideoPaths?.length ?? 0) : 0;
+    const attachNote =
+      videoCount > 1
+        ? `Đính kèm theo thứ tự: ${videoCount} video (thứ tự ý nghĩa ghi trong file .txt), rồi 1 file .txt chứa dữ liệu đầu vào.`
+        : videoCount === 1
+          ? "Đính kèm: (1) video clip nguồn cần phân tích, (2) file .txt chứa dữ liệu đầu vào."
+          : "Dữ liệu đầu vào nằm trong file .txt đính kèm.";
     let downloadedFiles: string[] = [];
     try {
       ({ downloadedFiles } = await askGemini(
@@ -93,7 +99,7 @@ export async function runFilmStage<T>(opts: FilmStageOptions<T>): Promise<T> {
         `${path.basename(opts.outPath, ".json")}__${randomUUID().slice(0, 8)}.json`,
         opts.videoPath ?? contextPath,
         {
-          ...(opts.videoPath ? { extraAttachmentPaths: [contextPath] } : {}),
+          ...(opts.videoPath ? { extraAttachmentPaths: [...(opts.extraVideoPaths ?? []), contextPath] } : {}),
           modelLabel: config.filmGeminiModelLabel || undefined,
         },
       ));

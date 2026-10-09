@@ -72,6 +72,12 @@ export interface SeriesGenerationOptions {
   previousEpisode?: number;
   /** "Remake phim": bỏ bước QA cuối đợt — viết xong tập là trả JSON ngay. */
   skipQa?: boolean;
+  /**
+   * "Remake phim": kiểm tra thêm JSON từng tập (vd tổng thời lượng so với tập
+   * gốc). Có lỗi → lần thử sau gửi kèm lỗi để Gemini sửa; hết lượt vẫn dùng
+   * bản cuối (cảnh báo trong log).
+   */
+  checkEpisode?: (tap: number, value: unknown) => string[];
   onStatus?: (text: string) => Promise<void>;
 }
 
@@ -732,14 +738,28 @@ export async function generateSeriesWithGemini(
             if (repaired.autoAdded.length > 0) {
               console.log(`[series] (${jobId}) tập ${tap}: tự bổ sung asset từ các tập trước: ${repaired.autoAdded.join(", ")}`);
             }
-            if (repaired.missing.length === 0) {
+            const checkErrors = opts.checkEpisode?.(tap, repaired.value) ?? [];
+            if (repaired.missing.length === 0 && checkErrors.length === 0) {
               await fsp.writeFile(checkpointPath, repairedContent, "utf-8");
             } else {
               fallbackContent = repairedContent;
-              const detail = repaired.missing.map((m) => `${m.id} (${m.videos.join(", ")})`).join("; ");
-              console.warn(`[series] (${jobId}) tập ${tap}: ref tới asset không tồn tại (lần ${attempt}/${EPISODE_ATTEMPTS}): ${detail}`);
-              // Lần thử sau: báo Gemini đúng id/VIDEO bị thiếu.
-              await fsp.writeFile(attachmentPath, `${baseInput}${missingRefFeedback(repaired.missing)}`, "utf-8");
+              if (repaired.missing.length > 0) {
+                const detail = repaired.missing.map((m) => `${m.id} (${m.videos.join(", ")})`).join("; ");
+                console.warn(`[series] (${jobId}) tập ${tap}: ref tới asset không tồn tại (lần ${attempt}/${EPISODE_ATTEMPTS}): ${detail}`);
+              }
+              if (checkErrors.length > 0) {
+                console.warn(`[series] (${jobId}) tập ${tap}: kiểm tra không đạt (lần ${attempt}/${EPISODE_ATTEMPTS}):\n- ${checkErrors.join("\n- ")}`);
+              }
+              // Lần thử sau: báo Gemini đúng lỗi của lần này.
+              await fsp.writeFile(
+                attachmentPath,
+                `${baseInput}${repaired.missing.length > 0 ? missingRefFeedback(repaired.missing) : ""}${
+                  checkErrors.length > 0
+                    ? `\n\n## LỖI CỦA LẦN TẠO TRƯỚC — BẮT BUỘC SỬA (code đã kiểm tra)\n- ${checkErrors.join("\n- ")}\nTạo lại TOÀN BỘ tập, sửa đúng các lỗi trên.`
+                    : ""
+                }`,
+                "utf-8",
+              );
             }
           } catch (err) {
             console.error(
@@ -756,7 +776,7 @@ export async function generateSeriesWithGemini(
         await fsp.unlink(attachmentPath).catch(() => {});
       }
       if (!fs.existsSync(checkpointPath) && fallbackContent) {
-        console.warn(`[series] (${jobId}) tập ${tap}: hết ${EPISODE_ATTEMPTS} lần thử vẫn còn ref tới asset không tồn tại — dùng bản cuối, ghi vào QA.`);
+        console.warn(`[series] (${jobId}) tập ${tap}: hết ${EPISODE_ATTEMPTS} lần thử vẫn còn lỗi (ref asset/kiểm tra) — dùng bản cuối, ghi vào QA.`);
         await fsp.writeFile(checkpointPath, fallbackContent, "utf-8");
       }
       if (!fs.existsSync(checkpointPath)) {

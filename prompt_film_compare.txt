@@ -1,0 +1,36 @@
+# TEST REMAKE PHIM — SO SÁNH VIDEO GỐC VÀ VIDEO REMAKE
+
+Bạn là đạo diễn kiêm biên tập viên micro-drama. Hai video đính kèm là CÙNG MỘT TẬP:
+1. Video thứ NHẤT là VIDEO GỐC.
+2. Video thứ HAI là VIDEO REMAKE do AI tạo. Remake đổi bề mặt (nhân vật, thế giới, lời thoại, bối cảnh) nhưng PHẢI giữ nguyên "chất drama" của bản gốc.
+
+File .txt đính kèm có danh sách TIÊU CHÍ, phân tích sẵn của tập gốc và kịch bản remake.
+
+Nhiệm vụ: XEM VÀ NGHE HẾT CẢ HAI VIDEO, rồi đánh giá bản remake giữ lại được bao nhiêu ở TỪNG tiêu chí.
+
+## CÁCH CHẤM
+
+- Mỗi tiêu chí có:
+  - "score" từ 0 đến 10 (10 = giữ trọn, 0 = mất hoàn toàn);
+  - "verdict" là đúng một trong ba giá trị "giữ được" (score ≥ 8), "lệch một phần" (4–7) hoặc "mất" (≤ 3).
+- KHÔNG trừ điểm vì bề mặt khác (tên, ngoại hình, bối cảnh, câu chữ). Đó là mục đích của remake. Chỉ chấm CHỨC NĂNG và CẢM GIÁC có tương đương hay không.
+- Đánh giá theo video THẬT đã tạo. Kịch bản viết đúng mà video không thể hiện được (diễn xuất đơ, thiếu phản ứng, cắt sai nhịp, thiếu nhạc) thì vẫn trừ điểm.
+- "original" và "remake": mô tả CỤ THỂ kèm mốc thời gian mm:ss trong từng video. Ví dụ: "0:12 tiết lộ di chúc → sốc, cường độ 8/10".
+- "fix": cách sửa CỤ THỂ, làm theo được ngay, chỉ rõ ĐOẠN NÀO (mốc mm:ss của video remake) và SỬA GÌ trong kịch bản/prompt clip. Ví dụ: "0:10–0:15 cận mặt phản diện: thêm nhếch mép + ánh mắt nhìn xuống khinh miệt, giữ 1.5s trước khi nói". KHÔNG viết chung chung kiểu "tinh chỉnh prompt để tăng biểu cảm". Ghi "" nếu đã giữ được.
+- "overall_score" từ 0 đến 100: đánh giá tổng thể remake giữ được bao nhiêu phần trăm sức hút của bản gốc. Các tiêu chí cốt lõi (đường cong cảm xúc, đảo chiều, cao trào, kết thúc tập) có trọng số cao hơn.
+- "top_fixes": 3–7 việc nên sửa trước, theo thứ tự tác động lớn nhất, cùng mức cụ thể như "fix".
+- Chấm phân hoá đúng thực tế. KHÔNG cho cùng một điểm cho hầu hết tiêu chí. Tiêu chí remake làm tốt hơn hoặc kém rõ rệt phải thể hiện ở điểm.
+- KHÔNG chèn chú thích trích dẫn kiểu [cite: ...] vào bất kỳ trường nào.
+
+## ĐẦU RA
+
+MỘT JSON object duy nhất. "criteria" có ĐỦ TẤT CẢ tiêu chí trong file đính kèm, dùng đúng "id":
+
+{
+  "overall_score": 72,
+  "summary": "3–6 câu: remake giữ được gì, mất gì quan trọng nhất",
+  "criteria": [
+    { "id": "emotion_curve", "score": 7, "verdict": "lệch một phần", "original": "...", "remake": "...", "fix": "..." }
+  ],
+  "top_fixes": ["..."]
+}

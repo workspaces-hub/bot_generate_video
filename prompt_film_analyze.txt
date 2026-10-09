@@ -37,6 +37,10 @@ Nhiệm vụ: trả về ĐỀ XUẤT CẬP NHẬT memory (delta) cho clip này.
 - Knowledge: ai biết điều gì, từ event nào. Ghi cả điều SAI mà nhân vật tin (is_true=false), vì đây là nền của dramatic irony và twist. audience_knows_since là event mà khán giả biết điều đó.
 - Thread: câu hỏi hoặc mạch truyện còn treo (bí mật, âm mưu, lời hứa, mối nguy, quan hệ chưa ngã ngũ, đạo cụ được nhấn mạnh như chi tiết sẽ quay lại). Mở thread mới cho mạch mới. Mạch đã có (open_threads trong memory) mà clip này nhắc lại hoặc trả lời thì dùng thread_updates.
 - Trạng thái: cập nhật goals, relations, emotion, status của nhân vật; holder và state của đạo cụ, sao cho đúng với trạng thái CUỐI clip.
+- Thực thi cảm xúc của TỪNG segment (bản remake sẽ bám theo để giữ đúng cảm giác):
+  - "intensity": cường độ cảm xúc KHÁN GIẢ cảm nhận ở segment, số nguyên 1–10. 1–3 là nhẹ hoặc dẫn dắt; 4–6 là căng vừa; 7–8 là mạnh; 9–10 là đỉnh, sốc, cao trào. So tương đối trong cả clip: shot cao trào phải cao nhất.
+  - "reaction": phản ứng hoặc khoảng dừng khuếch đại cảm xúc, nếu có. Ghi cụ thể quan sát được: ai, biểu cảm gì (ánh mắt, cơ hàm, khoé miệng, nhịp thở), giữ bao lâu, im lặng trước khi đáp. Không có thì để "".
+  - "sound": nhạc/âm thanh trong segment: nhạc vào, dâng, giảm hay dừng; im lặng; SFX nhấn; nhạc so với thoại (nhỏ dưới thoại hay dâng lấn). Không đáng kể thì để "".
 
 ## ĐẦU RA
 
@@ -54,6 +58,9 @@ Trả về MỘT JSON object duy nhất với các khóa dưới đây. Mảng n
       "action": "hành động quan sát được trong segment",
       "dialogue": [{ "speaker": "CHAR_... hoặc NARRATOR/UNKNOWN", "text": "lời thoại nguyên văn" }],
       "emotion": "cảm xúc chủ đạo",
+      "intensity": 7,
+      "reaction": "nữ chính nghiến răng, mắt đỏ, im lặng 2s rồi mới đáp",
+      "sound": "nhạc căng dâng dần, tắt hẳn khi phản diện cười",
       "camera": "cỡ cảnh/góc máy ngắn gọn"
     }
   ],

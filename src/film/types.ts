@@ -99,6 +99,12 @@ export interface SegmentDescription {
   action: string;
   dialogue: { speaker: string; text: string }[];
   emotion?: string;
+  /** Cường độ cảm xúc khán giả cảm nhận ở shot này, 1–10. */
+  intensity?: number;
+  /** Phản ứng/khoảng dừng khuếch đại cảm xúc (ánh mắt giữ lâu, nghiến răng, im lặng trước khi đáp...). */
+  reaction?: string;
+  /** Âm thanh/nhạc: nhạc vào/tăng/giảm/dừng, im lặng, SFX nhấn — và tương quan với thoại. */
+  sound?: string;
   camera?: string;
 }
 

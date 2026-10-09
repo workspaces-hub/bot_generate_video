@@ -34,7 +34,9 @@ import {
   buildEpisodeContext,
   buildGlobalOverview,
   buildSourceEpisode,
+  checkEpisodeDuration,
   episodeMapper,
+  storyDurationOf,
   FILM_EPISODE_RULES,
 } from "./context";
 import { readJson, writeJson } from "./llm";
@@ -822,7 +824,7 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
       sourceEpisodes: chunkClips.map((c) => buildSourceEpisode(c, timeline, memory)),
       globalContext: {
         overview: `${buildGlobalOverview(memory, structures, adaptationMap, episodeOf)}${noteSection}`,
-        episode: (tap) => buildEpisodeContext(clipByEpisode.get(tap)!.clipId, memory, structures, adaptationMap, episodeOf),
+        episode: (tap) => buildEpisodeContext(clipByEpisode.get(tap)!.clipId, memory, structures, adaptationMap, episodeOf, timeline),
         rules: `${FILM_EPISODE_RULES}${noteSection}`,
       },
       remakeBaseName: remake.name,
@@ -832,6 +834,9 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
       previousEpisode: doneUntil,
       // Flow phim không chạy QA — viết xong tập là gửi JSON.
       skipQa: true,
+      // Tổng thời lượng tập remake phải gần tập gốc (lệch → Gemini viết lại kèm lỗi).
+      checkEpisode: (tap, value) =>
+        checkEpisodeDuration(value, storyDurationOf(clipByEpisode.get(tap)!.clipId, timeline, memory)),
       filmId,
       onStatus,
     });
@@ -863,4 +868,29 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
     }
   }
   return result;
+}
+
+/**
+ * Phân tích sẵn của 1 tập gốc (tóm tắt, scene/beat, đường cảm xúc, twist) —
+ * tài liệu tham khảo cho bước so sánh video gốc ↔ remake ("Test prompt remake phim").
+ */
+export async function episodeAnalysisSummary(filmId: string, episode: number): Promise<unknown> {
+  const dir = filmDirFor(filmId);
+  const record = await readFilmRecord(filmId);
+  const manifest = (await readJson<SourceClip[]>(path.join(dir, "manifest.json"))) ?? [];
+  const clip = manifest.find((c, i) => (c.sourceEpisode ?? i + 1) === episode);
+  if (!clip) return null;
+  const memory = await readJson<StoryMemory>(path.join(dir, "story_memory.json"));
+  const structures = await loadStructures(dir, record?.sourceBatches.filter((b) => b.analyzed) ?? []);
+  const events = (memory?.events ?? []).filter((e) => e.clip_id === clip.clipId);
+  const eventIds = new Set(events.map((e) => e.id));
+  return {
+    episode,
+    summary: memory?.clips.find((c) => c.clip_id === clip.clipId)?.summary,
+    events: events.map((e) => ({ id: e.id, type: e.type, summary: e.summary })),
+    scenes: structures.flatMap((s) => s.scenes.filter((sc) => sc.clip_id === clip.clipId)),
+    emotion_curve: structures.flatMap((s) => s.emotion_curve.filter((c) => c.clip_id === clip.clipId)),
+    twists: structures.flatMap((s) => s.twists.filter((t) => eventIds.has(t.event_id))),
+    power_shifts: structures.flatMap((s) => s.power_shifts.filter((p) => eventIds.has(p.event_id))),
+  };
 }
