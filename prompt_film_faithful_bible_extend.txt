@@ -11,6 +11,7 @@ Nhiệm vụ: CHỈ THÊM những gì các tập gốc mới có mà Bible chưa
   - "name" KHÔNG phải tiếng Việt, không dấu.
   - id từ tên riêng (CHAR_<TÊN>), không dùng nhãn vai trò.
   - "asset_prompt" tiếng Anh mô tả người mới (code kiểm tra).
+- TRANG PHỤC (nhân vật mới; nhân vật đã có mà tập mới có bộ đồ MỚI thì thêm vào "outfit_additions": [{"char_id": "CHAR_...", "outfits": [...]}]): mỗi nhân vật có danh mục "outfits", mỗi bộ trang phục khác nhau một mục {"id": "W1", "source_outfit": "<id bộ của nhân vật gốc, nếu có>", "description": "English: áo, quần/váy, màu, chất liệu, phụ kiện, giày", "default": true|false}. Đúng MỘT bộ "default": true, là bộ mặc nhiều nhất. "asset_prompt" (ảnh tham chiếu) vẽ nhân vật mặc ĐÚNG bộ default đó. Các tập ghi rõ mỗi clip mặc bộ nào (WARDROBE), nên mọi bộ dùng trong phim phải có trong danh mục.
 - Bối cảnh hoặc đạo cụ gốc MỚI → thêm LOC_/PROP_/OBJ_ mô tả ĐÚNG thứ gốc bằng tiếng Anh (asset_prompt), kèm source_ids.
 - Thêm mục vào "source_to_target_map" cho mọi nhân vật gốc của các tập mới, kể cả nhân vật đã có trong Bible (target_id là id cũ).
 
@@ -19,7 +20,8 @@ Nhiệm vụ: CHỈ THÊM những gì các tập gốc mới có mà Bible chưa
 MỘT JSON object, chỉ gồm phần THÊM:
 
 {
-  "characters": [ { "id": "CHAR_...", "name": "...", "source_ids": ["..."], "source_roles": ["..."], "identity": "...", "gender": "...", "age": "...", "personality": "...", "goal": "...", "asset_prompt": "English appearance of the NEW person" } ],
+  "characters": [ { "id": "CHAR_...", "name": "...", "source_ids": ["..."], "source_roles": ["..."], "identity": "...", "gender": "...", "age": "...", "personality": "...", "goal": "...", "outfits": [ { "id": "W1", "source_outfit": "W1", "description": "English outfit description", "default": true } ], "asset_prompt": "English appearance of the NEW person wearing the default outfit" } ],
+  "outfit_additions": [ { "char_id": "CHAR_... (đã có)", "outfits": [ { "id": "W3", "source_outfit": "W2", "description": "...", "default": false } ] } ],
   "core_locations": [ { "id": "LOC_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English description of the SAME place" } ],
   "core_props": [ { "id": "PROP_... hoặc OBJ_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English description of the SAME object" } ],
   "relationships": [],

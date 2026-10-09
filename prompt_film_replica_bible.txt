@@ -1,0 +1,39 @@
+# REMAKE GIỐNG HỆT GỐC — SERIES BIBLE: GIỮ NGUYÊN NHÂN VẬT
+
+Bạn là showrunner. File đính kèm có Dramatic DNA và asset của các tập gốc, cùng phân tích toàn phim gốc (nhân vật xuyên phim, mạch truyện, twist).
+
+Nhiệm vụ: lập Series Bible cho bản remake GIỐNG HỆT phim gốc. KHÔNG thay gì: nhân vật, thế giới, câu chuyện, bối cảnh, đạo cụ, trang phục, quan hệ, bí mật, xung đột đều GIỮ NGUYÊN như phim gốc. Bible chỉ chép lại và mô tả thật chính xác để gen lại đúng những người, nơi chốn và đồ vật đó.
+
+## NHÂN VẬT (code kiểm tra, sai sẽ bị từ chối)
+
+- MỖI nhân vật gốc ↔ ĐÚNG MỘT nhân vật trong Bible, là CHÍNH người đó; ghi đủ trong "source_to_target_map". Cùng một người ở nhiều tập gốc → cùng một id.
+- GIỮ id gốc (target_id = source_id) trừ khi id gốc là nhãn chung (CHAR_MAN, CHAR_WOMAN...) — khi đó dùng id từ tên riêng của nhân vật trong phim.
+- "name": tên của nhân vật trong phim gốc (như được gọi trong thoại). Không biết tên thì đặt theo vai trò, viết không dấu.
+- Giữ nguyên vai trò, tính cách, mục tiêu, quan hệ, giới tính, độ tuổi, dáng người, gương mặt, kiểu tóc, màu tóc và địa vị.
+- "asset_prompt": mô tả ngoại hình CHÍNH người trong video gốc bằng tiếng Anh, tự chứa, càng chi tiết càng tốt để gen ảnh tham chiếu giống hệt (tuổi, giới tính, dáng, khuôn mặt, mắt, mũi, môi, tóc, làn da, nét đặc trưng, trang phục mặc định). Ảnh nhân vật được GEN LẠI từ asset_prompt này (không dùng ảnh trong video gốc), nên mô tả phải đủ chi tiết để gen ra đúng người đó.
+- TRANG PHỤC: mỗi nhân vật có danh mục "outfits", mỗi bộ trang phục khác nhau trong video gốc một mục {"id": "W1", "source_outfit": "<id bộ W? của nhân vật gốc>", "description": "English: áo, quần/váy, màu, chất liệu, phụ kiện, giày — đúng như gốc", "default": true|false}. Đúng MỘT bộ "default": true, là bộ mặc nhiều nhất. "asset_prompt" vẽ nhân vật mặc ĐÚNG bộ default đó.
+
+## BỐI CẢNH, ĐẠO CỤ (giữ như gốc)
+
+- "core_locations" và "core_props" liệt kê MỌI bối cảnh và đạo cụ có vai trò trong các tập gốc, mỗi thứ ánh xạ đúng thứ gốc ("source_ids"). Giữ id gốc khi có thể.
+- id dạng LOC_<TEN>, PROP_<TEN> (cầm được) hoặc OBJ_<TEN> (cố định), viết HOA, không dấu.
+- "asset_prompt" mô tả ĐÚNG bối cảnh hoặc đạo cụ gốc bằng tiếng Anh, tự chứa (kiến trúc, bố cục, ánh sáng, chất liệu, màu, chi tiết nhận dạng). Ảnh bối cảnh/đạo cụ được GEN LẠI từ asset_prompt này (không dùng ảnh trong video gốc), nên mô tả phải đủ chi tiết để gen ra đúng nơi chốn/đồ vật đó.
+
+## ĐẦU RA
+
+MỘT JSON object:
+
+{
+  "title": "tên phim gốc",
+  "remake_mode": "replica — giống hệt gốc",
+  "world": "thế giới/bối cảnh chung của phim gốc",
+  "characters": [
+    { "id": "CHAR_...", "name": "...", "source_ids": ["CHAR_... gốc"], "source_roles": ["vai trò ở tập gốc"], "identity": "vai trò/địa vị", "gender": "...", "age": "...", "personality": "...", "goal": "...", "outfits": [ { "id": "W1", "source_outfit": "W1", "description": "English outfit description", "default": true } ], "asset_prompt": "English appearance of the SAME person wearing the default outfit" }
+  ],
+  "core_locations": [ { "id": "LOC_...", "source_ids": ["LOC_... gốc"], "description": "...", "asset_prompt": "English description of the SAME place" } ],
+  "core_props": [ { "id": "PROP_... hoặc OBJ_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English description of the SAME object" } ],
+  "relationships": [ { "a": "CHAR_...", "b": "CHAR_...", "type": "...", "starting_state": "..." } ],
+  "secrets": [ { "secret": "...", "who_knows_at_start": ["CHAR_..."], "hidden_from": ["CHAR_..."] } ],
+  "long_term_conflicts": [ { "conflict": "...", "sides": ["CHAR_..."] } ],
+  "source_to_target_map": [ { "source_episode": 1, "source_id": "CHAR_... gốc", "target_id": "CHAR_... (thường giống source_id)" } ]
+}

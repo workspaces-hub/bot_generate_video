@@ -1,3 +1,4 @@
+rtx 4090
 curl -L --progress-bar \
   "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" \
   -o /workspace/runpod-slim/ComfyUI/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
@@ -20,8 +21,72 @@ curl -L --progress-bar \
   -o /workspace/runpod-slim/ComfyUI/models/vae/minimax_h3_video_vae_fp16.safetensors
 
 
-wget -O /workspace/runpod-slim/ComfyUI/models/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors \
-"https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+curl -L --progress-bar \
+  -o /workspace/runpod-slim/ComfyUI/models/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors \
+  "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
 
-wget -O /workspace/runpod-slim/ComfyUI/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors \
-"https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+curl -L --progress-bar \
+  -o /workspace/runpod-slim/ComfyUI/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors \
+  "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+
+
+  curl -L --progress-bar \
+  "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" \
+  -o /workspace/runpod-slim/ComfyUI/models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+
+RTX 5090
+
+cd /workspace/runpod-slim
+
+cat > download_h3.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+COMFY_DIR="${COMFY_DIR:-/workspace/runpod-slim/ComfyUI}"
+MODEL_DIR="$COMFY_DIR/models"
+BASE_URL="https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main"
+
+mkdir -p \
+"$MODEL_DIR/diffusion_models" \
+"$MODEL_DIR/text_encoders" \
+"$MODEL_DIR/vae"
+
+download() {
+    url="$1"
+    out="$2"
+
+    if [ -f "$out" ]; then
+        echo "SKIP: $out"
+        return
+    fi
+
+    curl -L \
+      --fail \
+      --retry 10 \
+      --retry-delay 5 \
+      --retry-all-errors \
+      --continue-at - \
+      -o "$out" \
+      "$url"
+}
+
+download "$BASE_URL/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" \
+"$MODEL_DIR/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+
+download "$BASE_URL/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" \
+"$MODEL_DIR/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+
+download "$BASE_URL/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" \
+"$MODEL_DIR/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+
+download "$BASE_URL/vae/minimax_h3_video_vae_int8_convrot.safetensors" \
+"$MODEL_DIR/vae/minimax_h3_video_vae_int8_convrot.safetensors"
+
+download "$BASE_URL/vae/minimax_h3_audio_vae_fp32.safetensors" \
+"$MODEL_DIR/vae/minimax_h3_audio_vae_fp32.safetensors"
+
+echo "DONE"
+EOF
+
+chmod +x download_h3.sh
+./download_h3.sh

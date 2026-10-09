@@ -476,7 +476,7 @@ export interface FilmTestJob extends BaseJob {
   /** Yêu cầu riêng của bản remake test (tuỳ chọn). */
   note?: string;
   /** Chế độ remake: giống gốc (mặc định) hoặc đổi thế giới. */
-  style?: "faithful" | "transform";
+  style?: "replica" | "faithful" | "transform";
   /**
    * Id lần test (thư mục storage/films/<phim>/tests/<testId>/ + state.json) —
    * job chạy lại (restart/"tiếp") làm tiếp từ bước dở. Job cũ không có thì tự cấp.
@@ -3310,7 +3310,7 @@ async function runFilmTestJob(job: FilmTestJob, jobId: string): Promise<void> {
     if (!state.remakeName) {
       const plan = await planFilmRemake(
         job.filmId,
-        { mode: "new", note: state.note, style: state.style ?? "faithful" },
+        { mode: "new", note: state.note, style: state.style ?? "replica" },
         `${job.filmId}_remake_${await resolveNextRemakeVersion(job.filmId)}`,
       );
       state.remakeName = plan.name;
@@ -3328,7 +3328,7 @@ async function runFilmTestJob(job: FilmTestJob, jobId: string): Promise<void> {
         const remake = await runFilmRemake({
           jobId,
           filmId: job.filmId,
-          choice: exists ? { mode: "continue", name: remakeName } : { mode: "new", note: state.note, style: state.style ?? "faithful" },
+          choice: exists ? { mode: "continue", name: remakeName } : { mode: "new", note: state.note, style: state.style ?? "replica" },
           suggestedNewName: remakeName,
           // Cùng tin nhắn kèm file như "Remake phim" thật (handlers truyền GENERATE_SCRIPT_ATTACHMENT_PROMPT).
           episodeMessage: job.prompt,

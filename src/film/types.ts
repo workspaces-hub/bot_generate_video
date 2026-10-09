@@ -108,7 +108,15 @@ export interface SegmentDescription {
   reaction?: string;
   /** Âm thanh/nhạc: nhạc vào/tăng/giảm/dừng, im lặng, SFX nhấn — và tương quan với thoại. */
   sound?: string;
+  /** Nhân vật trong shot → id bộ trang phục đang mặc (CharacterRecord.outfits), vd {"CHAR_LAN":"W2"}. */
+  wardrobe?: Record<string, string>;
   camera?: string;
+}
+
+/** 1 bộ trang phục của nhân vật (id W1, W2... trong phạm vi nhân vật). */
+export interface OutfitRecord {
+  id: string;
+  description: string;
 }
 
 export interface CharacterRecord {
@@ -116,6 +124,11 @@ export interface CharacterRecord {
   name: string;
   description: string;
   aliases: string[];
+  /**
+   * Danh mục trang phục xuyên phim — để remake nói RÕ mỗi clip nhân vật mặc
+   * bộ nào (ảnh tham chiếu chỉ có 1 bộ; không nói rõ thì model gen chọn ngẫu nhiên).
+   */
+  outfits?: OutfitRecord[];
   role?: string;
   goals?: string[];
   relations?: Record<string, string>;
@@ -185,7 +198,8 @@ export interface MemoryDelta {
   clip_summary: string;
   segments: SegmentDescription[];
   new_characters?: CharacterRecord[];
-  character_updates?: (Partial<CharacterRecord> & { id: string })[];
+  /** add_outfits: bộ trang phục MỚI của nhân vật đã có (id nối tiếp W2, W3...). */
+  character_updates?: (Partial<CharacterRecord> & { id: string; add_outfits?: OutfitRecord[] })[];
   new_props?: PropRecord[];
   prop_updates?: (Partial<PropRecord> & { id: string })[];
   new_locations?: LocationRecord[];
@@ -303,7 +317,13 @@ export interface SourceBatch {
   analyzed: boolean;
 }
 
-export type RemakeMode = "faithful" | "transform";
+/**
+ * "replica" (mặc định): TÁI TẠO đúng video gốc — giữ nhân vật gốc, bối cảnh,
+ * hành động, thoại nguyên văn ngôn ngữ gốc; ảnh tham chiếu lấy từ frame thật.
+ * "faithful": giống gốc nhưng THAY nhân vật, thoại dịch tiếng Anh.
+ * "transform": đổi cả thế giới, giữ chất drama.
+ */
+export type RemakeMode = "replica" | "faithful" | "transform";
 
 /** 1 đợt tập của 1 bản remake (Stage 6–7). */
 export interface RemakeBatch {

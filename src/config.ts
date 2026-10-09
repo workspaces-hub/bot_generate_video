@@ -248,11 +248,18 @@ export const config = {
   promptFilmAdaptMap: "prompt_film_adapt_map.txt",
   // "Test prompt remake phim": so sánh video gốc ↔ video remake theo tiêu chí drama (src/film/compare.ts).
   promptFilmCompare: "prompt_film_compare.txt",
-  // "Remake phim" chế độ GIỐNG GỐC (mặc định): giữ nguyên bối cảnh/hành động/
+  // scripts/compare-same.ts: 2 video có giống nhau về kịch bản/hành động/lời thoại không (nhân vật được đổi).
+  promptFilmCompareSame: "prompt_film_compare_same.txt",
+  // "Remake phim" chế độ THAY NHÂN VẬT: giữ nguyên bối cảnh/hành động/
   // góc máy/nhịp shot, chỉ thay nhân vật, thoại dịch sang tiếng Anh.
   promptFilmFaithfulBible: "prompt_film_faithful_bible.txt",
   promptFilmFaithfulBibleExtend: "prompt_film_faithful_bible_extend.txt",
   promptFilmFaithfulEpisode: "prompt_film_faithful_episode.txt",
+  // "Remake phim" chế độ GIỐNG HỆT GỐC (mặc định): giữ nguyên nhân vật và lời thoại
+  // nguyên văn (ngôn ngữ gốc); ảnh nhân vật/bối cảnh đều gen lại.
+  promptFilmReplicaBible: "prompt_film_replica_bible.txt",
+  promptFilmReplicaBibleExtend: "prompt_film_replica_bible_extend.txt",
+  promptFilmReplicaEpisode: "prompt_film_replica_episode.txt",
   // Worker xử lý video (workers/timeline_worker.py — chỉ cần stdlib + ffmpeg).
   filmPythonBin: process.env.FILM_PYTHON_BIN ?? "python3",
   // Ngưỡng đổi cảnh của ffmpeg (0..1) — nhỏ hơn = cắt nhiều shot hơn.

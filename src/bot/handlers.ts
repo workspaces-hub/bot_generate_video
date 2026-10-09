@@ -74,6 +74,9 @@ import {
   UPDATE_FILM_FAITHFUL_EPISODE_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_FAITHFUL_BIBLE_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_FAITHFUL_BIBLE_EXTEND_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_REPLICA_EPISODE_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_REPLICA_BIBLE_PROMPT_BUTTON_LABEL,
+  UPDATE_FILM_REPLICA_BIBLE_EXTEND_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_ANALYZE_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_RECONSTRUCT_PROMPT_BUTTON_LABEL,
   UPDATE_FILM_ADAPT_MAP_PROMPT_BUTTON_LABEL,
@@ -147,6 +150,9 @@ const SERIES_PROMPT_CONFIG_KEYS = {
   [UPDATE_FILM_FAITHFUL_EPISODE_PROMPT_BUTTON_LABEL]: "promptFilmFaithfulEpisode",
   [UPDATE_FILM_FAITHFUL_BIBLE_PROMPT_BUTTON_LABEL]: "promptFilmFaithfulBible",
   [UPDATE_FILM_FAITHFUL_BIBLE_EXTEND_PROMPT_BUTTON_LABEL]: "promptFilmFaithfulBibleExtend",
+  [UPDATE_FILM_REPLICA_EPISODE_PROMPT_BUTTON_LABEL]: "promptFilmReplicaEpisode",
+  [UPDATE_FILM_REPLICA_BIBLE_PROMPT_BUTTON_LABEL]: "promptFilmReplicaBible",
+  [UPDATE_FILM_REPLICA_BIBLE_EXTEND_PROMPT_BUTTON_LABEL]: "promptFilmReplicaBibleExtend",
 } as const satisfies Record<string, keyof typeof config>;
 // Mode "updateSeriesPrompt": userId → file prompt series sẽ bị ghi đè.
 const pendingSeriesPromptPath = new Map<number, string>();
@@ -1996,7 +2002,7 @@ async function handleFilmUploadText(ctx: Context, userId: number, text: string, 
       filmId: upload.filmId,
       episodes: plan.episodes,
       note: testNote,
-      style: testStyle?.mode ?? "faithful",
+      style: testStyle?.mode ?? "replica",
       testId: newTestId(),
     });
     return;
@@ -2038,7 +2044,7 @@ async function enqueueFilmRemake(
     return;
   }
   const statusMessage = await reply(
-    `⏳ Phim "${filmId}" → ${plan.isNew ? "bản remake MỚI" : "tạo tiếp bản"} "${plan.name}" tập ${plan.from}–${plan.to}\nChế độ: ${plan.style === "faithful" ? "giống gốc, chỉ thay nhân vật (thoại tiếng Anh)" : "đổi thế giới, giữ chất drama"}${plan.note ? `\nYêu cầu riêng: ${plan.note}` : ""}...`,
+    `⏳ Phim "${filmId}" → ${plan.isNew ? "bản remake MỚI" : "tạo tiếp bản"} "${plan.name}" tập ${plan.from}–${plan.to}\nChế độ: ${plan.style === "replica" ? "giống hệt gốc (giữ nhân vật, thoại nguyên văn)" : plan.style === "faithful" ? "giống gốc, chỉ thay nhân vật (thoại tiếng Anh)" : "đổi thế giới, giữ chất drama"}${plan.note ? `\nYêu cầu riêng: ${plan.note}` : ""}...`,
   );
   enqueueJob({
     type: "generateScript",
@@ -2062,7 +2068,7 @@ async function enqueueFilmRemake(
 async function handleFilmRemakeRequest(ctx: Context, text: string, promptMessageId: number): Promise<void> {
   const [firstLine, ...rest] = text.normalize("NFC").split("\n");
   // "phương tây"/"phương đông" (1 dòng) → mô tả phong cách đầy đủ, xem stylePresets.ts.
-  // Mặc định GIỐNG GỐC (chỉ thay nhân vật); dòng "đổi thế giới" → remake đổi thế giới như cũ.
+  // Mặc định GIỐNG HỆT GỐC; "thay nhân vật"/"phương tây"/"phương đông" → chỉ thay nhân vật; "đổi thế giới" → đổi thế giới.
   const { note, mode: style } = expandStyleNote(rest.join("\n").trim() || undefined);
   let filmId: string;
   try {
@@ -2733,7 +2739,7 @@ export function registerHandlers(bot: Telegraf): void {
     clearPendingUploads(ctx.from.id);
     waitingMode.set(ctx.from.id, "filmRemake");
     await ctx.reply(
-      `${ctx.from.first_name ?? "Bạn"}, gõ tên phim đã phân tích (hoặc tên file <phim>_tham_chieu.json) — bot tạo 1 bản remake MỚI cho toàn bộ tập đã phân tích.\nMặc định remake GIỐNG GỐC: giữ nguyên bối cảnh/hành động/góc máy/nhịp, chỉ thay nhân vật, thoại tiếng Anh. Tuỳ chọn từ dòng 2: "đổi thế giới" (remake đổi cả thế giới như cũ), "phương tây"/"phương đông", hoặc mô tả tự do, vd:\nsinhton\nphương đông\nbối cảnh cổ trang, nữ chính là tiểu thư`,
+      `${ctx.from.first_name ?? "Bạn"}, gõ tên phim đã phân tích (hoặc tên file <phim>_tham_chieu.json) — bot tạo 1 bản remake MỚI cho toàn bộ tập đã phân tích.\nMặc định remake GIỐNG HỆT GỐC: giữ nguyên nhân vật, bối cảnh, hành động, góc máy, nhịp và lời thoại nguyên văn (ngôn ngữ gốc); ảnh nhân vật và bối cảnh gen lại (không dùng ảnh trong video gốc). Tuỳ chọn từ dòng 2: "thay nhân vật" (giữ mọi thứ, chỉ thay người, thoại tiếng Anh), "phương tây"/"phương đông" (thay nhân vật theo phong cách đó), "đổi thế giới" (remake đổi cả thế giới), vd:\nsinhton\nthay nhân vật\nphương đông`,
       promptMenu,
     );
   });

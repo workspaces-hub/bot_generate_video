@@ -185,6 +185,21 @@ export function repairDelta(
     }
   }
 
+  // Trang phục: nhân vật chỉ có 1 bộ → tự điền; khoá không phải nhân vật trong shot → bỏ.
+  const outfits = knownOutfits(mem, delta);
+  for (const seg of delta.segments) {
+    const w: Record<string, string> = seg.wardrobe && typeof seg.wardrobe === "object" ? { ...seg.wardrobe } : {};
+    for (const key of Object.keys(w)) {
+      if (!seg.characters.includes(key)) delete w[key];
+    }
+    for (const charId of seg.characters) {
+      const ids = [...(outfits.get(charId) ?? [])];
+      if (!w[charId] && ids.length === 1) w[charId] = ids[0];
+    }
+    if (Object.keys(w).length > 0) seg.wardrobe = w;
+    else delete seg.wardrobe;
+  }
+
   const locs = new Set([...mem.locations, ...arr(delta.new_locations)].map((l) => l.id));
   for (const seg of delta.segments) {
     if (!seg.location || locs.has(seg.location)) continue;
@@ -222,6 +237,20 @@ export function repairDelta(
     fixes.push(`điền ${missing.length} segment Gemini bỏ sót: ${missing.join(", ")}`);
   }
   return { delta, fixes };
+}
+
+/** Bộ trang phục đã biết của từng nhân vật (memory + nhân vật mới + add_outfits trong delta). */
+function knownOutfits(mem: StoryMemory, d: MemoryDelta): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  const add = (charId: string, ids: string[]) => {
+    const set = map.get(charId) ?? new Set<string>();
+    ids.forEach((id) => set.add(id));
+    map.set(charId, set);
+  };
+  for (const c of mem.characters) add(c.id, arr(c.outfits).map((o) => o.id));
+  for (const c of arr(d.new_characters)) add(c.id, arr(c.outfits).map((o) => o.id));
+  for (const u of arr(d.character_updates)) add(u.id, arr(u.add_outfits).map((o) => o.id));
+  return map;
 }
 
 export function validateDelta(mem: StoryMemory, d: MemoryDelta, tl: GlobalTimeline, clipId: string): string[] {
@@ -274,6 +303,22 @@ export function validateDelta(mem: StoryMemory, d: MemoryDelta, tl: GlobalTimeli
     if (s.location && !locs.has(s.location)) errors.push(`segments ${s.id}: bối cảnh "${s.location}" chưa khai báo`);
   }
   for (const u of arr(d.character_updates)) needChar(u.id, "character_updates");
+
+  // Trang phục: nhân vật mới phải có danh mục; shot ghi đúng bộ; nhân vật NHIỀU bộ thì shot nào cũng phải ghi.
+  const outfits = knownOutfits(mem, d);
+  for (const c of arr(d.new_characters)) {
+    if (arr(c.outfits).length === 0) errors.push(`new_characters ${c.id}: thiếu "outfits" (danh mục trang phục, vd [{"id":"W1","description":"..."}])`);
+  }
+  for (const s of d.segments) {
+    for (const [charId, outfitId] of Object.entries(s.wardrobe ?? {})) {
+      if (!outfits.get(charId)?.has(outfitId)) errors.push(`segments ${s.id}: ${charId} mặc "${outfitId}" chưa khai báo trong outfits của nhân vật`);
+    }
+    for (const charId of s.characters) {
+      if ((outfits.get(charId)?.size ?? 0) > 1 && !s.wardrobe?.[charId]) {
+        errors.push(`segments ${s.id}: ${charId} có nhiều bộ trang phục — phải ghi "wardrobe": {"${charId}": "W?"} cho shot này`);
+      }
+    }
+  }
   for (const u of arr(d.prop_updates)) {
     needProp(u.id, "prop_updates");
     if (u.holder && u.holder.startsWith("CHAR_")) needChar(u.holder, `prop_updates ${u.id}.holder`);
@@ -410,6 +455,10 @@ export function applyDelta(
     if (u.status) c.status = u.status;
     if (u.role) c.role = u.role;
     if (u.aliases) c.aliases = uniq([...c.aliases, ...u.aliases]);
+    for (const o of arr(u.add_outfits)) {
+      const list = arr(c.outfits);
+      if (!list.some((x) => x.id === o.id)) c.outfits = [...list, o];
+    }
   }
   for (const c of next.characters) {
     const [, last] = firstLastSeg(dedupedSegments, (s) => s.characters.includes(c.id));
@@ -481,7 +530,7 @@ export function compactMemory(mem: StoryMemory, recentEvents = 40): unknown {
   return {
     clips_so_far: mem.clips.map((c) => ({ clip_id: c.clip_id, summary: c.summary })),
     characters: mem.characters.map((c) => ({
-      id: c.id, name: c.name, description: c.description, aliases: c.aliases,
+      id: c.id, name: c.name, description: c.description, aliases: c.aliases, outfits: c.outfits,
       role: c.role, status: c.status, emotion: c.emotion, goals: c.goals, relations: c.relations,
     })),
     props: mem.props.map((p) => ({ id: p.id, type: p.type, description: p.description, holder: p.holder, state: p.state })),

@@ -35,8 +35,12 @@ import {
   buildGlobalOverview,
   buildSourceEpisode,
   checkEpisodeDuration,
+  checkSourceSpeakers,
+  checkSpeakerBinding,
   checkSpeechOnset,
+  checkWardrobe,
   FAITHFUL_SERIES_RULES,
+  REPLICA_SERIES_RULES,
   speechTimeline,
   episodeMapper,
   storyDurationOf,
@@ -636,7 +640,7 @@ export async function planFilmRemake(filmId: string, choice: RemakeChoice, sugge
   }
   if (choice.mode === "new") {
     const version = Math.max(remakeVersion(suggestedNewName), ...record.remakes.map((r) => remakeVersion(r.name) + 1), 1);
-    return { name: `${filmId}_remake_${version}`, isNew: true, note: choice.note, style: choice.style ?? "faithful", from: analyzed[0], to: last };
+    return { name: `${filmId}_remake_${version}`, isNew: true, note: choice.note, style: choice.style ?? "replica", from: analyzed[0], to: last };
   }
   const remake = record.remakes.find((r) => r.name.toLowerCase() === choice.name.toLowerCase());
   if (!remake) throw new FilmPlanError(`Phim "${filmId}" không có bản remake "${choice.name}".`);
@@ -732,6 +736,7 @@ async function analyzeSourceBatch(
     await writeJson(timelinePath, timeline);
     notes.push(...warnings.map((w) => `Timeline ${w.clipId}: ${w.message}`));
   }
+
   const transcripts = new Map<string, ClipTranscript>();
   for (const clip of batchClips) {
     const tPath = path.join(dir, "transcripts", `${clip.clipId}.json`);
@@ -767,6 +772,31 @@ async function analyzeSourceBatch(
     await writeJson(memoryPath, memory);
   }
   await reconstructBatch({ jobId, filmDir: dir, memory, tl: timeline, sourceBatch: sb, previousBatches, onStatus });
+}
+
+/**
+ * Nhân vật gốc → nhân vật mới theo Series Bible (+ Bible mở rộng) của bản
+ * remake: source_to_target_map và characters[].source_ids. Đọc đồng bộ vì
+ * dùng trong checkEpisode (Bible đã được tạo trước khi viết tập).
+ */
+function bibleSourceMap(seriesDir: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const files = fs.existsSync(seriesDir)
+    ? fs.readdirSync(seriesDir).filter((f) => f === "series_bible.json" || /^bible_ext_tap\d+\.json$/.test(f))
+    : [];
+  for (const f of files) {
+    try {
+      const bible = JSON.parse(fs.readFileSync(path.join(seriesDir, f), "utf-8")) as {
+        characters?: { id?: string; source_ids?: string[] }[];
+        source_to_target_map?: { source_id?: string; target_id?: string }[];
+      };
+      for (const c of bible.characters ?? []) for (const src of c.source_ids ?? []) if (c.id) map.set(src, c.id);
+      for (const m of bible.source_to_target_map ?? []) if (m.source_id && m.target_id) map.set(m.source_id, m.target_id);
+    } catch {
+      // Bible hỏng → bỏ qua file đó.
+    }
+  }
+  return map;
 }
 
 /** Ghi chú riêng của bản remake → chèn vào ngữ cảnh mọi bước viết kịch bản. */
@@ -858,11 +888,27 @@ export async function runFilmRemake(opts: FilmRemakeOptions): Promise<FilmRemake
             episodeRules: FAITHFUL_SERIES_RULES,
           }
         : {}),
+      // Giống hệt gốc (mặc định): giữ nguyên nhân vật + thoại nguyên văn ngôn ngữ gốc.
+      ...(plan.style === "replica"
+        ? {
+            prompts: {
+              bible: config.promptFilmReplicaBible,
+              bibleExtend: config.promptFilmReplicaBibleExtend,
+              episode: config.promptFilmReplicaEpisode,
+            },
+            episodeRules: REPLICA_SERIES_RULES,
+            originalLanguage: true,
+          }
+        : {}),
       // Tổng thời lượng tập remake phải gần tập gốc (lệch → Gemini viết lại kèm lỗi).
       checkEpisode: (tap, value) => {
         const clip = clipByEpisode.get(tap)!;
         return [
           ...checkEpisodeDuration(value, storyDurationOf(clip.clipId, timeline, memory)),
+          ...checkWardrobe(value),
+          ...checkSpeakerBinding(value),
+          // Giống gốc / giống hệt gốc: người nói phải đúng nhân vật tương ứng với người nói ở shot gốc.
+          ...(plan.style === "faithful" || plan.style === "replica" ? checkSourceSpeakers(value, memory, bibleSourceMap(seriesDirFor(remake.name))) : []),
           ...checkSpeechOnset(value, speechTimeline(clip, timeline, memory, transcripts.get(clip.clipId))[0]?.start ?? null),
         ];
       },

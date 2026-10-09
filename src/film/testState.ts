@@ -16,7 +16,7 @@ export interface FilmTestState {
   episodes: number[];
   note?: string;
   /** Chế độ remake của lần test (giống gốc / đổi thế giới). */
-  style?: "faithful" | "transform";
+  style?: "replica" | "faithful" | "transform";
   status: "running" | "failed" | "done";
   /** Bước đang/vừa làm — chỉ để hiển thị. */
   step: string;

@@ -57,3 +57,15 @@ sudo apt install -y ffmpeg
 ./cleanup_old_files.sh /workspace/runpod-slim/ComfyUI/output/video --hours 4
 
 pip install faster-whisper
+
+
+
+
+
+scp -P 13503  -i ~/.ssh/id_ed25519 -r root@213.173.109.205:/workspace/runpod-slim/bot/storage/films/mnb storage/films
+scp -P 13503  -i ~/.ssh/id_ed25519 -r root@213.173.109.205:/workspace/runpod-slim/bot/storage/generated/mnb_remake_1/ storage/generated
+
+ssh root@213.173.109.205 -p 13503 -i ~/.ssh/id_ed25519
+
+npm run compare-videos -- 11_mnb.mp4 storage/qwen-public-tmp/mnb_remake_1_tap11_full.mp4    
+npm run compare-same -- 11_mnb.mp4 storage/qwen-public-tmp/mnb_remake_1_tap11_full.mp4 

@@ -9,6 +9,7 @@ Yêu cầu:
 - Thế giới phải đủ rộng cho mọi loại beat trong DNA (làm nhục công khai, lãng mạn, nguy hiểm, bí mật...) mà không phải đổi premise giữa chừng.
 - Bí mật và conflict dài hạn phải đủ "nhiên liệu" cho toàn bộ số tập.
 - id asset theo dạng CHAR_<TEN>, LOC_<TEN>, PROP_<TEN>, OBJ_<TEN> (viết HOA, không dấu) — các tập sẽ dùng ĐÚNG các id này.
+- TRANG PHỤC: mỗi nhân vật có danh mục "outfits", mỗi bộ trang phục khác nhau một mục {"id": "W1", "source_outfit": "<id bộ của nhân vật gốc, nếu có>", "description": "English: áo, quần/váy, màu, chất liệu, phụ kiện, giày", "default": true|false}. Đúng MỘT bộ "default": true, là bộ mặc nhiều nhất. "asset_prompt" (ảnh tham chiếu) vẽ nhân vật mặc ĐÚNG bộ default đó. Các tập ghi rõ mỗi clip mặc bộ nào (WARDROBE), nên mọi bộ dùng trong phim phải có trong danh mục.
 - TÊN NHÂN VẬT (code kiểm tra, sai sẽ bị từ chối):
   - "name" là tên riêng KHÔNG phải tiếng Việt, KHÔNG dấu, hợp văn hoá thế giới phim mới. Phương Tây: tên Anh/châu Âu, vd "Elena Vance". Phương Đông: tên Trung/Hàn/Nhật phiên âm Latin, vd "Lin Yue", "Kang Min-ho". Tuyệt đối không dùng tên Việt như "Lâm Việt" hay "Phương Linh", kể cả khi phim gốc hoặc dữ liệu đầu vào là tiếng Việt.
   - id nhân vật lấy từ TÊN riêng: CHAR_<TÊN>, vd CHAR_ELENA, CHAR_MARCUS_HALE. KHÔNG dùng nhãn vai trò tiếng Việt như CHAR_NAM_CHINH, CHAR_NU_CHINH, CHAR_SEP_PHAN_DIEN, CHAR_ME_CHONG.

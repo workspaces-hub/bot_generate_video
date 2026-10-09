@@ -14,6 +14,7 @@ Nhiệm vụ: lập Series Bible cho bản remake GIỐNG HỆT phim gốc, CH�
   - Tuyệt đối không dùng tên Việt.
 - id lấy từ tên riêng: CHAR_<TÊN>, vd CHAR_ELENA. KHÔNG dùng nhãn vai trò như CHAR_NAM_CHINH hay CHAR_PHAN_DIEN.
 - "asset_prompt": mô tả ngoại hình người MỚI bằng tiếng Anh, tự chứa, dùng để gen ảnh tham chiếu (tuổi, giới tính, dáng, gương mặt, tóc, trang phục mặc định).
+- TRANG PHỤC: mỗi nhân vật có danh mục "outfits", mỗi bộ trang phục khác nhau một mục {"id": "W1", "source_outfit": "<id bộ W? của nhân vật gốc — kiểu dáng GIỮ NHƯ GỐC>", "description": "English: áo, quần/váy, màu, chất liệu, phụ kiện, giày", "default": true|false}. Đúng MỘT bộ "default": true, là bộ mặc nhiều nhất. "asset_prompt" (ảnh tham chiếu) vẽ nhân vật mặc ĐÚNG bộ default đó. Các tập ghi rõ mỗi clip mặc bộ nào (WARDROBE), nên mọi bộ dùng trong phim phải có trong danh mục.
 
 ## BỐI CẢNH, ĐẠO CỤ (giữ như gốc)
 
@@ -30,7 +31,7 @@ MỘT JSON object:
   "remake_mode": "faithful — chỉ thay nhân vật",
   "world": "thế giới/bối cảnh chung của phim gốc (giữ nguyên)",
   "characters": [
-    { "id": "CHAR_...", "name": "...", "source_ids": ["CHAR_... gốc"], "source_roles": ["vai trò ở tập gốc"], "identity": "vai trò/địa vị (như gốc)", "gender": "...", "age": "...", "personality": "...", "goal": "...", "asset_prompt": "English appearance of the NEW person" }
+    { "id": "CHAR_...", "name": "...", "source_ids": ["CHAR_... gốc"], "source_roles": ["vai trò ở tập gốc"], "identity": "vai trò/địa vị (như gốc)", "gender": "...", "age": "...", "personality": "...", "goal": "...", "outfits": [ { "id": "W1", "source_outfit": "W1", "description": "English outfit description", "default": true } ], "asset_prompt": "English appearance of the NEW person wearing the default outfit" }
   ],
   "core_locations": [ { "id": "LOC_...", "source_ids": ["LOC_... gốc"], "description": "...", "asset_prompt": "English description of the SAME place" } ],
   "core_props": [ { "id": "PROP_... hoặc OBJ_...", "source_ids": ["..."], "description": "...", "asset_prompt": "English description of the SAME object" } ],

@@ -36,28 +36,38 @@ function key(text: string): string {
     .trim();
 }
 
-/** Dòng chọn chế độ remake ĐỔI THẾ GIỚI (cách cũ) — mặc định là giống gốc, chỉ thay nhân vật. */
+/** Dòng chọn chế độ remake. Mặc định "replica" — tái tạo đúng video gốc (giữ nhân vật, thoại nguyên văn). */
 const TRANSFORM_KEYS = ["doi the gioi", "transform", "the gioi moi", "doi boi canh"];
-const FAITHFUL_KEYS = ["giong goc", "giong het goc", "chi thay nhan vat", "faithful"];
+const FAITHFUL_KEYS = ["thay nhan vat", "chi thay nhan vat", "doi nhan vat", "faithful"];
+const REPLICA_KEYS = ["giong goc", "giong het goc", "giong het", "replica", "tai tao"];
 
 /**
- * Mở rộng các dòng là từ khoá phong cách; dòng chọn chế độ ("đổi thế giới",
- * "giống gốc") được bỏ khỏi note và trả về ở mode. Mặc định mode "faithful".
+ * Mở rộng các dòng là từ khoá phong cách; dòng chọn chế độ được bỏ khỏi note
+ * và trả về ở mode:
+ * - "đổi thế giới" → transform;
+ * - "thay nhân vật" hoặc có từ khoá phong cách (phương tây/đông — tức muốn
+ *   nhân vật MỚI) → faithful;
+ * - còn lại → replica (mặc định).
  */
 export function expandStyleNote(note: string | undefined): {
   note: string | undefined;
   styles: string[];
-  mode: "faithful" | "transform";
+  mode: "replica" | "faithful" | "transform";
 } {
-  if (!note) return { note, styles: [], mode: "faithful" };
+  if (!note) return { note, styles: [], mode: "replica" };
   const raw = note.split("\n");
-  // Chế độ quyết định cách mở rộng từ khoá phong cách → xác định trước.
-  const mode: "faithful" | "transform" = raw.some((l) => TRANSFORM_KEYS.includes(key(l))) ? "transform" : "faithful";
+  const keys = raw.map(key);
+  const hasPreset = keys.some((k) => PRESETS.some((p) => p.keys.includes(k)));
+  const mode: "replica" | "faithful" | "transform" = keys.some((k) => TRANSFORM_KEYS.includes(k))
+    ? "transform"
+    : keys.some((k) => FAITHFUL_KEYS.includes(k)) || hasPreset
+      ? "faithful"
+      : "replica";
   const styles: string[] = [];
   const lines: string[] = [];
   for (const line of raw) {
     const k = key(line);
-    if (TRANSFORM_KEYS.includes(k) || FAITHFUL_KEYS.includes(k)) continue;
+    if (TRANSFORM_KEYS.includes(k) || FAITHFUL_KEYS.includes(k) || REPLICA_KEYS.includes(k)) continue;
     const preset = PRESETS.find((p) => p.keys.includes(k));
     if (preset) styles.push(preset.label);
     lines.push(preset ? (mode === "faithful" ? preset.faithful : preset.text) : line);

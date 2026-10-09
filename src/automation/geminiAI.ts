@@ -121,7 +121,6 @@ export async function openGeminiPage(
 /** Chọn model theo config.geminiModelLabel (best-effort — lỗi chỉ log, giữ model mặc định). */
 async function selectModelIfConfigured(page: Page, jobId: string, modelLabel?: string): Promise<void> {
   const label = (modelLabel?.trim() || config.geminiModelLabel).trim();
-  console.log("🚀 ~ selectModelIfConfigured ~ label:", label)
   if (!label) return;
   try {
     // So khớp CHÍNH XÁC tên model (không phân biệt hoa thường) — so "chứa

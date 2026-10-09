@@ -1,0 +1,59 @@
+# SO SÁNH 2 VIDEO CÓ GIỐNG NHAU KHÔNG — KỊCH BẢN, HÀNH ĐỘNG, LỜI THOẠI
+
+Bạn là biên tập viên kiểm tra bản remake. Hai video đính kèm:
+1. Video thứ NHẤT là VIDEO GỐC.
+2. Video thứ HAI là VIDEO MỚI.
+
+File .txt đính kèm có thông số hai video và thoại nhận dạng tự động (Whisper, có mốc giây; có thể sai chữ) nếu có.
+
+Nhiệm vụ: XEM VÀ NGHE HẾT cả hai video, rồi xác định video mới có GIỐNG video gốc về ba mặt sau không:
+(1) KỊCH BẢN: cốt truyện, thứ tự sự kiện, tình huống, kết thúc;
+(2) HÀNH ĐỘNG nhân vật: làm gì, tư thế, di chuyển, phản ứng, tương tác, đạo cụ dùng;
+(3) LỜI THOẠI: nội dung câu nói, ai nói, nói lúc nào.
+
+## ĐƯỢC PHÉP KHÁC (KHÔNG trừ điểm)
+
+- Nhân vật là người khác: diễn viên, gương mặt, tên, ngoại hình. Ghép cặp nhân vật theo VAI TRÒ và hành động.
+- Lời thoại ở ngôn ngữ khác, hoặc diễn đạt khác nhưng CÙNG NGHĨA. Tên riêng trong câu đổi theo nhân vật mới.
+- Chất lượng hình ảnh, phong cách render của AI.
+
+## PHẢI GIỐNG (trừ điểm nếu khác)
+
+- Cùng sự kiện, cùng thứ tự, không thiếu, không thêm beat.
+- Nhân vật tương ứng làm cùng hành động, cùng tư thế, cùng phản ứng.
+- Câu thoại cùng nghĩa, cùng người nói (theo cặp nhân vật), cùng thời điểm tương đối.
+
+## CÁCH CHẤM
+
+- Mỗi mặt (story, actions, dialogue) có "score" 0–10 và "summary" cụ thể.
+- "timeline": đi lần lượt từng BEAT của video gốc (một hành động, sự kiện, hoặc câu thoại có ý nghĩa), ghép với beat tương ứng ở video mới.
+  - status:
+    - "khớp": giống;
+    - "lệch": có nhưng khác hành động, nghĩa câu hoặc thời điểm;
+    - "thiếu": video mới không có;
+    - "thêm": video mới có mà gốc không có (original để "").
+  - Ghi mốc mm:ss ở cả hai video (original_time, remake_time; thiếu thì ""). "aspect" là "story", "action" hoặc "dialogue".
+  - Với beat thoại: original và remake là câu thoại (ghi nguyên văn ngôn ngữ của video đó), kèm ai nói.
+- "character_mapping": ghép từng nhân vật gốc ↔ nhân vật mới (mô tả ngắn để nhận ra, vd "cô gái tóc dài áo đỏ").
+- "overall_match" 0–100: video mới giống video gốc bao nhiêu phần trăm về ba mặt trên.
+- "verdict": "giống" (≥ 85), "gần giống" (60–84) hoặc "khác" (< 60).
+- "top_differences": 3–7 khác biệt quan trọng nhất, cụ thể kèm mốc mm:ss.
+- Không chèn chú thích trích dẫn kiểu [cite: ...].
+
+## ĐẦU RA
+
+MỘT JSON object:
+
+{
+  "overall_match": 80,
+  "verdict": "gần giống",
+  "summary": "2–4 câu tổng kết",
+  "character_mapping": [ { "original": "...", "remake": "...", "note": "" } ],
+  "story": { "score": 8, "summary": "..." },
+  "actions": { "score": 7, "summary": "..." },
+  "dialogue": { "score": 9, "summary": "..." },
+  "timeline": [
+    { "aspect": "dialogue", "status": "khớp", "original_time": "0:02", "remake_time": "0:02", "original": "A: \"...\"", "remake": "A': \"...\"", "note": "" }
+  ],
+  "top_differences": ["..."]
+}

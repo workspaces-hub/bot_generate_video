@@ -14,6 +14,7 @@
     "login-gemini": "tsx scripts/login-gemini.ts",
     "test-gemini": "tsx scripts/test-gemini.ts",
     "compare-videos": "tsx scripts/compare-videos.ts",
+    "compare-same": "tsx scripts/compare-same.ts",
     "open-gemini": "tsx scripts/open-gemini.ts",
     "test-gemini-image": "tsx scripts/test-gemini-image.ts",
     "login-pollo": "tsx scripts/login-pollo.ts",

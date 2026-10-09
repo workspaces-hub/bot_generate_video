@@ -9,6 +9,7 @@
  */
 import type { AdaptationMap, ClipTranscript, GlobalTimeline, SourceClip, StoryMemory, StoryStructure } from "./types";
 import { jsonSection } from "./llm";
+import { getPromptSection } from "../automation/frameLock";
 
 export type EpisodeOf = (clipId: string | undefined) => number | undefined;
 
@@ -62,7 +63,13 @@ export function buildSourceEpisode(
   clipEvents.forEach((e) => (e.props ?? []).forEach((p) => used.add(p)));
 
   const assets = [
-    ...memory.characters.filter((c) => used.has(c.id)).map((c) => ({ id: c.id, type: "CHARACTER", prompt: `${c.name}: ${c.description}` })),
+    ...memory.characters.filter((c) => used.has(c.id)).map((c) => ({
+      id: c.id,
+      type: "CHARACTER",
+      prompt: `${c.name}: ${c.description}`,
+      // Danh mục trang phục — mỗi shot ghi rõ bộ đang mặc (WARDROBE).
+      ...(c.outfits?.length ? { outfits: c.outfits } : {}),
+    })),
     ...memory.locations.filter((l) => used.has(l.id)).map((l) => ({ id: l.id, type: "LOCATION", prompt: l.description })),
     ...memory.props.filter((p) => used.has(p.id)).map((p) => ({ id: p.id, type: p.type, prompt: p.description })),
   ];
@@ -70,6 +77,10 @@ export function buildSourceEpisode(
   const videos = record.segments.map((s) => {
     const seg = segById.get(s.id)!;
     const speech = s.dialogue.map((d) => `${d.speaker}: "${d.text}"`).join(" ");
+    const wardrobe = Object.entries(s.wardrobe ?? {}).map(([charId, outfitId]) => {
+      const outfit = memory.characters.find((c) => c.id === charId)?.outfits?.find((o) => o.id === outfitId);
+      return `${charId} mặc ${outfitId}${outfit ? ` (${outfit.description})` : ""}`;
+    });
     const events = clipEvents.filter((e) => e.seg_ids.includes(s.id)).map((e) => `${e.id} ${e.summary}`);
     return {
       id: s.id,
@@ -84,6 +95,7 @@ export function buildSourceEpisode(
       prompt: [
         s.location ? `LOCATION: ${s.location}.` : "",
         s.characters.length ? `CHARACTERS: ${s.characters.join(", ")}.` : "",
+        wardrobe.length ? `WARDROBE: ${wardrobe.join("; ")}.` : "",
         `ACTION: ${s.action}`,
         speech ? `SPEECH: ${speech}` : "",
         s.emotion ? `EMOTION: ${s.emotion}${s.intensity ? ` (cường độ ${s.intensity}/10)` : ""}.` : "",
@@ -156,9 +168,124 @@ export function storyDurationOf(clipId: string, tl: GlobalTimeline, memory: Stor
  * (xác nhận qua so sánh video thật: tập gốc 26.7s → remake 8 VIDEO 42s, mỗi
  * câu thoại 1 VIDEO ≥4.5s → mọi điểm hook/payoff/cliffhanger trễ ~1.6×).
  */
+/**
+ * Mỗi VIDEO phải ghi rõ trang phục của TỪNG nhân vật trong ref (dòng
+ * "WARDROBE:") — ảnh tham chiếu chỉ có 1 bộ, không nói rõ thì model gen chọn
+ * ngẫu nhiên. PROP_/OBJ_ (type CHARACTER theo quy ước loader) không tính.
+ */
+export function checkWardrobe(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const issues: string[] = [];
+  for (const v of value as { id?: string; type?: string; ref?: { id?: string; type?: string }[]; prompt?: string }[]) {
+    if (v?.type !== "VIDEO" || typeof v.prompt !== "string") continue;
+    const chars = (v.ref ?? []).filter((r) => r.type === "CHARACTER" && /^CHAR_/.test(String(r.id))).map((r) => String(r.id));
+    if (chars.length === 0) continue;
+    const lines = [...v.prompt.matchAll(/WARDROBE:([^]*?)(?=\b(?:CLIP SPEC|CAST AND VOICE|START FRAME|ACTION AND PERFORMANCE|SPEECH|SOUND AND EDITING|END FRAME|CONTINUITY|ANALYSIS ONLY):|$)/g)]
+      .map((m) => m[1])
+      .join(" ");
+    const missing = chars.filter((c) => !lines.includes(c));
+    if (missing.length > 0) {
+      issues.push(
+        `${v.id}: thiếu trang phục cho ${missing.join(", ")} — thêm "WARDROBE: ${missing[0]} wears W? — <mô tả đầy đủ>" (ảnh tham chiếu chỉ có 1 bộ, không nói rõ model sẽ chọn ngẫu nhiên).`,
+      );
+    }
+  }
+  return issues;
+}
+
+type VideoLike = { id?: string; type?: string; ref?: { id?: string; type?: string }[]; prompt?: string };
+
+/** Người nói trong mục SPEECH theo mẫu "CHAR_X (<Picture N>, ...) says". */
+function parseSpeakers(speech: string): { id: string; picture: number; descriptor: string }[] {
+  return [...speech.matchAll(/(CHAR_[A-Z0-9_]+)\s*\(\s*<Picture\s*(\d+)>([^)]*)\)\s*says/g)].map((m) => ({
+    id: m[1],
+    picture: Number(m[2]),
+    descriptor: m[3],
+  }));
+}
+
+const POSITION_WORDS = /\b(left|right|center|centre|middle|foreground|background|front|behind|closest|nearest|far)\b/i;
+const SILENT_WORDS = /\b(silent|mouth closed|does not speak|doesn't speak|not speaking|listens|listening|lips closed)\b/i;
+
+/**
+ * Khung hình có ≥2 nhân vật mà có thoại: phải GẮN người nói rõ ràng — model
+ * video không hiểu id CHAR_, chỉ thấy <Picture N> + mô tả; không gắn thì nó
+ * chọn đại người mấp máy môi (xác nhận qua lỗi thật: gốc A nói, remake B nói
+ * dù cả 2 cùng trong khung). Mẫu: SPEECH: CHAR_A (<Picture 1>, the woman on
+ * the LEFT in the red dress) says: "..." + người còn lại "stays silent, mouth closed".
+ */
+export function checkSpeakerBinding(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const issues: string[] = [];
+  for (const v of value as VideoLike[]) {
+    if (v?.type !== "VIDEO" || typeof v.prompt !== "string" || !hasSpokenLine(v.prompt)) continue;
+    const refs = (v.ref ?? []).map((r) => String(r.id));
+    const chars = (v.ref ?? []).filter((r) => r.type === "CHARACTER" && /^CHAR_/.test(String(r.id))).map((r) => String(r.id));
+    if (chars.length < 2) continue;
+    const speech = getPromptSection(v.prompt, "SPEECH") ?? "";
+    const speakers = parseSpeakers(speech);
+    const example = `SPEECH: ${chars[0]} (<Picture ${refs.indexOf(chars[0]) + 1}>, <vị trí trong khung: LEFT/RIGHT/foreground + nét nhận dạng>) says: "..." — ${chars[1]} (<Picture ${refs.indexOf(chars[1]) + 1}>, <vị trí>) stays silent, mouth closed, listening.`;
+    if (speakers.length === 0) {
+      issues.push(`${v.id}: khung có ${chars.length} nhân vật (${chars.join(", ")}) nhưng SPEECH không gắn rõ người nói — viết đúng mẫu: ${example}`);
+      continue;
+    }
+    for (const sp of speakers) {
+      if (!chars.includes(sp.id)) issues.push(`${v.id}: người nói ${sp.id} không có trong VIDEO.ref.`);
+      else if (refs[sp.picture - 1] !== sp.id) issues.push(`${v.id}: ${sp.id} được gắn <Picture ${sp.picture}> nhưng <Picture ${sp.picture}> là ${refs[sp.picture - 1] ?? "(không có)"} — phải là <Picture ${refs.indexOf(sp.id) + 1}>.`);
+      if (!POSITION_WORDS.test(sp.descriptor)) issues.push(`${v.id}: người nói ${sp.id} thiếu vị trí trong khung (LEFT/RIGHT/foreground...) để model biết ai mấp máy môi.`);
+    }
+    const speakerIds = new Set(speakers.map((s) => s.id));
+    const context = `${getPromptSection(v.prompt, "CAST AND VOICE") ?? ""} ${speech}`;
+    for (const c of chars.filter((id) => !speakerIds.has(id))) {
+      const silent = new RegExp(`${c}[^.]*?${SILENT_WORDS.source}`, "i").test(context);
+      if (!silent) issues.push(`${v.id}: ${c} cùng trong khung nhưng không có chỉ dẫn im lặng — thêm "${c} (<Picture ${refs.indexOf(c) + 1}>, <vị trí>) stays silent, mouth closed, listening".`);
+    }
+  }
+  return issues;
+}
+
+/**
+ * Chế độ GIỐNG GỐC: người nói trong remake phải là nhân vật MỚI tương ứng với
+ * người nói ở shot gốc (SOURCE SHOTS → dialogue.speaker trong phân tích →
+ * source_to_target_map của Bible).
+ */
+export function checkSourceSpeakers(
+  value: unknown,
+  memory: StoryMemory,
+  sourceToTarget: Map<string, string>,
+): string[] {
+  if (!Array.isArray(value)) return [];
+  const dialogueBySeg = new Map(
+    memory.clips.flatMap((c) => c.segments).map((s) => [s.id, s.dialogue.map((d) => d.speaker).filter((sp) => /^CHAR_/.test(sp))]),
+  );
+  const issues: string[] = [];
+  for (const v of value as VideoLike[]) {
+    if (v?.type !== "VIDEO" || typeof v.prompt !== "string") continue;
+    const sourceShots = (getPromptSection(v.prompt, "SOURCE SHOTS") ?? "").match(/S\d{4}/g) ?? [];
+    if (sourceShots.length === 0) {
+      issues.push(`${v.id}: thiếu "SOURCE SHOTS: S00xx, ..." (các shot gốc VIDEO này chuyển thể) ở cuối prompt.`);
+      continue;
+    }
+    if (!hasSpokenLine(v.prompt)) continue;
+    const expected = new Set(sourceShots.flatMap((s) => dialogueBySeg.get(s) ?? []).map((sp) => sourceToTarget.get(sp) ?? sp));
+    if (expected.size === 0) continue;
+    for (const sp of parseSpeakers(getPromptSection(v.prompt, "SPEECH") ?? "")) {
+      if (!expected.has(sp.id)) {
+        issues.push(
+          `${v.id}: người nói là ${sp.id} nhưng ở shot gốc ${sourceShots.join(", ")} người nói là ${[...expected].join(", ")} (nhân vật mới tương ứng) — giữ ĐÚNG người nói như gốc.`,
+        );
+      }
+    }
+  }
+  return issues;
+}
+
 /** Có thoại nói thành lời trong VIDEO.prompt (SPEECH: "..."). */
 function hasSpokenLine(prompt: string): boolean {
-  return /SPEECH:\s*["“']/.test(prompt) && !/SPEECH MODE:\s*(NO_HUMAN_VOICE|NONE|INTERNAL)/i.test(prompt);
+  if (/SPEECH MODE:\s*(NO_HUMAN_VOICE|NONE|INTERNAL)/i.test(prompt)) return false;
+  const speech = getPromptSection(prompt, "SPEECH");
+  // Cả "SPEECH: \"...\"" lẫn "SPEECH: CHAR_A (<Picture 1>, ...) says: \"...\"".
+  return speech !== null && !/^NONE\b/i.test(speech) && /["“]/.test(speech);
 }
 
 /**
@@ -322,6 +449,8 @@ export const FILM_EPISODE_RULES = `\n\n## QUY TẮC MẠCH TRUYỆN TOÀN PHIM (
 - CƯỜNG ĐỘ: mỗi VIDEO chuyển thể shot có "cường độ N/10" trong TẬP GỐC phải đạt cường độ tương đương. Viết biểu cảm thành chi tiết QUAN SÁT ĐƯỢC, không viết tính từ chung chung ("tức giận"): ánh mắt (nheo, trợn, liếc, nhìn xoáy), lông mày, cơ hàm/nghiến răng, khoé miệng (nhếch, mím), nhịp thở, tư thế đầu/vai. Cường độ ≥ 8 → biểu cảm rõ, mạnh, có chuyển động cơ mặt thấy được ở cận cảnh. Phản diện chế giễu → nụ cười nhếch + ánh mắt khinh miệt nhìn xuống, giữ đủ lâu để khán giả ghét.
 - PHẢN ỨNG: shot gốc có REACTION (hoặc nhân vật chịu đựng/sững người/kìm nén) → VIDEO remake phải có khoảnh khắc phản ứng riêng: cận mặt, giữ khoảng lặng 1–2 giây TRƯỚC khi nói/đáp, có thể push-in chậm. Không để nhân vật đáp lời ngay lập tức ở beat cảm xúc mạnh.
 - KHOÁ FRAME (ưu tiên hơn quy định đánh số shot của master prompt): "shot" = CẢNH LIÊN TỤC (cùng bối cảnh, cùng thời điểm, hành động nối tiếp) — đổi góc máy/cắt cảnh bên trong cảnh liên tục KHÔNG tăng shot, chỉ tăng clip. Hai VIDEO liền nhau cùng shot: START FRAME clip sau GIỐNG TỪNG CHỮ END FRAME clip trước (code ghi đè START FRAME bằng END FRAME). START/END FRAME viết theo mẫu 7 trường: "CHARACTERS: ... | POSE: ... | POSITION: ... | GAZE: ... | HANDS/PROPS: ... | CAMERA: ... | LIGHTING: ..." — END FRAME là khung hình cuối THẬT của clip; đổi tư thế/góc máy thì làm trong ACTION.
+- NGƯỜI NÓI (BẮT BUỘC, code kiểm tra): model video không hiểu id CHAR_, chỉ thấy <Picture N> + mô tả — khung có ≥2 nhân vật mà không gắn rõ người nói thì nó chọn đại người mấp máy môi. Mỗi câu thoại viết: SPEECH: CHAR_A (<Picture N đúng thứ tự trong ref>, <vị trí trong khung LEFT/RIGHT/foreground + nét nhận dạng>) says: "..."; MỌI nhân vật khác trong khung: "CHAR_B (<Picture M>, <vị trí>) stays silent, mouth closed, listening". Người nói phải đúng người nói ở TẬP GỐC (theo ánh xạ nhân vật), không đổi sang người khác.
+- TRANG PHỤC (BẮT BUỘC, code kiểm tra): ảnh tham chiếu nhân vật chỉ có MỘT bộ đồ — không nói rõ thì model gen video chọn ngẫu nhiên. Mỗi VIDEO.prompt có dòng "WARDROBE:" trong CAST AND VOICE, ghi cho TỪNG nhân vật (CHARACTER) trong ref: "WARDROBE: CHAR_X wears <id bộ> — <mô tả đầy đủ bằng tiếng Anh: áo, quần/váy, màu, chất liệu, phụ kiện, giày>". Bộ khác bộ trong ảnh tham chiếu thì thêm "(NOT the outfit shown in <Picture N>)". Trang phục theo TẬP GỐC (WARDROBE từng shot) và danh mục outfits của nhân vật trong Bible; cùng shot giữ nguyên bộ.
 - TỔNG THỜI LƯỢNG (BẮT BUỘC, code kiểm tra): tổng duration các VIDEO phải nằm trong "ngan_sach_remake" — gần bằng tập gốc, KHÔNG dài hơn nhiều. Shot gốc ngắn (trung bình 2–3s) mà mỗi VIDEO tối thiểu 4s → KHÔNG được làm mỗi câu thoại/mỗi phản ứng thành 1 VIDEO riêng: gộp các nhịp ngắn liền nhau (câu thoại + phản ứng của người nghe, 2 câu đối đáp ngắn, câu nịnh/đệm của vai phụ) vào CÙNG 1 VIDEO bằng đổi góc máy rõ ràng. Mốc hook/đảo chiều/cao trào/cliffhanger của remake phải rơi vào CÙNG TỶ LỆ thời gian như tập gốc (vd gốc cliffhanger ở 90% thời lượng → remake cũng ~90%).
 - NHỊP DỰNG: bám mục "NHỊP DỰNG + ĐƯỜNG CƯỜNG ĐỘ". Đoạn gốc cắt dày (shot < 2–3s) → dùng VIDEO ngắn nhất cho phép, mỗi VIDEO bắt đầu NGAY vào hành động (không có nhịp dạo đầu/đi vào khung hình), có thể dồn 2–3 nhịp ngắn trong 1 VIDEO bằng đổi góc máy rõ ràng; đoạn gốc giữ shot lâu → cho VIDEO dài, máy chậm. Tỷ lệ thời lượng giữa các scene giữ gần tỷ lệ gốc (ty_le_tap).
 - CAO TRÀO: shot cường độ đỉnh của tập gốc → remake dồn nhịp nhanh nhất ngay trước đỉnh, đỉnh là cận cảnh biểu cảm mạnh nhất tập; không chèn shot phụ/cảnh rộng giữa chuỗi leo thang làm loãng.
@@ -339,3 +468,12 @@ Video remake phải GIỐNG HỆT video gốc — cùng câu chuyện, thứ t�
 - Nhân vật: dùng ĐÚNG id + ngoại hình người MỚI trong Bible (source_to_target_map); tên trong thoại đổi thành tên mới.
 - CARRY-IN: tập này tiếp đúng END STATE tập trước. Tập kết thúc đúng như tập gốc (cliffhanger của gốc).
 - Bám TẬP GỐC từng shot (episode_time_s, speech_starts_at_episode_s): tổng thời lượng ≈ gốc, thoại vào đúng lúc, clip liền nhau cùng shot giữ nguyên tư thế ở chỗ chia.`;
+
+export const REPLICA_SERIES_RULES = `## QUY TẮC REMAKE GIỐNG HỆT GỐC (ưu tiên CAO HƠN mọi mục mâu thuẫn bên trên)
+Video remake phải GIỐNG HỆT video gốc — KHÔNG thay gì: cùng nhân vật (cùng người, gương mặt, trang phục), câu chuyện, thứ tự shot, hành động, tư thế, bối cảnh, đạo cụ, góc máy, nhịp cắt, cảm xúc, âm thanh, thời điểm thoại.
+- Lời thoại NGUYÊN VĂN, đúng NGÔN NGỮ GỐC (theo thoại của shot gốc/transcript) — KHÔNG dịch, KHÔNG viết lại; ghi rõ ngôn ngữ: says in <ngôn ngữ>: "...". Mọi mô tả khác bằng tiếng Anh.
+- Nhân vật: dùng ĐÚNG id trong Bible (source_to_target_map), ngoại hình như gốc.
+- CARRY-IN: tập này tiếp đúng END STATE tập trước. Tập kết thúc đúng như tập gốc.
+- Bám TẬP GỐC từng shot (episode_time_s, speech_starts_at_episode_s): tổng thời lượng ≈ gốc, thoại vào đúng lúc, clip liền nhau cùng shot giữ nguyên tư thế ở chỗ chia.
+- MỖI VIDEO kết thúc bằng "SOURCE SHOTS: S00xx, ..." (code đối chiếu người nói với bản gốc).
+- Ảnh nhân vật và bối cảnh được GEN LẠI từ asset.prompt (không dùng ảnh trong video gốc) → asset.prompt phải mô tả thật chi tiết để ảnh gen giống người/nơi chốn gốc.`;

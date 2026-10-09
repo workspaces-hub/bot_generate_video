@@ -85,6 +85,12 @@ export interface SeriesGenerationOptions {
    */
   prompts?: { bible?: string; bibleExtend?: string; episode?: string };
   episodeRules?: string;
+  /**
+   * "Remake phim" chế độ replica: giữ nhân vật GỐC + thoại NGUYÊN VĂN ngôn ngữ
+   * gốc → bỏ kiểm tra tên tiếng Việt ở Bible, và kiểm tra chữ tiếng Việt trong
+   * prompt clip bỏ qua phần thoại trong ngoặc kép (mô tả vẫn phải tiếng Anh).
+   */
+  originalLanguage?: boolean;
   onStatus?: (text: string) => Promise<void>;
 }
 
@@ -207,12 +213,16 @@ export function vietnameseIdentityIssues(bible: unknown): string[] {
   return issues;
 }
 
-/** Từ tiếng Việt trong prompt VIDEO/asset của 1 tập (prompt + thoại phải là tiếng Anh). */
-function vietnameseTextIssues(episode: unknown): string[] {
+/**
+ * Từ tiếng Việt trong prompt VIDEO/asset của 1 tập (prompt + thoại phải là
+ * tiếng Anh). keepDialogue: bỏ qua câu trong ngoặc kép (thoại nguyên văn gốc).
+ */
+function vietnameseTextIssues(episode: unknown, keepDialogue = false): string[] {
   const issues: string[] = [];
   for (const entry of Array.isArray(episode) ? episode : []) {
     if (!isRecord(entry) || typeof entry.prompt !== "string") continue;
-    const words = vietnameseWords(entry.prompt);
+    const text = keepDialogue ? entry.prompt.replace(/["“][^"”]*["”]/g, " ") : entry.prompt;
+    const words = vietnameseWords(text);
     if (words.length > 0) {
       issues.push(`${String(entry.id)}: có chữ tiếng Việt (${words.join(", ")}) — prompt, lời thoại và TÊN nhân vật phải bằng tiếng Anh/tên không phải tiếng Việt, đúng tên trong Series Bible.`);
     }
@@ -449,6 +459,18 @@ function mergeBible(base: unknown, extensions: unknown[]): unknown {
       }
       merged[key] = current;
     }
+    // Bộ trang phục MỚI của nhân vật đã khoá (Bible mở rộng "outfit_additions") — chỉ THÊM bộ, không đổi danh tính.
+    for (const add of Array.isArray(ext.outfit_additions) ? (ext.outfit_additions as unknown[]) : []) {
+      if (!isRecord(add) || typeof add.char_id !== "string" || !Array.isArray(add.outfits)) continue;
+      const chars = Array.isArray(merged.characters) ? (merged.characters as unknown[]) : [];
+      merged.characters = chars.map((c) => {
+        if (!isRecord(c) || c.id !== add.char_id) return c;
+        const existing = Array.isArray(c.outfits) ? (c.outfits as unknown[]) : [];
+        const ids = new Set(existing.map((o) => (isRecord(o) ? o.id : undefined)));
+        const fresh = (add.outfits as unknown[]).filter((o) => isRecord(o) && !ids.has(o.id)).map((o) => ({ ...(o as Record<string, unknown>), default: false }));
+        return { ...c, outfits: [...existing, ...fresh] };
+      });
+    }
     for (const key of BIBLE_APPEND_LISTS) {
       const additions = Array.isArray(ext[key]) ? (ext[key] as unknown[]) : [];
       if (additions.length === 0) continue;
@@ -667,7 +689,7 @@ export async function generateSeriesWithGemini(
   const keepExisting = async (file: string, label: string): Promise<unknown> => {
     const value = batchStarted ? await readJsonIfExists(file) : null;
     if (value === null) return null;
-    const issues = vietnameseIdentityIssues(value);
+    const issues = opts.originalLanguage ? [] : vietnameseIdentityIssues(value);
     if (issues.length > 0) {
       console.warn(`[series] (${jobId}) ${label}: đợt đã có tập viết xong → giữ bản cũ dù còn lỗi:\n- ${issues.join("\n- ")}`);
     }
@@ -687,7 +709,7 @@ export async function generateSeriesWithGemini(
         if (!isRecord(v) || !Array.isArray(v.characters) || v.characters.length === 0) {
           return "Series Bible thiếu danh sách characters.";
         }
-        const issues = vietnameseIdentityIssues(v);
+        const issues = opts.originalLanguage ? [] : vietnameseIdentityIssues(v);
         return issues.length > 0 ? `- ${issues.join("\n- ")}` : null;
       },
       attempts: 3,
@@ -711,7 +733,7 @@ export async function generateSeriesWithGemini(
       protectedNames,
       validate: (v) => {
         if (!isRecord(v)) return "Bible mở rộng không phải JSON object.";
-        const issues = vietnameseIdentityIssues(v);
+        const issues = opts.originalLanguage ? [] : vietnameseIdentityIssues(v);
         return issues.length > 0 ? `- ${issues.join("\n- ")}` : null;
       },
       attempts: 3,
@@ -880,7 +902,7 @@ export async function generateSeriesWithGemini(
               console.log(`[series] (${jobId}) tập ${tap}: tự bổ sung asset từ các tập trước: ${repaired.autoAdded.join(", ")}`);
             }
             const checkErrors = [
-              ...vietnameseTextIssues(repaired.value),
+              ...vietnameseTextIssues(repaired.value, opts.originalLanguage),
               ...continuityIssues(repaired.value),
               ...(opts.checkEpisode?.(tap, repaired.value) ?? []),
             ];

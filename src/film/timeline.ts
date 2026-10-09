@@ -368,6 +368,18 @@ export async function transcribeClip(clip: SourceClip, tl: GlobalTimeline): Prom
   return { clipId: clip.clipId, available: result.available, language: result.language, lines };
 }
 
+/** Thoại 1 file video bất kỳ (faster-whisper, tuỳ chọn) — mốc giây tính từ đầu file. */
+export async function transcribeFile(
+  filePath: string,
+): Promise<{ available: boolean; language: string | null; segments: { start: number; end: number; text: string }[] }> {
+  try {
+    return await runWorker(["transcribe", "--video", filePath, "--model", config.filmWhisperModel]);
+  } catch (err) {
+    console.warn(`[film] Whisper lỗi với ${path.basename(filePath)}:`, err instanceof Error ? err.message : err);
+    return { available: false, language: null, segments: [] };
+  }
+}
+
 export function formatSeconds(total: number): string {
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
