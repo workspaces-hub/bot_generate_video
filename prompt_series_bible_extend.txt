@@ -10,6 +10,10 @@ QUY TẮC KHÓA:
 - Ưu tiên giao dramatic role mới trong DNA cho nhân vật ĐÃ CÓ khi hợp lý; chỉ tạo nhân vật mới khi DNA thật sự cần một người khác (vd: một đối thủ mới, một nhân chứng mới).
 - Thực thể mới phải phù hợp thế giới, luật lệ và trạng thái hiện tại trong ledger.
 - id mới theo dạng CHAR_<TEN>, LOC_<TEN>, PROP_<TEN>, OBJ_<TEN> (viết HOA, không dấu), KHÔNG trùng id đã có.
+- TÊN NHÂN VẬT MỚI (code kiểm tra, sai sẽ bị từ chối):
+  - "name" là tên riêng KHÔNG phải tiếng Việt, KHÔNG dấu, hợp văn hoá thế giới phim mới. Phương Tây: tên Anh/châu Âu, vd "Elena Vance". Phương Đông: tên Trung/Hàn/Nhật phiên âm Latin, vd "Lin Yue", "Kang Min-ho". Tuyệt đối không dùng tên Việt như "Lâm Việt" hay "Phương Linh", kể cả khi phim gốc hoặc dữ liệu đầu vào là tiếng Việt.
+  - id nhân vật lấy từ TÊN riêng: CHAR_<TÊN>, vd CHAR_ELENA, CHAR_MARCUS_HALE. KHÔNG dùng nhãn vai trò tiếng Việt như CHAR_NAM_CHINH, CHAR_NU_CHINH, CHAR_SEP_PHAN_DIEN, CHAR_ME_CHONG.
+  - Lời thoại các tập là tiếng Anh, gọi nhau bằng đúng các tên này.
 - Không cần thêm gì thì để mảng rỗng.
 
 ## ĐẦU RA

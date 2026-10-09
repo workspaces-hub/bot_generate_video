@@ -159,6 +159,60 @@ async function readJsonIfExists(filePath: string): Promise<unknown> {
  * Đã có outPath thì dùng lại (resume). validate trả về lý do lỗi → coi như
  * lần thử thất bại.
  */
+/** Ký tự có dấu tiếng Việt (chữ Latin thường không có các dấu này). */
+const VIETNAMESE_CHARS = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
+/**
+ * Token tiếng Việt (không dấu) hay gặp trong id kiểu nhãn vai trò
+ * (CHAR_NAM_CHINH, CHAR_SEP_PHAN_DIEN...) — id nhân vật phải lấy từ TÊN riêng.
+ */
+const VIETNAMESE_ID_TOKENS = new Set([
+  "NAM", "NU", "CHINH", "PHAN", "DIEN", "SEP", "CAP", "DUOI", "NHAN", "TINH", "ME", "CHONG", "CON", "DAU",
+  "VO", "CHA", "BA", "ONG", "CO", "CHU", "ANH", "CHI", "EM", "TRO", "LY", "THU", "KY", "GIAM", "DOC",
+  "BAN", "THAN", "TIEU", "THIEU", "GIA", "NGUOI", "YEU", "PHU", "BE", "GAI", "TRAI", "CU", "LAO", "HAU",
+  "GAN", "THANG", "DUA", "NHA", "HO", "MOI", "VUA", "QUAN", "TUONG", "THAY", "TRUONG", "DAI", "TRE",
+]);
+
+/** Từ có dấu tiếng Việt trong 1 đoạn chữ (tối đa `limit` từ, không lặp). */
+function vietnameseWords(text: string, limit = 8): string[] {
+  const words = text.match(/[\p{L}]+/gu) ?? [];
+  return [...new Set(words.filter((w) => VIETNAMESE_CHARS.test(w)))].slice(0, limit);
+}
+
+/**
+ * Tên/id nhân vật trong Bible (hoặc Bible mở rộng) không được là tiếng Việt —
+ * xác nhận qua lỗi thật (test-prompt_remake_1): CHAR_NAM_CHINH "Lâm Việt",
+ * CHAR_SEP_PHAN_DIEN "Ông Hoàng"... rồi tên tiếng Việt lọt vào thoại tiếng Anh.
+ */
+export function vietnameseIdentityIssues(bible: unknown): string[] {
+  if (!isRecord(bible)) return [];
+  const issues: string[] = [];
+  for (const c of Array.isArray(bible.characters) ? bible.characters : []) {
+    if (!isRecord(c)) continue;
+    const id = String(c.id ?? "");
+    const name = String(c.name ?? "");
+    if (VIETNAMESE_CHARS.test(name)) issues.push(`Nhân vật ${id}: tên "${name}" là tiếng Việt — dùng tên riêng KHÔNG phải tiếng Việt, không dấu, hợp văn hoá thế giới phim mới.`);
+    const tokens = id.replace(/^CHAR_/, "").split("_").filter(Boolean);
+    const vnTokens = tokens.filter((t) => VIETNAMESE_ID_TOKENS.has(t));
+    if (tokens.length > 0 && vnTokens.length > tokens.length / 2) {
+      issues.push(`Nhân vật ${id}: id là nhãn vai trò tiếng Việt (${vnTokens.join(", ")}) — id phải lấy từ TÊN riêng của nhân vật, vd CHAR_ELENA, CHAR_MARCUS_HALE.`);
+    }
+  }
+  return issues;
+}
+
+/** Từ tiếng Việt trong prompt VIDEO/asset của 1 tập (prompt + thoại phải là tiếng Anh). */
+function vietnameseTextIssues(episode: unknown): string[] {
+  const issues: string[] = [];
+  for (const entry of Array.isArray(episode) ? episode : []) {
+    if (!isRecord(entry) || typeof entry.prompt !== "string") continue;
+    const words = vietnameseWords(entry.prompt);
+    if (words.length > 0) {
+      issues.push(`${String(entry.id)}: có chữ tiếng Việt (${words.join(", ")}) — prompt, lời thoại và TÊN nhân vật phải bằng tiếng Anh/tên không phải tiếng Việt, đúng tên trong Series Bible.`);
+    }
+  }
+  return issues;
+}
+
 async function runJsonStage(opts: {
   jobId: string;
   name: string;
@@ -168,8 +222,11 @@ async function runJsonStage(opts: {
   outPath: string;
   protectedNames: Set<string>;
   validate?: (value: unknown) => string | null;
+  /** Số lần thử (mặc định STAGE_ATTEMPTS). */
+  attempts?: number;
   onStatus?: (text: string) => Promise<void>;
 }): Promise<unknown> {
+  const attempts = opts.attempts ?? STAGE_ATTEMPTS;
   if (fs.existsSync(opts.outPath)) {
     const value = await readJsonIfExists(opts.outPath);
     if (value !== null && !opts.validate?.(value)) {
@@ -184,7 +241,7 @@ async function runJsonStage(opts: {
   await fsp.writeFile(attachmentPath, opts.input, "utf-8");
   let lastError = "";
   try {
-    for (let attempt = 1; attempt <= STAGE_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       await opts.onStatus?.(
         `⏳ ${opts.label}${attempt > 1 ? ` — thử lại lần ${attempt}` : ""}...`,
       );
@@ -200,14 +257,22 @@ async function runJsonStage(opts: {
         if (!produced) throw new Error("Gemini không trả về JSON nào.");
         const value: unknown = JSON.parse(await fsp.readFile(produced, "utf-8"));
         const invalid = opts.validate?.(value);
-        if (invalid) throw new Error(invalid);
+        if (invalid) {
+          // Lần thử sau: gửi kèm đúng lỗi kiểm tra để Gemini sửa (không làm lại mù).
+          await fsp.writeFile(
+            attachmentPath,
+            `${opts.input}\n\n## LỖI CỦA LẦN TRƯỚC — BẮT BUỘC SỬA (code đã kiểm tra và từ chối)\n${invalid}\nTạo lại TOÀN BỘ kết quả, sửa đúng các lỗi trên.`,
+            "utf-8",
+          );
+          throw new Error(invalid);
+        }
         await fsp.mkdir(path.dirname(opts.outPath), { recursive: true });
         await fsp.writeFile(opts.outPath, JSON.stringify(value, null, 2), "utf-8");
         console.log(`[series] (${opts.jobId}) ${opts.label}: xong → ${opts.outPath}`);
         return value;
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
-        console.error(`[series] (${opts.jobId}) ${opts.label} lỗi (lần ${attempt}/${STAGE_ATTEMPTS}): ${lastError}`);
+        console.error(`[series] (${opts.jobId}) ${opts.label} lỗi (lần ${attempt}/${attempts}): ${lastError}`);
       } finally {
         // File tạm của askGemini nằm trong chatAIResultsDir — KHÔNG xoá nhầm
         // file tham chiếu (Gemini có thể đặt key trùng tên file tham chiếu).
@@ -219,7 +284,7 @@ async function runJsonStage(opts: {
   } finally {
     await fsp.unlink(attachmentPath).catch(() => {});
   }
-  throw new Error(`${opts.label} thất bại sau ${STAGE_ATTEMPTS} lần thử: ${lastError}`);
+  throw new Error(`${opts.label} thất bại sau ${attempts} lần thử: ${lastError}`);
 }
 
 /**
@@ -545,9 +610,22 @@ export async function generateSeriesWithGemini(
 
   // 2. Series Bible — đợt đầu tạo mới; đợt sau dùng lại + mở rộng (chỉ thêm).
   const biblePath = path.join(seriesDir, "series_bible.json");
+  // Đợt đã có tập viết xong (chạy lại giữa chừng) → GIỮ Bible/Bible mở rộng đã
+  // dùng, kể cả khi không còn qua kiểm tra mới (vd tên tiếng Việt) — tạo lại
+  // sẽ làm các tập sau lệch tên/danh tính với các tập đã viết.
+  const batchStarted = taps.some((t) => fs.existsSync(episodePath(t)));
+  const keepExisting = async (file: string, label: string): Promise<unknown> => {
+    const value = batchStarted ? await readJsonIfExists(file) : null;
+    if (value === null) return null;
+    const issues = vietnameseIdentityIssues(value);
+    if (issues.length > 0) {
+      console.warn(`[series] (${jobId}) ${label}: đợt đã có tập viết xong → giữ bản cũ dù còn lỗi:\n- ${issues.join("\n- ")}`);
+    }
+    return value;
+  };
   let bible: unknown;
   if (isFirstBatch) {
-    const base = await runJsonStage({
+    const base = (await keepExisting(biblePath, "Series Bible")) ?? await runJsonStage({
       jobId,
       name: "bible",
       label: `[2/5] Tạo Series Bible`,
@@ -555,10 +633,14 @@ export async function generateSeriesWithGemini(
       input: `${scope}${dnaInput}${sourceAssets}${globalOverview}`,
       outPath: biblePath,
       protectedNames,
-      validate: (v) =>
-        isRecord(v) && Array.isArray(v.characters) && v.characters.length > 0
-          ? null
-          : "Series Bible thiếu danh sách characters.",
+      validate: (v) => {
+        if (!isRecord(v) || !Array.isArray(v.characters) || v.characters.length === 0) {
+          return "Series Bible thiếu danh sách characters.";
+        }
+        const issues = vietnameseIdentityIssues(v);
+        return issues.length > 0 ? `- ${issues.join("\n- ")}` : null;
+      },
+      attempts: 3,
       onStatus,
     });
     bible = mergeBible(base, await loadBibleExtensions(seriesDir, start));
@@ -568,7 +650,8 @@ export async function generateSeriesWithGemini(
       throw new Error(`Series "${remakeBaseName}" không có series_bible.json — không tạo tiếp được.`);
     }
     const lockedBible = mergeBible(base, await loadBibleExtensions(seriesDir, prev));
-    await runJsonStage({
+    const extPath = path.join(seriesDir, `bible_ext_tap${start}.json`);
+    if (!(await keepExisting(extPath, "Bible mở rộng"))) await runJsonStage({
       jobId,
       name: `bible_ext_tap${start}`,
       label: `[2/5] Mở rộng Series Bible cho tập ${start}–${end}`,
@@ -576,7 +659,12 @@ export async function generateSeriesWithGemini(
       input: `${scope}${jsonSection("SERIES BIBLE ĐÃ KHÓA", lockedBible)}${previousEndState}${dnaInput}${sourceAssets}${globalOverview}`,
       outPath: path.join(seriesDir, `bible_ext_tap${start}.json`),
       protectedNames,
-      validate: (v) => (isRecord(v) ? null : "Bible mở rộng không phải JSON object."),
+      validate: (v) => {
+        if (!isRecord(v)) return "Bible mở rộng không phải JSON object.";
+        const issues = vietnameseIdentityIssues(v);
+        return issues.length > 0 ? `- ${issues.join("\n- ")}` : null;
+      },
+      attempts: 3,
       onStatus,
     });
     bible = mergeBible(base, await loadBibleExtensions(seriesDir, start));
@@ -738,7 +826,7 @@ export async function generateSeriesWithGemini(
             if (repaired.autoAdded.length > 0) {
               console.log(`[series] (${jobId}) tập ${tap}: tự bổ sung asset từ các tập trước: ${repaired.autoAdded.join(", ")}`);
             }
-            const checkErrors = opts.checkEpisode?.(tap, repaired.value) ?? [];
+            const checkErrors = [...vietnameseTextIssues(repaired.value), ...(opts.checkEpisode?.(tap, repaired.value) ?? [])];
             if (repaired.missing.length === 0 && checkErrors.length === 0) {
               await fsp.writeFile(checkpointPath, repairedContent, "utf-8");
             } else {
