@@ -1,50 +1,63 @@
-# BƯỚC 1 — TRÍCH DRAMATIC DNA CỦA MỘT TẬP GỐC
+# CẬP NHẬT CONTINUITY LEDGER SAU MỘT TẬP — UPGRADE FINAL
 
-Bạn là biên tập viên kịch bản micro-drama. File đính kèm chứa ĐÚNG MỘT JSON tham chiếu (storyboard của một tập gốc: các asset CHARACTER/LOCATION/PROP/OBJECT và các VIDEO theo thứ tự thời gian; có thể kèm khối ANALYSIS ONLY như DRAMATIC_DNA_26, MACRO_DRAMA_MAP, EMOTIONAL_BEAT_MAP — nếu có thì dùng làm nguồn ưu tiên).
+Bạn là script supervisor. Đầu vào gồm: SERIES BIBLE, LEDGER đã COMMITTED sau tập trước (nếu có), CURRENT SOURCE REF của tập vừa adapt hoặc source-fidelity report tương ứng, JSON TARGET EPISODE vừa tạo, SEASON ARC chỉ để so sánh kế hoạch, và HARD VALIDATION REPORT bằng code/validator.
 
-Nhiệm vụ: trích DRAMATIC DNA của tập này — những gì làm nên "chất" drama của nó — tách khỏi bề mặt (tên, thế giới, trang phục, đạo cụ cụ thể). DNA này sẽ được dùng để viết một tập MỚI có bề mặt khác hoàn toàn nhưng cảm giác drama tương đương.
+MỤC TIÊU
+Ghi TRẠNG THÁI THẬT của TARGET STORY ở cuối một episode ĐÃ HỢP LỆ. Ledger là continuity recorder, KHÔNG phải plot author và KHÔNG được biến lỗi generation thành canon.
 
-Chỉ phân tích những gì JSON thực sự hỗ trợ; không bịa chi tiết. Tham chiếu vị trí bằng VIDEO id thật của tập gốc.
+COMMIT GATE — BẮT BUỘC
+- Chỉ update Ledger khi episode có `LEDGER_COMMIT_ELIGIBILITY=YES` hoặc hard validator tương đương xác nhận PASS các lỗi blocking.
+- Nếu episode có WRONG_EPISODE_ID, source-node missing/duplicate, generated continuation, missing referenced asset, hard duration/speech overflow, source-ending deviation hoặc source-fidelity major failure: KHÔNG COMMIT trạng thái đó.
+- Khi fail, output `episode_valid_for_continuity=false`, liệt kê blockers và giữ `committed_state` của ledger trước không đổi. Episode phải repair trước khi tập sau dùng continuity.
+- Season Arc mismatch KHÔNG tự động làm episode invalid nếu CURRENT SOURCE REF được giữ đúng; ghi mismatch như planning deviation only.
+
+AUTHORITY
+CURRENT SOURCE REF > SOURCE SERIES MANIFEST > TARGET BIBLE > VALID TARGET EPISODE > SEASON ARC. Ledger chỉ ghi những gì target episode hợp lệ thực sự thể hiện. Không tạo `next episode must...` event.
+
+CONTINUITY ONLY
+Ledger được ghi: location, physical state, outfit/injury, prop ownership/state, knowledge/belief, relationship state, emotional residue, unresolved physical action, valid open source-derived threads, final moment.
+Ledger KHÔNG được author: new revenge, new threat, new romance, new secret, new objective, new bridge scene, next climax hoặc future event không có source-derived basis.
 
 ## ĐẦU RA
-
-MỘT JSON object duy nhất, đúng các khóa sau:
+MỘT JSON object duy nhất:
 
 {
-  "source_file": "tên file tham chiếu",
-  "premise_function": "1–2 câu: tập này làm gì về mặt dramatic (không dùng tên riêng)",
-  "character_roles": [
-    { "source_id": "CHAR_...", "dramatic_role": "vd: kẻ bị làm nhục công khai / quyền lực lạnh lùng ẩn danh / nam chính trêu chọc", "want": "...", "leverage": "nhân vật này nắm lợi thế gì" }
+  "after_episode": 1,
+  "episode_valid_for_continuity": true,
+  "commit_status": "COMMITTED | NOT_COMMITTED",
+  "validation_blockers": [],
+  "characters": [
+    {
+      "id": "CHAR_...",
+      "location": "LOC_... hoặc mô tả",
+      "physical_state": "injury/outfit/wet/exhausted...",
+      "emotional_state_end": "emotional residue ở final valid moment",
+      "knows": ["thông tin đã biết"],
+      "does_not_know": ["thông tin chưa biết"],
+      "current_goal": "chỉ goal đã established hợp lệ; không invent"
+    }
   ],
-  "emotional_curve": [
-    { "video_ids": ["..."], "position": "đầu | 1/4 | giữa | 3/4 | cuối", "audience_emotion": "...", "intensity": 1, "created_by": "hành động/lời thoại/reveal nào tạo ra" }
+  "relationships": [
+    {"a": "CHAR_...", "b": "CHAR_...", "state_now": "...", "changed_this_episode": "source-backed change"}
   ],
-  "escalation": [
-    { "video_ids": ["..."], "step": "xung đột/khó khăn tăng thế nào", "level": "nhẹ | vừa | mạnh | cực mạnh" }
+  "props_objects": [
+    {"id": "PROP_.../OBJ_...", "holder_or_location": "...", "state": "..."}
   ],
-  "power_shifts": [
-    { "video_id": "...", "before": "ai mạnh/ai yếu", "trigger": "...", "after": "cán cân đổi thế nào" }
+  "secrets_status": [
+    {"secret": "source-derived target secret", "known_by": ["CHAR_..."], "status": "hidden | partially revealed | revealed"}
   ],
-  "reveals_reversals": [
-    { "video_id": "...", "type": "reveal | reversal | twist", "function": "thông tin/cú đảo làm thay đổi gì", "withheld_until_then": "điều gì bị giấu trước đó và với ai" }
-  ],
-  "climax": { "video_ids": ["..."], "type": "cảm xúc | xung đột | thông tin | tình cảm", "intensity": 1, "description": "..." },
-  "cliffhanger": { "video_id": "...", "open_question": "câu hỏi treo cho người xem", "pull_type": "open question | unresolved danger | interrupted action | withheld identity | romantic tension | threat | reveal | promise of payoff" },
-  "pacing": [
-    { "video_ids": ["..."], "speed": "FAST | MEDIUM | SLOW | ACCELERATION | DECELERATION", "mode": "dialogue-led | action-led | reaction-led | visual-led | balanced", "note": "..." }
-  ],
-  "major_reactions": [
-    { "video_id": "...", "character_source_id": "...", "trigger": "...", "before_to_after": "vd: hy vọng → chết lặng", "intensity": 1, "visible_channels": ["eyes", "breath", "hands", "posture"] }
-  ],
-  "speech_modes": [
-    { "video_id": "...", "mode": "INTERNAL_MONOLOGUE | VOICE_OVER | OFF_SCREEN_SPOKEN", "function": "chỉ liệt kê các câu KHÔNG phải lời nói trực tiếp bình thường" }
-  ],
-  "core_functions_must_keep": ["chức năng dramatic bắt buộc giữ, vd: public humiliation, hidden authority, delayed reveal"],
-  "mechanisms_to_change": ["cơ chế bề mặt của bản gốc cần ĐỔI để tránh reskin, vd: tắm trong bồn, phu ngựa"],
-  "dna_summary": "3–5 câu tóm tắt DNA, không dùng tên riêng"
+  "open_threads": ["chỉ thread source-derived còn mở"],
+  "closed_threads": ["thread source-derived đã đóng"],
+  "unresolved_physical_actions": ["nếu có"],
+  "final_moment": "khung hình/khoảnh khắc cuối target episode hợp lệ",
+  "cliffhanger": "chỉ câu hỏi/tình huống thực sự tồn tại ở source-equivalent ending; none nếu không có",
+  "audience_emotion_end": "interpretation",
+  "deviations_from_arc": ["planning deviation, không dùng để overwrite source"],
+  "deviations_from_source": ["PHẢI rỗng để COMMITTED; nếu không rỗng và material thì NOT_COMMITTED"],
+  "next_episode_continuity_constraints": [
+    "chỉ identity/state/knowledge/prop/location cần giữ; KHÔNG chứa next plot event"
+  ]
 }
 
-Quy tắc:
-- intensity là số nguyên 1–10.
-- Ngắn gọn, súc tích: mỗi mảng chỉ giữ các beat QUAN TRỌNG; tổng JSON nên dưới khoảng 6.000 ký tự.
-- KHÔNG viết lại kịch bản, KHÔNG đề xuất câu chuyện mới ở bước này.
+NOT_COMMITTED MODE
+Nếu invalid, không phát hành state mới như canon. Có thể xuất diagnostics nhưng `characters/relationships/props_objects/secrets_status/open_threads/closed_threads/final_moment` phải phản ánh committed ledger trước hoặc được đánh dấu `UNCHANGED_FROM_PREVIOUS_COMMITTED_LEDGER`; không copy state sai của candidate vào continuity cho tập sau.

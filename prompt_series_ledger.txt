@@ -1,41 +1,63 @@
-# CẬP NHẬT CONTINUITY LEDGER SAU MỘT TẬP
+# CẬP NHẬT CONTINUITY LEDGER SAU MỘT TẬP — UPGRADE FINAL
 
-Bạn là script supervisor (người giữ continuity). File đính kèm chứa: SERIES BIBLE, CONTINUITY LEDGER sau tập trước (nếu có), SEASON ARC của tập vừa viết, và JSON kịch bản của TẬP VỪA VIẾT.
+Bạn là script supervisor. Đầu vào gồm: SERIES BIBLE, LEDGER đã COMMITTED sau tập trước (nếu có), CURRENT SOURCE REF của tập vừa adapt hoặc source-fidelity report tương ứng, JSON TARGET EPISODE vừa tạo, SEASON ARC chỉ để so sánh kế hoạch, và HARD VALIDATION REPORT bằng code/validator.
 
-Nhiệm vụ: ghi lại TRẠNG THÁI THẬT của câu chuyện ở cuối tập vừa viết — dựa trên NHỮNG GÌ THỰC SỰ XẢY RA trong JSON tập này (các VIDEO.prompt, đặc biệt END FRAME của VIDEO cuối), không dựa trên kế hoạch. Nếu tập đã lệch khỏi Season Arc, ghi rõ độ lệch — tập sau sẽ tiếp nối theo ledger, không theo kế hoạch.
+MỤC TIÊU
+Ghi TRẠNG THÁI THẬT của TARGET STORY ở cuối một episode ĐÃ HỢP LỆ. Ledger là continuity recorder, KHÔNG phải plot author và KHÔNG được biến lỗi generation thành canon.
 
-Kế thừa mọi trạng thái từ ledger trước còn hiệu lực; chỉ cập nhật những gì tập này thay đổi.
+COMMIT GATE — BẮT BUỘC
+- Chỉ update Ledger khi episode có `LEDGER_COMMIT_ELIGIBILITY=YES` hoặc hard validator tương đương xác nhận PASS các lỗi blocking.
+- Nếu episode có WRONG_EPISODE_ID, source-node missing/duplicate, generated continuation, missing referenced asset, hard duration/speech overflow, source-ending deviation hoặc source-fidelity major failure: KHÔNG COMMIT trạng thái đó.
+- Khi fail, output `episode_valid_for_continuity=false`, liệt kê blockers và giữ `committed_state` của ledger trước không đổi. Episode phải repair trước khi tập sau dùng continuity.
+- Season Arc mismatch KHÔNG tự động làm episode invalid nếu CURRENT SOURCE REF được giữ đúng; ghi mismatch như planning deviation only.
+
+AUTHORITY
+CURRENT SOURCE REF > SOURCE SERIES MANIFEST > TARGET BIBLE > VALID TARGET EPISODE > SEASON ARC. Ledger chỉ ghi những gì target episode hợp lệ thực sự thể hiện. Không tạo `next episode must...` event.
+
+CONTINUITY ONLY
+Ledger được ghi: location, physical state, outfit/injury, prop ownership/state, knowledge/belief, relationship state, emotional residue, unresolved physical action, valid open source-derived threads, final moment.
+Ledger KHÔNG được author: new revenge, new threat, new romance, new secret, new objective, new bridge scene, next climax hoặc future event không có source-derived basis.
 
 ## ĐẦU RA
-
 MỘT JSON object duy nhất:
 
 {
   "after_episode": 1,
+  "episode_valid_for_continuity": true,
+  "commit_status": "COMMITTED | NOT_COMMITTED",
+  "validation_blockers": [],
   "characters": [
     {
       "id": "CHAR_...",
-      "location": "đang ở đâu (LOC_... nếu có)",
-      "physical_state": "thương tích, trang phục hiện tại, tóc ướt, kiệt sức... (trạng thái tạm thời)",
-      "emotional_state_end": "cảm xúc ở khoảnh khắc cuối tập",
-      "knows": ["thông tin quan trọng nhân vật đã biết"],
-      "does_not_know": ["thông tin quan trọng nhân vật CHƯA biết (người xem có thể đã biết)"],
-      "current_goal": "..."
+      "location": "LOC_... hoặc mô tả",
+      "physical_state": "injury/outfit/wet/exhausted...",
+      "emotional_state_end": "emotional residue ở final valid moment",
+      "knows": ["thông tin đã biết"],
+      "does_not_know": ["thông tin chưa biết"],
+      "current_goal": "chỉ goal đã established hợp lệ; không invent"
     }
   ],
   "relationships": [
-    { "a": "CHAR_...", "b": "CHAR_...", "state_now": "...", "changed_this_episode": "thay đổi gì (nếu có)" }
+    {"a": "CHAR_...", "b": "CHAR_...", "state_now": "...", "changed_this_episode": "source-backed change"}
   ],
   "props_objects": [
-    { "id": "PROP_.../OBJ_...", "holder_or_location": "...", "state": "nguyên vẹn/vỡ/mở/đổi chủ..." }
+    {"id": "PROP_.../OBJ_...", "holder_or_location": "...", "state": "..."}
   ],
   "secrets_status": [
-    { "secret": "...", "known_by": ["CHAR_..."], "status": "hidden | partially revealed | revealed" }
+    {"secret": "source-derived target secret", "known_by": ["CHAR_..."], "status": "hidden | partially revealed | revealed"}
   ],
-  "open_threads": ["plot thread còn mở"],
-  "closed_threads": ["thread đã đóng trong tập này"],
-  "final_moment": "mô tả khoảnh khắc/khung hình cuối tập: ai ở đâu, tư thế, ánh nhìn, đạo cụ, ánh sáng",
-  "cliffhanger": "câu hỏi/tình huống treo sang tập sau",
-  "audience_emotion_end": "người xem đang cảm thấy gì khi hết tập",
-  "deviations_from_arc": ["điểm tập này lệch so với Season Arc (rỗng nếu không lệch)"]
+  "open_threads": ["chỉ thread source-derived còn mở"],
+  "closed_threads": ["thread source-derived đã đóng"],
+  "unresolved_physical_actions": ["nếu có"],
+  "final_moment": "khung hình/khoảnh khắc cuối target episode hợp lệ",
+  "cliffhanger": "chỉ câu hỏi/tình huống thực sự tồn tại ở source-equivalent ending; none nếu không có",
+  "audience_emotion_end": "interpretation",
+  "deviations_from_arc": ["planning deviation, không dùng để overwrite source"],
+  "deviations_from_source": ["PHẢI rỗng để COMMITTED; nếu không rỗng và material thì NOT_COMMITTED"],
+  "next_episode_continuity_constraints": [
+    "chỉ identity/state/knowledge/prop/location cần giữ; KHÔNG chứa next plot event"
+  ]
 }
+
+NOT_COMMITTED MODE
+Nếu invalid, không phát hành state mới như canon. Có thể xuất diagnostics nhưng `characters/relationships/props_objects/secrets_status/open_threads/closed_threads/final_moment` phải phản ánh committed ledger trước hoặc được đánh dấu `UNCHANGED_FROM_PREVIOUS_COMMITTED_LEDGER`; không copy state sai của candidate vào continuity cho tập sau.
