@@ -35,6 +35,7 @@ import {
   assetLedgerFilePathFor,
   clearStopStoryboardRequest,
   ensureGeneratedFolder,
+  episodeClipsStatus,
   ensureGeneratedFolderForName,
   generatedDirFor,
   generatedImageDirFor,
@@ -49,6 +50,7 @@ import {
   mergeVideosForFile,
   reconcileAssetLedgerAcrossFiles,
   requestStopStoryboardPipeline,
+  resolveNextRemakeVersion,
   sleep,
   updateAssetLedgerFile,
   type FailedEntry,
@@ -56,6 +58,11 @@ import {
   type StoryboardEntry,
 } from "./automation/storyboardPipeline";
 import { promptMenu } from "./bot/keyboard";
+import {
+  filmBaseNameFromVideo,
+  GENERATE_SCRIPT_ATTACHMENT_PROMPT,
+  writeGenerateScriptAttachment,
+} from "./automation/generateScriptJob";
 
 interface BaseJob {
   chatId: number;
@@ -87,6 +94,15 @@ interface BaseJob {
   promptFileName?: string;
   /** Path local file prompt/nội dung tổng hợp (nếu có) — UPLOAD file này lên ChatAI, "prompt" lúc này chỉ là câu ngắn yêu cầu ChatAI đọc file (xem handlers.ts/askChatAI). Xoá file này sau khi job xong (finally trong processChatAIQueue). */
   promptAttachmentPath?: string;
+  /**
+   * "Remake (all flow)" (REMAKE_ALL_BUTTON_LABEL): KHÔNG gửi nút xác nhận ở
+   * bất kỳ bước nào — JSON remake → ảnh (Pollo) → video (ComfyUI) → ghép theo
+   * từng file JSON → gửi video ghép. Truyền tiếp qua mọi job sinh ra từ job này
+   * (xem runStoryboardPipelinePollo, requestComfyVideoGeneration,
+   * notifyStoryboardVideoResultComfy). Không có = hành vi cũ theo
+   * CONFIRM_IMAGE_GENERATION/CONFIRM_VIDEO_GENERATION.
+   */
+  auto?: boolean;
 }
 
 export interface VideoGenerationJob extends BaseJob {
@@ -1190,7 +1206,7 @@ function isComfyStoryboardJobQueued(jsonPath: string, entryId?: string): boolean
  * file đang chờ, chưa chạy).
  */
 async function requestComfyVideoGeneration(job: BaseJob & { jsonPath: string }): Promise<void> {
-  if (!config.confirmVideoGeneration) {
+  if (!config.confirmVideoGeneration || job.auto) {
     const resolvedPath = path.resolve(job.jsonPath);
     const alreadyPending = comfyVideoJobs.some(
       (queued) =>
@@ -1206,6 +1222,8 @@ async function requestComfyVideoGeneration(job: BaseJob & { jsonPath: string }):
         prompt: "",
         promptMessageId: job.promptMessageId,
         jsonPath: job.jsonPath,
+        // auto: gen xong không lỗi → tự ghép + gửi video (notifyStoryboardVideoResultComfy).
+        ...(job.auto ? { auto: true, mergeAfterSuccess: true } : {}),
       });
     }
     await telegram!.sendMessage(
@@ -1264,6 +1282,67 @@ export function enqueueComfyRegenerateWithMerge(
     ...base,
     mergeAfterSuccess: true,
   });
+}
+
+/**
+ * Sau MỖI job video ComfyUI (cả file hoặc từng clip, mọi luồng): nếu tập (file
+ * JSON) đã đủ clip thì ghép theo đúng thứ tự shot/clip và gửi cho user.
+ * - Còn job video khác của CÙNG file đang chờ → để job đó (chạy sau) lo.
+ * - Video ghép đã có và MỚI HƠN mọi clip → đã gửi rồi, bỏ qua (không gửi
+ *   trùng). Gen lại 1 clip → clip mới hơn → ghép + gửi lại.
+ */
+async function maybeDeliverEpisodeVideo(job: StoryboardVideoComfyJob): Promise<void> {
+  if (!telegram) return;
+  const resolved = path.resolve(job.jsonPath);
+  if (comfyVideoJobs.some((other) => other !== job && path.resolve(other.jsonPath) === resolved)) return;
+  try {
+    const status = await episodeClipsStatus(job.jsonPath);
+    if (status.total === 0 || status.missingIds.length > 0) return;
+    const finalStat = await fsp.stat(mergedEpisodePath(job.jsonPath)).catch(() => null);
+    if (finalStat && finalStat.mtimeMs >= status.newestClipMtime) return;
+  } catch (err) {
+    console.error(`[queue] Kiểm tra clip tập "${job.jsonPath}" thất bại:`, err);
+    return;
+  }
+  await deliverMergedVideo(job);
+}
+
+function mergedEpisodePath(jsonPath: string): string {
+  return path.join(generatedDirFor(jsonPath), `${path.basename(jsonPath, ".json")}_final.mp4`);
+}
+
+/**
+ * Ghép toàn bộ video của 1 file JSON (mergeVideosForFile)
+ * thành <tên json>_final.mp4 cạnh các clip trong generated/ rồi GỬI FILE cho user
+ * (≤ 49MB, giới hạn Bot API); lớn hơn thì publish ra QWEN_PUBLIC_BASE_URL và
+ * gửi link. Lỗi ghép → báo user, không throw.
+ */
+async function deliverMergedVideo(job: BaseJob & { jsonPath: string }): Promise<void> {
+  const jsonFileName = path.basename(job.jsonPath, ".json");
+  const finalPath = mergedEpisodePath(job.jsonPath);
+  const replyOpts = { reply_parameters: { message_id: job.promptMessageId }, ...promptMenu };
+  try {
+    const { videoCount } = await mergeVideosForFile(job.jsonPath, finalPath);
+    const caption = `✅ ${jsonFileName}: đã ghép ${videoCount} video theo đúng thứ tự shot/clip.`;
+    const { size } = await fsp.stat(finalPath);
+    if (size <= TELEGRAM_MAX_DOCUMENT_BYTES) {
+      await sendGeneratedVideo(job.chatId, finalPath, caption, job.promptMessageId, `${jsonFileName}.mp4`);
+    } else {
+      const { url } = await publishFileTemporarily(finalPath, `${jsonFileName}.mp4`);
+      await telegram!.sendMessage(
+        job.chatId,
+        `${caption}\nVideo ${Math.round(size / 1024 / 1024)}MB vượt giới hạn gửi file của Telegram.\n🔗 Xem tại: ${url}`,
+        replyOpts,
+      );
+    }
+  } catch (err) {
+    console.error(`[queue] Ghép/gửi video "${jsonFileName}" (auto) thất bại:`, err);
+    await telegram!.sendMessage(
+      job.chatId,
+      `⚠️ Đã gen xong video nhưng ghép/gửi "${jsonFileName}" thất bại: ${err instanceof Error ? err.message : String(err)}. Dùng nút "Nối video" để thử lại.`,
+      replyOpts,
+    );
+  }
 }
 
 /**
@@ -2866,6 +2945,7 @@ async function processComfyVideoQueue(): Promise<void> {
         );
 
         await notifyStoryboardVideoResultComfy(job, videoResult);
+        await maybeDeliverEpisodeVideo(job);
       } catch (err) {
         await notifyError(job, err);
       } finally {
@@ -2906,6 +2986,8 @@ interface ReferenceVideoBatch {
   promptMessageId: number;
   statusMessageId?: number;
   items: ReferenceVideoBatchItem[];
+  /** "Remake (all flow)": lô xong → tự tạo job "Tạo kịch bản mới" (auto) trên các JSON vừa có. */
+  autoRemake?: { userId: number };
 }
 
 // Lô "Tham chiếu video" nhiều video — ghi ra file (sống sót qua restart, cùng
@@ -2951,12 +3033,14 @@ export function createReferenceVideoBatch(
   promptMessageId: number,
   videoFileNames: string[],
   statusMessageId?: number,
+  autoRemake?: { userId: number },
 ): string {
   const batchId = randomUUID();
   referenceVideoBatches.set(batchId, {
     chatId,
     promptMessageId,
     statusMessageId,
+    autoRemake,
     items: videoFileNames.map((videoFileName) => ({
       videoFileName,
       status: "pending",
@@ -3057,6 +3141,64 @@ async function finalizeReferenceVideoBatch(batch: ReferenceVideoBatch): Promise<
     ].join("\n"),
     batch.promptMessageId,
   );
+  if (batch.autoRemake) await startAutoRemake(batch);
+}
+
+/**
+ * "Remake (all flow)" — lô "Tham chiếu video" xong → tạo job "Tạo kịch bản
+ * mới" (GenerateScriptJob, auto=true) trên ĐÚNG các JSON vừa tham chiếu (theo
+ * thứ tự số tập trong tên video), cùng cách handleGenerateScriptRequest dựng
+ * job. Video nào lỗi/không có JSON → không remake (báo lý do), vì thiếu tập
+ * làm lệch mạch series.
+ */
+async function startAutoRemake(batch: ReferenceVideoBatch): Promise<void> {
+  if (!telegram || !batch.autoRemake) return;
+  const reply = (text: string) =>
+    telegram!.sendMessage(batch.chatId, text, { reply_parameters: { message_id: batch.promptMessageId }, ...promptMenu });
+  const broken = batch.items.filter((i) => i.status !== "done" || i.jsonFiles.length === 0);
+  if (broken.length > 0) {
+    await reply(
+      `⛔ Remake (all flow) dừng: ${broken.length} video không có JSON tham chiếu (${broken.map((i) => i.videoFileName).join(", ")}). Gửi lại các video này qua "Remake (all flow)".`,
+    );
+    return;
+  }
+  const ordered = [...batch.items].sort((a, b) =>
+    a.videoFileName.localeCompare(b.videoFileName, undefined, { numeric: true }),
+  );
+  // askGemini/askChatAI lưu JSON tham chiếu trong chatAIResultsDir — "Tạo kịch
+  // bản mới" đọc theo TÊN file trong thư mục đó.
+  const referenceFileNames = ordered.flatMap((i) => i.jsonFiles.map((f) => path.basename(f)));
+  const missing = referenceFileNames.filter((f) => !fs.existsSync(path.join(config.chatAIResultsDir, f)));
+  if (missing.length > 0) {
+    await reply(`⛔ Remake (all flow) dừng: không thấy file tham chiếu ${missing.join(", ")} trong ${config.chatAIResultsDir}.`);
+    return;
+  }
+  const searchTerm = filmBaseNameFromVideo(ordered[0].videoFileName);
+  const remakeBaseName = `${searchTerm}_remake_${await resolveNextRemakeVersion(searchTerm)}`;
+  let promptAttachmentPath: string;
+  try {
+    promptAttachmentPath = await writeGenerateScriptAttachment(remakeBaseName, referenceFileNames);
+  } catch (err) {
+    await reply(`⛔ Remake (all flow) dừng: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  const statusMessage = await reply(
+    `🎬 Remake (all flow) "${remakeBaseName}": tạo kịch bản mới từ ${referenceFileNames.length} tập (${referenceFileNames.join(", ")}) → ảnh → video → ghép từng tập → gửi video. Không cần xác nhận.`,
+  );
+  enqueueJob({
+    type: "generateScript",
+    chatId: batch.chatId,
+    userId: batch.autoRemake.userId,
+    prompt: GENERATE_SCRIPT_ATTACHMENT_PROMPT,
+    promptMessageId: batch.promptMessageId,
+    statusMessageId: statusMessage.message_id,
+    referenceFileNames,
+    promptAttachmentPath,
+    remakeBaseName,
+    seriesStartEpisode: 1,
+    seriesSearchTerm: searchTerm,
+    auto: true,
+  });
 }
 
 /**
@@ -3950,7 +4092,7 @@ async function runStoryboardPipelinePollo(
 
     // Theo yêu cầu người dùng: CONFIRM_IMAGE_GENERATION=false thì đẩy thẳng
     // job tạo ảnh (Pollo), không gửi nút xác nhận.
-    if (!config.confirmImageGeneration) {
+    if (!config.confirmImageGeneration || job.auto) {
       enqueueJob({
         type: "storyboardImagesPollo",
         chatId: job.chatId,
@@ -3958,6 +4100,7 @@ async function runStoryboardPipelinePollo(
         prompt: "",
         promptMessageId: job.promptMessageId,
         jsonPath: generatedFilePath,
+        auto: job.auto,
       });
       await telegram!.sendMessage(
         job.chatId,
@@ -4125,33 +4268,9 @@ async function notifyStoryboardVideoResultComfy(
       );
       await sleep(3000); // tránh gửi quá nhanh nhiều tin nhắn xác nhận liên tiếp (Telegram lỗi)
     }
-    if (job.mergeAfterSuccess && result.failed === 0) {
-      const jsonFileName = path.basename(job.jsonPath, ".json");
-      try {
-        const { url, videoCount } = await mergeVideosAndPublish(
-          job.jsonPath,
-          jsonFileName,
-        );
-        await telegram.sendMessage(
-          job.chatId,
-          `✅ Đã gen lại xong và nối ${videoCount} video từ "${jsonFileName}", theo đúng thứ tự shot/clip.\n\n🔗 Xem tại: ${url}`,
-          {
-            reply_parameters: { message_id: job.promptMessageId },
-            ...promptMenu,
-          },
-        );
-      } catch (err) {
-        console.error(`[queue] Nối video "${jsonFileName}" sau khi gen lại thất bại:`, err);
-        await telegram.sendMessage(
-          job.chatId,
-          `⚠️ Đã gen lại xong nhưng nối video "${jsonFileName}" thất bại: ${err instanceof Error ? err.message : String(err)}`,
-          {
-            reply_parameters: { message_id: job.promptMessageId },
-            ...promptMenu,
-          },
-        );
-      }
-    } else if (result.succeeded > 0 && result.failed === 0) {
+    // Ghép + gửi video tập: maybeDeliverEpisodeVideo (gọi ngay sau hàm này)
+    // tự làm khi clip CUỐI của tập xong — không ghép ở đây.
+    if (result.succeeded > 0 && result.failed === 0) {
       await telegram.sendMessage(job.chatId, `✅ Đã tạo video xong`, {
         reply_parameters: { message_id: job.promptMessageId },
         ...promptMenu

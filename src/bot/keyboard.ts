@@ -32,6 +32,13 @@ export const SCRIPT_REFERENCE_BUTTON_LABEL = "Tham chiếu kịch bản";
  */
 export const VIDEO_REFERENCE_BUTTON_LABEL = "Tham chiếu video";
 /**
+ * Nối "Tham chiếu video" + "Tạo kịch bản mới" + tạo ảnh/video, KHÔNG nút xác
+ * nhận nào: gửi 1 hoặc nhiều video → "xong" → JSON tham chiếu từng video →
+ * kịch bản remake (series) → ảnh (Pollo) → video (ComfyUI) → ghép theo từng
+ * file JSON → gửi video cho user (xem startAutoRemake/BaseJob.auto, queue.ts).
+ */
+export const REMAKE_ALL_BUTTON_LABEL = "Remake (all flow)";
+/**
  * GẦN GIỐNG VIDEO_REFERENCE_BUTTON_LABEL (cùng askQwenAboutReferenceVideo,
  * cùng job "scriptReferenceVideo"/processChatAIQueue, skipImageConfirmation=
  * true) nhưng KHÁC 2 điểm: (1) master prompt dùng config.promptVideoReferenceTest
@@ -190,6 +197,7 @@ export const REGENERATE_VIDEO_BY_TIME_BUTTON_LABEL = "Gen lại video lỗi";
 export const promptMenu = Markup.keyboard([
   [CHATAI_CHECK_BUTTON_LABEL, CHATAI_BUTTON_LABEL],
   [VIDEO_REFERENCE_BUTTON_LABEL, GENERATE_SCRIPT_BUTTON_LABEL],
+  [REMAKE_ALL_BUTTON_LABEL],
   [CONTINUE_GENERATE_SCRIPT_BUTTON_LABEL],
   [GENERATE_SCRIPT_EPISODE_BUTTON_LABEL, UPDATE_GENERATE_SCRIPT_EPISODE_PROMPT_BUTTON_LABEL],
   [CONTINUE_IMAGE_BUTTON_LABEL, CONTINUE_VIDEO_BUTTON_LABEL],

@@ -724,6 +724,34 @@ export async function mergeVideosForFile(
   return { outputPath: destPath, videoCount: videoPaths.length };
 }
 
+/**
+ * Tình trạng clip của 1 tập (1 file JSON) — dùng để tự ghép + gửi video tập
+ * ngay khi clip CUỐI CÙNG gen xong (maybeDeliverEpisodeVideo, queue.ts). Clip
+ * "xong" = có file .mp4 (cùng quy ước tên với mergeVideosForFile) và entry
+ * không bị đánh dấu success=false (đang chờ gen lại).
+ */
+export async function episodeClipsStatus(jsonPath: string): Promise<{
+  total: number;
+  missingIds: string[];
+  /** mtime (ms) mới nhất trong các file clip đã có — so với video đã ghép để biết cần ghép lại không. */
+  newestClipMtime: number;
+}> {
+  const entries: StoryboardEntry[] = JSON.parse(await fs.promises.readFile(jsonPath, "utf-8"));
+  const videoEntries = Array.isArray(entries) ? sortVideoEntriesByTimeline(entries) : [];
+  const outputDir = generatedDirFor(jsonPath);
+  const missingIds: string[] = [];
+  let newestClipMtime = 0;
+  for (const e of videoEntries) {
+    const stat = await fs.promises.stat(path.join(outputDir, `${sanitizeId(e.id)}.mp4`)).catch(() => null);
+    if (!stat || (e as { success?: boolean }).success === false) {
+      missingIds.push(e.id);
+      continue;
+    }
+    newestClipMtime = Math.max(newestClipMtime, stat.mtimeMs);
+  }
+  return { total: videoEntries.length, missingIds, newestClipMtime };
+}
+
 /** 1 entry VIDEO kèm mốc [startSec, endSec) trên video ĐÃ GHÉP (xem buildVideoTimeline). */
 export interface VideoTimelineEntry {
   id: string;
