@@ -338,9 +338,45 @@ TẬP NÀY BẮT BUỘC CÓ 3 PHẦN:
  * (sau 2 lần thử) → dừng, trả các tập đã xong + failedEpisode (tập sau cần
  * tập này để nối mạch). Ledger/QA lỗi chỉ cảnh báo.
  */
+/**
+ * Mỗi bước pipeline 1 master prompt RIÊNG — 2 bước dùng prompt giống hệt nhau
+ * gần như chắc chắn là cập nhật nhầm file (xác nhận qua lỗi thật: commit
+ * df1ae50 ghi prompt Ledger vào cả DNA/Bible/Bible mở rộng/Arc/tạo tập → DNA
+ * và Bible ra JSON ledger mà vẫn "hợp lệ", tới Arc mới vỡ). Dừng ngay, báo rõ.
+ */
+async function assertDistinctStagePrompts(): Promise<void> {
+  const stages: [string, string][] = [
+    ["DNA", config.promptSeriesDna],
+    ["Bible", config.promptSeriesBible],
+    ["Bible mở rộng", config.promptSeriesBibleExtend],
+    ["Season Arc", config.promptSeriesArc],
+    ["tạo tập", config.promptGenerateScriptEpisode],
+    ["Ledger", config.promptSeriesLedger],
+    ["QA", config.promptSeriesQa],
+  ];
+  const seen = new Map<string, string>();
+  const dupes: string[] = [];
+  for (const [label, file] of stages) {
+    const content = (await fsp.readFile(file, "utf-8").catch(() => "")).trim();
+    if (!content) {
+      dupes.push(`prompt ${label} (${file}) trống/không đọc được`);
+      continue;
+    }
+    const other = seen.get(content);
+    if (other) dupes.push(`prompt ${label} (${file}) giống hệt prompt ${other}`);
+    else seen.set(content, `${label} (${file})`);
+  }
+  if (dupes.length > 0) {
+    throw new Error(
+      `Master prompt series sai: ${dupes.join("; ")}. Kiểm tra lại các nút "Cập nhật prompt series ..." — mỗi bước cần đúng prompt của bước đó.`,
+    );
+  }
+}
+
 export async function generateSeriesWithGemini(
   opts: SeriesGenerationOptions,
 ): Promise<SeriesGenerationResult> {
+  await assertDistinctStagePrompts();
   const { jobId, referenceFileNames, remakeBaseName, onStatus } = opts;
   const start = opts.startEpisode ?? 1;
   const end = start + referenceFileNames.length - 1;
@@ -390,7 +426,13 @@ export async function generateSeriesWithGemini(
         input: jsonSection(`TẬP GỐC ${ref.tap}: ${ref.name}`, ref.content),
         outPath: path.join(seriesDir, `dna_tap${ref.tap}.json`),
         protectedNames,
-        validate: (v) => (isRecord(v) ? null : "DNA không phải JSON object."),
+        // Kiểm khoá đặc trưng của DNA (không chỉ "là object"): JSON của bước
+        // khác (vd ledger do prompt bị ghi nhầm) không lọt qua, và cache rác
+        // từ lần chạy lỗi trước bị bỏ, chạy lại.
+        validate: (v) =>
+          isRecord(v) && typeof v.premise_function === "string" && Array.isArray(v.emotional_curve)
+            ? null
+            : "DNA thiếu premise_function/emotional_curve (không đúng schema DNA).",
         onStatus,
       }),
     );
@@ -433,9 +475,9 @@ export async function generateSeriesWithGemini(
       outPath: biblePath,
       protectedNames,
       validate: (v) =>
-        isRecord(v) && Array.isArray(v.characters) && v.characters.length > 0
+        isRecord(v) && Array.isArray(v.characters) && v.characters.length > 0 && typeof v.logline === "string" && isRecord(v.world)
           ? null
-          : "Series Bible thiếu danh sách characters.",
+          : "Series Bible thiếu characters/logline/world (không đúng schema Bible).",
       onStatus,
     });
     bible = mergeBible(base, await loadBibleExtensions(seriesDir, start));

@@ -116,6 +116,15 @@ const SERIES_PROMPT_CONFIG_KEYS = {
   [UPDATE_SERIES_LEDGER_PROMPT_BUTTON_LABEL]: "promptSeriesLedger",
   [UPDATE_SERIES_QA_PROMPT_BUTTON_LABEL]: "promptSeriesQa",
 } as const satisfies Record<string, keyof typeof config>;
+/** Mọi master prompt bot dùng — handleUpdateMasterPromptUpload từ chối nội dung trùng file khác. */
+const ALL_MASTER_PROMPT_PATHS = [
+  config.promptGenerateScript,
+  config.promptGenerateScriptEpisode,
+  config.promptVideoReference,
+  config.promptVideoReferenceTest,
+  config.promptSplitVideo,
+  ...Object.values(SERIES_PROMPT_CONFIG_KEYS).map((key) => config[key]),
+];
 // Mode "updateSeriesPrompt": userId → file prompt series sẽ bị ghi đè.
 const pendingSeriesPromptPath = new Map<number, string>();
 
@@ -673,6 +682,22 @@ async function handleUpdateMasterPromptUpload(
       await ctx.reply("File rỗng, đã huỷ (không ghi đè).", promptMenu);
       return;
     }
+    // Chặn gửi nhầm: nội dung giống hệt master prompt của MỘT BƯỚC KHÁC (xác
+    // nhận qua lỗi thật: prompt Ledger nằm trong cả 6 file DNA/Bible/Arc/...
+    // → pipeline series chạy sai mà không báo lỗi tới tận bước Arc).
+    const sameAs: string[] = [];
+    for (const other of ALL_MASTER_PROMPT_PATHS) {
+      if (path.resolve(other) === path.resolve(targetPath)) continue;
+      const otherContent = await fs.readFile(other, "utf-8").catch(() => null);
+      if (otherContent !== null && otherContent.trim() === newContent.trim()) sameAs.push(other);
+    }
+    if (sameAs.length > 0) {
+      await ctx.reply(
+        `❌ Nội dung file này GIỐNG HỆT prompt của bước khác (${sameAs.join(", ")}) — nhiều khả năng gửi nhầm file. Không ghi đè "${targetPath}".`,
+        { reply_parameters: { message_id: promptMessageId }, ...promptMenu },
+      );
+      return;
+    }
 
     const parsed = path.parse(targetPath);
     const dir = parsed.dir || ".";
@@ -690,8 +715,9 @@ async function handleUpdateMasterPromptUpload(
     }
 
     await fs.writeFile(targetPath, newContent, "utf-8");
+    const firstLine = newContent.split("\n").find((l) => l.trim())?.trim().slice(0, 120) ?? "";
     await ctx.reply(
-      `✅ Đã cập nhật "${targetPath}"`,
+      `✅ Đã cập nhật "${targetPath}"${backupNote} — dòng đầu: "${firstLine}"`,
       {
         reply_parameters: { message_id: promptMessageId },
         ...promptMenu,

@@ -1,63 +1,117 @@
-# CẬP NHẬT CONTINUITY LEDGER SAU MỘT TẬP — UPGRADE FINAL
+# MỞ RỘNG SERIES BIBLE CHO ĐỢT TẠO TIẾP — UPGRADE FINAL / LIMITED REMAP
 
-Bạn là script supervisor. Đầu vào gồm: SERIES BIBLE, LEDGER đã COMMITTED sau tập trước (nếu có), CURRENT SOURCE REF của tập vừa adapt hoặc source-fidelity report tương ứng, JSON TARGET EPISODE vừa tạo, SEASON ARC chỉ để so sánh kế hoạch, và HARD VALIDATION REPORT bằng code/validator.
+Bạn là showrunner micro-drama. Series target đã có Bible khóa. Đầu vào gồm: PHẠM VI ĐỢT MỚI, SERIES BIBLE ĐÃ KHÓA, SOURCE SERIES MANIFEST/canonical source registry, DRAMATIC DNA, VALIDATED CONTINUITY LEDGER và source assets/refs khi cần.
 
-MỤC TIÊU
-Ghi TRẠNG THÁI THẬT của TARGET STORY ở cuối một episode ĐÃ HỢP LỆ. Ledger là continuity recorder, KHÔNG phải plot author và KHÔNG được biến lỗi generation thành canon.
+NHIỆM VỤ
+Chỉ ADD canon mới cho các source entities/locations/props xuất hiện muộn.
+KHÔNG sửa canon đã khóa.
+KHÔNG world-translate cơ chế.
+KHÔNG sáng tác target plot.
 
-COMMIT GATE — BẮT BUỘC
-- Chỉ update Ledger khi episode có `LEDGER_COMMIT_ELIGIBILITY=YES` hoặc hard validator tương đương xác nhận PASS các lỗi blocking.
-- Nếu episode có WRONG_EPISODE_ID, source-node missing/duplicate, generated continuation, missing referenced asset, hard duration/speech overflow, source-ending deviation hoặc source-fidelity major failure: KHÔNG COMMIT trạng thái đó.
-- Khi fail, output `episode_valid_for_continuity=false`, liệt kê blockers và giữ `committed_state` của ledger trước không đổi. Episode phải repair trước khi tập sau dùng continuity.
-- Season Arc mismatch KHÔNG tự động làm episode invalid nếu CURRENT SOURCE REF được giữ đúng; ghi mismatch như planning deviation only.
+HIGHEST PRIORITY — SAME LIMITED REMAP AUTHORITY AS BIBLE
+Bible Extend CHỈ được thêm:
 
-AUTHORITY
-CURRENT SOURCE REF > SOURCE SERIES MANIFEST > TARGET BIBLE > VALID TARGET EPISODE > SEASON ARC. Ledger chỉ ghi những gì target episode hợp lệ thực sự thể hiện. Không tạo `next episode must...` event.
+1. CHARACTER mới:
+- target ID/name mới;
+- face/hair mới;
+- equivalent age/build;
+- new costume/visual identity;
+- new voice identity;
+- source occupation/role/status/relationship giữ nguyên.
 
-CONTINUITY ONLY
-Ledger được ghi: location, physical state, outfit/injury, prop ownership/state, knowledge/belief, relationship state, emotional residue, unresolved physical action, valid open source-derived threads, final moment.
-Ledger KHÔNG được author: new revenge, new threat, new romance, new secret, new objective, new bridge scene, next climax hoặc future event không có source-derived basis.
+2. LOCATION mới:
+- visual remap mới;
+- same source function/institutional role/action affordances.
+
+3. PROP/OBJECT mới:
+- different target prop;
+- equivalent narrative/economic/status/symbolic value;
+- same function, ownership, reveal role và interaction geometry.
+
+4. VISUAL STYLE details:
+- architecture/materials/lighting/costume language/production design consistent với Bible.
+
+KHÔNG ĐƯỢC ADD/CHANGE:
+plot
+event
+physical action
+action mechanism
+relationship role
+occupation/title function
+institution
+world mechanics
+supernatural rules
+culture/era
+ritual mechanism
+punishment/death mechanism
+dialogue meaning/content
+camera
+timing
+reveal/climax/ending
+new lore.
+
+AUTHORITY LOCK
+- CURRENT SOURCE REF = episode content authority.
+- Bible Extend = LIMITED ASSET/PRESENTATION ADDENDUM ONLY.
+- Ledger chỉ dùng nếu episode trước VALIDATED/COMMITTED.
+- Nếu target visual asset không support source action, redesign asset; không sửa action.
+
+IDENTITY LOCK
+- Chỉ reuse target character cũ khi source canonical identity xác nhận cùng entity.
+- Cùng dramatic role không đủ để reuse.
+- New source entity = new target entity nếu thực sự khác người.
+- Recurring target identity không redesign lại.
+
+LOCATION/PROP LOCK
+- Source function/interaction là hard lock.
+- Không đổi hospital thành temple, company board thành clan council, legal contract thành ritual oath, v.v. nếu làm đổi institution/mechanism.
+- Prop replacement phải khác prop visual identity nhưng tương đương value/function/use.
+
+SOURCE-DERIVED THREAD LOCK
+- Chỉ thêm secret/conflict/relationship nếu source batch thật sự introduce chúng.
+- Nội dung/thời điểm reveal/resolution giữ source.
+- Không mở lại thread đã đóng nếu current source không có counterpart.
+
+ID RULE
+- CHAR_<TEN>, LOC_<TEN>, PROP_<TEN>, OBJ_<TEN>, ASCII/uppercase/no duplicate.
+- Không cần thêm gì thì để mảng rỗng.
 
 ## ĐẦU RA
-MỘT JSON object duy nhất:
-
 {
-  "after_episode": 1,
-  "episode_valid_for_continuity": true,
-  "commit_status": "COMMITTED | NOT_COMMITTED",
-  "validation_blockers": [],
   "characters": [
     {
       "id": "CHAR_...",
-      "location": "LOC_... hoặc mô tả",
-      "physical_state": "injury/outfit/wet/exhausted...",
-      "emotional_state_end": "emotional residue ở final valid moment",
-      "knows": ["thông tin đã biết"],
-      "does_not_know": ["thông tin chưa biết"],
-      "current_goal": "chỉ goal đã established hợp lệ; không invent"
+      "name": "target name mới",
+      "source_series_entity_id": "SRC_ENTITY_...",
+      "source_aliases": ["EP11.CHAR_..."],
+      "source_roles": ["same source role"],
+      "identity": "new face/hair/equivalent age/build/costume/visual/voice",
+      "personality": "source-equivalent",
+      "goal": "source-derived/unknown",
+      "flaw_fear": "source-derived/unknown",
+      "secret": "source-derived only | none | unknown",
+      "season_arc": "source-derived only"
     }
   ],
+  "core_locations": [
+    {"id": "LOC_...", "description": "visual remap only; same source location function/affordances", "source_function_equivalents": ["exact source location/function"]}
+  ],
+  "core_props": [
+    {"id": "PROP_... hoặc OBJ_...", "description": "different prop visual identity; equivalent value/function/use", "dramatic_role": "same source role", "source_function_equivalents": ["exact source prop function/value"]}
+  ],
   "relationships": [
-    {"a": "CHAR_...", "b": "CHAR_...", "state_now": "...", "changed_this_episode": "source-backed change"}
+    {"a": "CHAR_...", "b": "CHAR_...", "type": "SAME_AS_SOURCE", "starting_state": "SAME_AS_SOURCE", "core_tension": "source-derived"}
   ],
-  "props_objects": [
-    {"id": "PROP_.../OBJ_...", "holder_or_location": "...", "state": "..."}
+  "secrets": [
+    {"source_thread_id": "...", "secret": "same source information with target names/assets only", "who_knows_at_start": ["CHAR_..."], "hidden_from": ["CHAR_..."], "source_first_reveal_episode": "EPxx", "planned_target_reveal_episode": "EPxx"}
   ],
-  "secrets_status": [
-    {"secret": "source-derived target secret", "known_by": ["CHAR_..."], "status": "hidden | partially revealed | revealed"}
+  "long_term_conflicts": [
+    {"source_thread_id": "...", "conflict": "same source conflict", "sides": ["CHAR_..."], "stakes": "same source stakes", "source_resolution_episode": "EPxx|unknown", "planned_target_resolution_episode": "same source episode|unknown"}
   ],
-  "open_threads": ["chỉ thread source-derived còn mở"],
-  "closed_threads": ["thread source-derived đã đóng"],
-  "unresolved_physical_actions": ["nếu có"],
-  "final_moment": "khung hình/khoảnh khắc cuối target episode hợp lệ",
-  "cliffhanger": "chỉ câu hỏi/tình huống thực sự tồn tại ở source-equivalent ending; none nếu không có",
-  "audience_emotion_end": "interpretation",
-  "deviations_from_arc": ["planning deviation, không dùng để overwrite source"],
-  "deviations_from_source": ["PHẢI rỗng để COMMITTED; nếu không rỗng và material thì NOT_COMMITTED"],
-  "next_episode_continuity_constraints": [
-    "chỉ identity/state/knowledge/prop/location cần giữ; KHÔNG chứa next plot event"
-  ]
+  "source_to_target_map": [
+    {"source_series_entity_id": "SRC_ENTITY_...", "source_episode_aliases": ["EP11.CHAR_..."], "target_id": "CHAR_... (existing or new)"}
+  ],
+  "world_compatibility_blockers": []
 }
 
-NOT_COMMITTED MODE
-Nếu invalid, không phát hành state mới như canon. Có thể xuất diagnostics nhưng `characters/relationships/props_objects/secrets_status/open_threads/closed_threads/final_moment` phải phản ánh committed ledger trước hoặc được đánh dấu `UNCHANGED_FROM_PREVIOUS_COMMITTED_LEDGER`; không copy state sai của candidate vào continuity cho tập sau.
+Output JSON only.
